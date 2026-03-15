@@ -188,6 +188,24 @@
   .hint-area .correct-text { color: #38a169; font-weight: 700; }
   .hint-area .wrong-text { color: #e53e3e; font-weight: 700; }
 
+  .ok-btn {
+    display: inline-block;
+    margin-top: 12px;
+    margin-left: 12px;
+    padding: 10px 40px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #5a67d8, #764ba2);
+    color: #fff;
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .ok-btn:hover { transform: scale(1.05); }
+  .ok-btn:active { transform: scale(0.95); }
+
   /* Controls at bottom */
   .controls {
     width: 90%;
@@ -275,9 +293,186 @@
     margin-top: 16px;
     margin-bottom: 4px;
   }
+
+  /* User bar */
+  .user-bar {
+    width: 100%;
+    max-width: 600px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 0 20px;
+    color: #fff;
+    font-size: 14px;
+  }
+
+  .user-bar span { font-weight: 600; }
+
+  .user-btn {
+    padding: 6px 16px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.2s;
+  }
+
+  .user-btn:hover { background: rgba(255,255,255,0.3); }
+
+  /* Modal overlay */
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+
+  .modal-overlay.hidden { display: none; }
+
+  .modal {
+    background: #fff;
+    border-radius: 20px;
+    padding: 32px 28px;
+    width: 90%;
+    max-width: 380px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+
+  .modal h2 {
+    text-align: center;
+    margin-bottom: 20px;
+    color: #2d3748;
+    font-size: 22px;
+  }
+
+  .modal-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 20px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #5a67d8;
+  }
+
+  .modal-tab {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    background: #fff;
+    color: #5a67d8;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .modal-tab.active {
+    background: #5a67d8;
+    color: #fff;
+  }
+
+  .modal input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    font-size: 16px;
+    margin-bottom: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .modal input:focus { border-color: #5a67d8; }
+
+  .modal-submit {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #5a67d8, #764ba2);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .modal-submit:hover { transform: scale(1.02); }
+
+  .modal-error {
+    color: #e53e3e;
+    font-size: 14px;
+    text-align: center;
+    margin-bottom: 12px;
+    min-height: 20px;
+  }
+
+  .modal-close {
+    display: block;
+    margin: 12px auto 0;
+    border: none;
+    background: none;
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .modal-close:hover { color: #333; }
+
+  /* Score history */
+  .score-history {
+    width: 100%;
+    max-width: 560px;
+    margin-top: 16px;
+  }
+
+  .score-history h3 {
+    color: #fff;
+    text-align: center;
+    font-size: 16px;
+    margin-bottom: 8px;
+  }
+
+  .score-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: rgba(255,255,255,0.15);
+    border-radius: 12px;
+    overflow: hidden;
+    backdrop-filter: blur(4px);
+  }
+
+  .score-table th, .score-table td {
+    padding: 8px 12px;
+    text-align: center;
+    color: #fff;
+    font-size: 13px;
+  }
+
+  .score-table th {
+    background: rgba(255,255,255,0.1);
+    font-weight: 700;
+  }
+
+  .score-table tr:not(:last-child) td {
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
 </style>
 </head>
 <body>
+
+<div class="user-bar" id="userBar">
+  <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
+</div>
 
 <div class="title">汉字小达人</div>
 
@@ -303,6 +498,29 @@
   <div class="control-row" id="modeRow"></div>
 </div>
 
+<div class="score-history" id="scoreHistory" style="display:none">
+  <h3>历史成绩</h3>
+  <table class="score-table">
+    <thead><tr><th>日期</th><th>年级</th><th>模式</th><th>题数</th><th>正确率</th><th>得分</th></tr></thead>
+    <tbody id="scoreBody"></tbody>
+  </table>
+</div>
+
+<!-- Auth modal -->
+<div class="modal-overlay hidden" id="authModal">
+  <div class="modal">
+    <div class="modal-tabs">
+      <button class="modal-tab active" onclick="switchTab('login')">登录</button>
+      <button class="modal-tab" onclick="switchTab('register')">注册</button>
+    </div>
+    <div class="modal-error" id="authError"></div>
+    <input type="text" id="authUsername" placeholder="用户名" maxlength="20">
+    <input type="password" id="authPassword" placeholder="密码">
+    <button class="modal-submit" id="authSubmit" onclick="submitAuth()">登录</button>
+    <button class="modal-close" onclick="hideAuthModal()">取消</button>
+  </div>
+</div>
+
 <div class="celebration" id="celebration"></div>
 
 <script>
@@ -317,11 +535,135 @@ let state = {
   mode: "char_to_pinyin",
   score: 0,
   combo: 0,
+  comboMax: 0,
+  totalQuestions: 0,
+  correctAnswers: 0,
   answering: false,
+  user: null,
+  authTab: "login",
 };
+
+// --- Auth ---
+async function checkLogin() {
+  const res = await fetch("/api/me");
+  const data = await res.json();
+  if (data.logged_in) {
+    state.user = data.username;
+  }
+  renderUserBar();
+}
+
+function renderUserBar() {
+  const bar = document.getElementById("userBar");
+  if (state.user) {
+    bar.innerHTML = `
+      <span>${state.user}</span>
+      <button class="user-btn" onclick="showScores()">历史成绩</button>
+      <button class="user-btn" onclick="doLogout()">退出</button>
+    `;
+  } else {
+    bar.innerHTML = `<button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>`;
+  }
+}
+
+function showAuthModal() {
+  document.getElementById("authModal").classList.remove("hidden");
+  document.getElementById("authError").textContent = "";
+  document.getElementById("authUsername").value = "";
+  document.getElementById("authPassword").value = "";
+  switchTab("login");
+}
+
+function hideAuthModal() {
+  document.getElementById("authModal").classList.add("hidden");
+}
+
+function switchTab(tab) {
+  state.authTab = tab;
+  const tabs = document.querySelectorAll(".modal-tab");
+  tabs[0].classList.toggle("active", tab === "login");
+  tabs[1].classList.toggle("active", tab === "register");
+  document.getElementById("authSubmit").textContent = tab === "login" ? "登录" : "注册";
+  document.getElementById("authError").textContent = "";
+}
+
+async function submitAuth() {
+  const username = document.getElementById("authUsername").value.trim();
+  const password = document.getElementById("authPassword").value;
+  const endpoint = state.authTab === "login" ? "/api/login" : "/api/register";
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const data = await res.json();
+
+  if (data.error) {
+    document.getElementById("authError").textContent = data.error;
+    return;
+  }
+
+  state.user = data.username;
+  renderUserBar();
+  hideAuthModal();
+}
+
+async function doLogout() {
+  await saveScore();
+  await fetch("/api/logout", { method: "POST" });
+  state.user = null;
+  state.totalQuestions = 0;
+  state.correctAnswers = 0;
+  document.getElementById("scoreHistory").style.display = "none";
+  renderUserBar();
+}
+
+async function saveScore() {
+  if (!state.user || state.totalQuestions === 0) return;
+  await fetch("/api/scores", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grade: state.grade,
+      mode: state.mode,
+      score: state.score,
+      combo_max: state.comboMax,
+      total_questions: state.totalQuestions,
+      correct_answers: state.correctAnswers,
+    }),
+  });
+}
+
+const MODE_LABELS = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字" };
+
+async function showScores() {
+  // Save current session first so it appears in history
+  await saveScore();
+
+  const res = await fetch("/api/scores");
+  const data = await res.json();
+  const body = document.getElementById("scoreBody");
+  body.innerHTML = "";
+  if (!data.scores || data.scores.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.7)">暂无成绩</td></tr>';
+  } else {
+    data.scores.forEach(s => {
+      const tr = document.createElement("tr");
+      const date = s.created_at ? s.created_at.slice(0, 10) : "";
+      const total = s.total_questions || 0;
+      const correct = s.correct_answers || 0;
+      const accuracy = total > 0 ? Math.round(correct / total * 100) + "%" : "-";
+      tr.innerHTML = `<td>${date}</td><td>${s.grade}</td><td>${MODE_LABELS[s.mode] || s.mode}</td><td>${correct}/${total}</td><td>${accuracy}</td><td>${s.score}</td>`;
+      body.appendChild(tr);
+    });
+  }
+  document.getElementById("scoreHistory").style.display = "block";
+}
 
 // --- Init ---
 async function init() {
+  await checkLogin();
   const res = await fetch("/api/grades");
   const data = await res.json();
   renderGrades(data.grades);
@@ -336,10 +678,14 @@ function renderGrades(grades) {
     const btn = document.createElement("button");
     btn.className = "grade-btn" + (g === state.grade ? " active" : "");
     btn.textContent = g;
-    btn.onclick = () => {
+    btn.onclick = async () => {
+      await saveScore();
       state.grade = g;
       state.score = 0;
       state.combo = 0;
+      state.comboMax = 0;
+      state.totalQuestions = 0;
+      state.correctAnswers = 0;
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -356,8 +702,15 @@ function renderModes() {
     const btn = document.createElement("button");
     btn.className = "mode-btn" + (m.id === state.mode ? " active" : "");
     btn.textContent = m.label;
-    btn.onclick = () => {
+    btn.onclick = async () => {
+      await saveScore();
       state.mode = m.id;
+      state.score = 0;
+      state.combo = 0;
+      state.comboMax = 0;
+      state.totalQuestions = 0;
+      state.correctAnswers = 0;
+      updateScoreboard();
       document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       loadQuestion();
@@ -432,9 +785,12 @@ function handleAnswer(selected, q, btn) {
   const isCorrect = selected === q.correct_index;
   const hint = document.getElementById("hintArea");
 
+  state.totalQuestions += 1;
   if (isCorrect) {
     btn.classList.add("correct");
+    state.correctAnswers += 1;
     state.combo += 1;
+    if (state.combo > state.comboMax) state.comboMax = state.combo;
     const bonus = Math.min(state.combo, 10);
     const points = 10 + bonus * 2;
     state.score += points;
@@ -457,8 +813,16 @@ function handleAnswer(selected, q, btn) {
 
   updateScoreboard();
 
-  // Next question after delay
-  setTimeout(loadQuestion, isCorrect ? 100 : 600);
+  if (isCorrect) {
+    setTimeout(loadQuestion, 100);
+  } else {
+    // Show OK button and wait for user to click
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "OK";
+    okBtn.className = "ok-btn";
+    okBtn.onclick = () => loadQuestion();
+    hint.appendChild(okBtn);
+  }
 }
 
 function updateScoreboard() {
@@ -505,6 +869,20 @@ function spawnConfetti() {
     setTimeout(() => el.remove(), 2000);
   }
 }
+
+// Save score when leaving the page
+window.addEventListener("beforeunload", () => {
+  if (state.user && state.totalQuestions > 0) {
+    navigator.sendBeacon("/api/scores", new Blob([JSON.stringify({
+      grade: state.grade,
+      mode: state.mode,
+      score: state.score,
+      combo_max: state.comboMax,
+      total_questions: state.totalQuestions,
+      correct_answers: state.correctAnswers,
+    })], { type: "application/json" }));
+  }
+});
 
 init();
 </script>
