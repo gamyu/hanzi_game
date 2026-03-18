@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>错题复习 - {{ username }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(135deg, #e53e3e 0%, #c53030 50%, #9b2c2c 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #333;
+    padding: 24px 16px;
+  }
+
+  h1 {
+    color: #fff;
+    font-size: 26px;
+    font-weight: 900;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    color: rgba(255,255,255,0.85);
+    font-size: 15px;
+    margin-bottom: 24px;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 20px;
+    width: 100%;
+    max-width: 600px;
+    padding: 24px 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th, td {
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 15px;
+  }
+
+  th {
+    background: #fff5f5;
+    color: #c53030;
+    font-weight: 700;
+    font-size: 14px;
+    border-bottom: 2px solid #fed7d7;
+  }
+
+  tr:not(:last-child) td {
+    border-bottom: 1px solid #edf2f7;
+  }
+
+  tr:hover td { background: #fff5f5; }
+
+  td { color: #2d3748; }
+
+  .char-cell {
+    font-size: 36px;
+    font-weight: 900;
+    color: #2d3748;
+  }
+
+  .pinyin-cell {
+    color: #5a67d8;
+    font-weight: 600;
+  }
+
+  .empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #a0aec0;
+    font-size: 16px;
+  }
+
+  .btn-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    justify-content: center;
+  }
+
+  .action-btn {
+    padding: 10px 32px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 20px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.2s;
+  }
+
+  .action-btn:hover { background: rgba(255,255,255,0.3); }
+
+  @media (max-width: 420px) {
+    th, td { padding: 10px 6px; font-size: 13px; }
+    .char-cell { font-size: 28px; }
+    .card { padding: 16px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>错题复习</h1>
+<p class="subtitle" id="dateLabel">加载中...</p>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>汉字</th>
+        <th>拼音</th>
+        <th>组词</th>
+        <th>年级</th>
+      </tr>
+    </thead>
+    <tbody id="reviewBody">
+      <tr><td colspan="4" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="btn-row">
+  <button class="action-btn" onclick="window.close()">关闭</button>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const date = params.get("date") || "";
+
+async function loadWrongAnswers() {
+  document.getElementById("dateLabel").textContent = date ? `${date} - {{ username }}` : "{{ username }}";
+
+  const url = date ? `/api/wrong_answers?date=${encodeURIComponent(date)}` : "/api/wrong_answers";
+  const res = await fetch(url);
+  const data = await res.json();
+  const body = document.getElementById("reviewBody");
+  body.innerHTML = "";
+
+  const items = data.wrong_answers || [];
+  if (items.length === 0) {
+    body.innerHTML = '<tr><td colspan="4" class="empty">没有错题记录</td></tr>';
+    return;
+  }
+
+  items.forEach(w => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="char-cell">${w.character}</td>
+      <td class="pinyin-cell">${w.pinyin}</td>
+      <td>${w.words}</td>
+      <td>${w.grade}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+loadWrongAnswers();
+</script>
+</body>
+</html>

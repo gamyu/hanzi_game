@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>历史成绩 - {{ username }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #333;
+    padding: 24px 16px;
+  }
+
+  h1 {
+    color: #fff;
+    font-size: 26px;
+    font-weight: 900;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    color: rgba(255,255,255,0.8);
+    font-size: 15px;
+    margin-bottom: 24px;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 20px;
+    width: 100%;
+    max-width: 600px;
+    padding: 24px 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th, td {
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 15px;
+  }
+
+  th {
+    background: #f7fafc;
+    color: #5a67d8;
+    font-weight: 700;
+    font-size: 14px;
+    border-bottom: 2px solid #e2e8f0;
+  }
+
+  tr:not(:last-child) td {
+    border-bottom: 1px solid #edf2f7;
+  }
+
+  tr:hover td {
+    background: #f0f4ff;
+  }
+
+  td { color: #2d3748; }
+
+  .accuracy-high { color: #38a169; font-weight: 700; }
+  .accuracy-mid { color: #d69e2e; font-weight: 700; }
+  .accuracy-low { color: #e53e3e; font-weight: 700; }
+
+  .empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: #a0aec0;
+    font-size: 16px;
+  }
+
+  .back-btn {
+    margin-top: 20px;
+    padding: 10px 32px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 20px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+    transition: all 0.2s;
+  }
+
+  .back-btn:hover { background: rgba(255,255,255,0.3); }
+
+  @media (max-width: 420px) {
+    th, td { padding: 10px 6px; font-size: 13px; }
+    .card { padding: 16px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>历史成绩</h1>
+<p class="subtitle">{{ username }}</p>
+
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>日期</th>
+        <th>题数</th>
+        <th>正确</th>
+        <th>正确率</th>
+        <th>得分</th>
+        <th>错题</th>
+      </tr>
+    </thead>
+    <tbody id="scoreBody">
+      <tr><td colspan="5" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<button class="back-btn" onclick="window.close()">关闭</button>
+
+<script>
+async function loadScores() {
+  const res = await fetch("/api/scores");
+  const data = await res.json();
+  const body = document.getElementById("scoreBody");
+  body.innerHTML = "";
+
+  if (!data.scores || data.scores.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">暂无成绩记录</td></tr>';
+    return;
+  }
+
+  data.scores.forEach(s => {
+    const tr = document.createElement("tr");
+    const total = s.total_questions || 0;
+    const correct = s.correct_answers || 0;
+    const pct = total > 0 ? Math.round(correct / total * 100) : 0;
+    let cls = "accuracy-low";
+    if (pct >= 80) cls = "accuracy-high";
+    else if (pct >= 60) cls = "accuracy-mid";
+    const wrongCount = s.wrong_count || 0;
+    const wrongCell = wrongCount > 0
+      ? `<a href="/review?date=${s.date}" target="_blank" style="color:#e53e3e;font-weight:600;text-decoration:underline;cursor:pointer">${wrongCount}字</a>`
+      : '<span style="color:#a0aec0">-</span>';
+
+    tr.innerHTML = `
+      <td>${s.date || ""}</td>
+      <td>${total}</td>
+      <td>${correct}</td>
+      <td class="${cls}">${total > 0 ? pct + "%" : "-"}</td>
+      <td>${s.score}</td>
+      <td>${wrongCell}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+loadScores();
+</script>
+</body>
+</html>

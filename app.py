@@ -1,9 +1,12 @@
 import hashlib
+import json
 import os
 import random
 import sqlite3
+import urllib.request
 from flask import Flask, g, jsonify, render_template, request, session
 from characters import CHARACTERS
+from words import WORDS
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
@@ -45,6 +48,19 @@ def init_db():
             combo_max INTEGER NOT NULL DEFAULT 0,
             total_questions INTEGER NOT NULL DEFAULT 0,
             correct_answers INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS wrong_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            character TEXT NOT NULL,
+            pinyin TEXT NOT NULL,
+            words TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            mode TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
@@ -126,7 +142,9 @@ def _generate_question(grade: str, mode: str) -> dict:
 
     if mode == "listen_to_char":
         # TTS reads the character, pick correct character from options
-        distractors = _pick_distractors(correct, others, key="char")
+        # Exclude homophones so the player can distinguish by sound
+        distractors = _pick_distractors(correct, others, key="char",
+                                        exclude_homophones=True)
         options = [correct["char"]] + [d["char"] for d in distractors]
         random.shuffle(options)
         return {
@@ -139,26 +157,44 @@ def _generate_question(grade: str, mode: str) -> dict:
             "word_hint": "、".join(correct["words"]),
         }
 
+    if mode in ("dictation_keyboard", "dictation_handwrite"):
+        word_list = WORDS.get(grade, [])
+        if not word_list:
+            return {"error": "该年级暂无词语数据"}
+        word_entry = random.choice(word_list)
+        return {
+            "mode": mode,
+            "question": word_entry["pinyin"],
+            "answer": word_entry["word"],
+        }
+
     return {"error": f"Unknown mode: {mode}"}
 
 
-def _pick_distractors(correct: dict, others: list, key: str, count: int = 3) -> list:
+def _pick_distractors(correct: dict, others: list, key: str, count: int = 3,
+                      exclude_homophones: bool = False) -> list:
     """Pick distractor options that differ from the correct answer."""
     correct_val = correct[key]
     candidates = [c for c in others if c[key] != correct_val]
 
-    # Prefer characters with similar pinyin (same base syllable) for harder questions
-    if key == "char":
+    if exclude_homophones:
+        # Remove characters whose pinyin matches the correct answer exactly
+        candidates = [c for c in candidates if c["pinyin"] != correct["pinyin"]]
+    elif key == "char":
+        # Prefer characters with similar pinyin (same base syllable) for harder questions
         base = _strip_tone(correct["pinyin"])
         similar = [c for c in candidates if _strip_tone(c["pinyin"]) == base]
         if len(similar) >= count:
             return random.sample(similar, count)
 
     if len(candidates) < count:
-        candidates = [c for c in others if c[key] != correct_val]
+        fallback = [c for c in others if c[key] != correct_val]
+        if exclude_homophones:
+            fallback = [c for c in fallback if c["pinyin"] != correct["pinyin"]]
+        candidates = fallback
 
     if len(candidates) < count:
-        return random.sample(others, min(count, len(others)))
+        return random.sample(candidates, len(candidates)) if candidates else []
 
     return random.sample(candidates, count)
 
@@ -256,10 +292,95 @@ def scores_api():
 
     db = get_db()
     rows = db.execute(
-        "SELECT grade, mode, score, combo_max, total_questions, correct_answers, created_at FROM scores WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+        """SELECT DATE(created_at) as date,
+                  SUM(total_questions) as total_questions,
+                  SUM(correct_answers) as correct_answers,
+                  SUM(score) as score
+           FROM scores WHERE user_id = ?
+           GROUP BY DATE(created_at)
+           ORDER BY date DESC LIMIT 60""",
         (session["user_id"],),
     ).fetchall()
-    return jsonify({"scores": [dict(r) for r in rows]})
+    wrong_counts = {}
+    for r in db.execute(
+        "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = ? GROUP BY DATE(created_at)",
+        (session["user_id"],),
+    ).fetchall():
+        wrong_counts[r["date"]] = r["cnt"]
+    scores = []
+    for r in rows:
+        d = dict(r)
+        d["wrong_count"] = wrong_counts.get(d["date"], 0)
+        scores.append(d)
+    return jsonify({"scores": scores})
+
+
+@app.route("/history")
+def history_page():
+    if "user_id" not in session:
+        return render_template("index.html")
+    return render_template("history.html", username=session["username"])
+
+
+@app.route("/api/handwriting", methods=["POST"])
+def handwriting():
+    data = request.get_json()
+    payload = json.dumps({
+        "input_type": 0,
+        "requests": [{
+            "writing_guide": {"width": data["width"], "height": data["height"]},
+            "ink": data["strokes"],
+            "language": "zh",
+        }],
+    }).encode()
+    req = urllib.request.Request(
+        "https://inputtools.google.com/request?itc=zh-t-i0-handwrit&app=translate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            result = json.loads(resp.read())
+        return jsonify(result)
+    except Exception:
+        return jsonify({"error": "识别失败"}), 502
+
+
+@app.route("/api/wrong_answers", methods=["GET", "POST"])
+def wrong_answers_api():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    if request.method == "POST":
+        data = request.get_json()
+        db = get_db()
+        db.execute(
+            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (?, ?, ?, ?, ?, ?)",
+            (session["user_id"], data["character"], data["pinyin"], data["words"], data["grade"], data["mode"]),
+        )
+        db.commit()
+        return jsonify({"ok": True})
+
+    date = request.args.get("date")
+    db = get_db()
+    if date:
+        rows = db.execute(
+            "SELECT DISTINCT character, pinyin, words, grade FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? ORDER BY created_at",
+            (session["user_id"], date),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT DISTINCT character, pinyin, words, grade, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? ORDER BY created_at DESC",
+            (session["user_id"],),
+        ).fetchall()
+    return jsonify({"wrong_answers": [dict(r) for r in rows]})
+
+
+@app.route("/review")
+def review_page():
+    if "user_id" not in session:
+        return render_template("index.html")
+    return render_template("review.html", username=session["username"])
 
 
 @app.route("/api/grades")

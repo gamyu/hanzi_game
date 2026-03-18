@@ -428,44 +428,107 @@
 
   .modal-close:hover { color: #333; }
 
-  /* Score history */
-  .score-history {
-    width: 100%;
-    max-width: 560px;
-    margin-top: 16px;
-  }
-
-  .score-history h3 {
-    color: #fff;
+  /* Dictation mode */
+  .dictation-input {
+    width: 120px;
+    height: 120px;
+    border: 3px solid #e2e8f0;
+    border-radius: 16px;
+    font-size: 72px;
     text-align: center;
-    font-size: 16px;
-    margin-bottom: 8px;
+    color: #2d3748;
+    outline: none;
+    transition: border-color 0.2s;
+    line-height: 120px;
   }
 
-  .score-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: rgba(255,255,255,0.15);
-    border-radius: 12px;
+  .dictation-input.dictation-word-input {
+    width: 280px;
+    height: 80px;
+    font-size: 48px;
+    line-height: 80px;
+    letter-spacing: 8px;
+  }
+
+  .dictation-input:focus { border-color: #5a67d8; }
+
+  .hw-canvas-box {
+    border: 3px solid #e2e8f0;
+    border-radius: 16px;
     overflow: hidden;
-    backdrop-filter: blur(4px);
+    background: #fefefe;
   }
 
-  .score-table th, .score-table td {
-    padding: 8px 12px;
-    text-align: center;
+  .hw-canvas-box canvas {
+    display: block;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .hw-grid-lines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+
+  .hw-grid-line {
+    position: absolute;
+    top: 10%;
+    height: 80%;
+    width: 1px;
+    border-left: 2px dashed #e2e8f0;
+  }
+
+  .dictation-submit {
+    padding: 12px 48px;
+    border: none;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #5a67d8, #764ba2);
     color: #fff;
-    font-size: 13px;
-  }
-
-  .score-table th {
-    background: rgba(255,255,255,0.1);
+    font-size: 20px;
     font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s;
   }
 
-  .score-table tr:not(:last-child) td {
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+  .dictation-submit:hover { transform: scale(1.05); }
+  .dictation-submit:active { transform: scale(0.95); }
+
+  .canvas-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
   }
+
+  #writeCanvas {
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .canvas-controls {
+    display: flex;
+    gap: 12px;
+  }
+
+  .canvas-btn {
+    padding: 10px 28px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #2d3748;
+  }
+
+  .canvas-btn:hover { border-color: #5a67d8; background: #ebf4ff; }
+
+
 </style>
 </head>
 <body>
@@ -498,14 +561,6 @@
   <div class="control-row" id="modeRow"></div>
 </div>
 
-<div class="score-history" id="scoreHistory" style="display:none">
-  <h3>历史成绩</h3>
-  <table class="score-table">
-    <thead><tr><th>日期</th><th>年级</th><th>模式</th><th>题数</th><th>正确率</th><th>得分</th></tr></thead>
-    <tbody id="scoreBody"></tbody>
-  </table>
-</div>
-
 <!-- Auth modal -->
 <div class="modal-overlay hidden" id="authModal">
   <div class="modal">
@@ -528,6 +583,8 @@ const MODES = [
   { id: "char_to_pinyin", label: "看字选拼音" },
   { id: "pinyin_to_char", label: "看拼音选字" },
   { id: "listen_to_char", label: "听音选字" },
+  { id: "dictation_keyboard", label: "看拼音写词语(键盘)" },
+  { id: "dictation_handwrite", label: "看拼音写词语(手写)" },
 ];
 
 let state = {
@@ -615,7 +672,6 @@ async function doLogout() {
   state.user = null;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
-  document.getElementById("scoreHistory").style.display = "none";
   renderUserBar();
 }
 
@@ -635,30 +691,9 @@ async function saveScore() {
   });
 }
 
-const MODE_LABELS = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字" };
-
 async function showScores() {
-  // Save current session first so it appears in history
   await saveScore();
-
-  const res = await fetch("/api/scores");
-  const data = await res.json();
-  const body = document.getElementById("scoreBody");
-  body.innerHTML = "";
-  if (!data.scores || data.scores.length === 0) {
-    body.innerHTML = '<tr><td colspan="6" style="color:rgba(255,255,255,0.7)">暂无成绩</td></tr>';
-  } else {
-    data.scores.forEach(s => {
-      const tr = document.createElement("tr");
-      const date = s.created_at ? s.created_at.slice(0, 10) : "";
-      const total = s.total_questions || 0;
-      const correct = s.correct_answers || 0;
-      const accuracy = total > 0 ? Math.round(correct / total * 100) + "%" : "-";
-      tr.innerHTML = `<td>${date}</td><td>${s.grade}</td><td>${MODE_LABELS[s.mode] || s.mode}</td><td>${correct}/${total}</td><td>${accuracy}</td><td>${s.score}</td>`;
-      body.appendChild(tr);
-    });
-  }
-  document.getElementById("scoreHistory").style.display = "block";
+  window.open("/history", "_blank");
 }
 
 // --- Init ---
@@ -757,10 +792,76 @@ function renderQuestion(q) {
     `;
     // Auto-play on load
     setTimeout(() => speakChar(q.question), 300);
+  } else if (q.mode === "dictation_keyboard" || q.mode === "dictation_handwrite") {
+    area.innerHTML = `
+      <div class="question-label">看拼音写词语</div>
+      <div class="question-pinyin">${q.question}</div>
+    `;
   }
 
-  // Options
+  // Options / input area
   opts.innerHTML = "";
+
+  if (q.mode === "dictation_keyboard") {
+    opts.style.display = "flex";
+    opts.style.gridTemplateColumns = "";
+    opts.style.flexDirection = "column";
+    opts.style.alignItems = "center";
+    opts.style.gap = "16px";
+    opts.innerHTML = `
+      <input class="dictation-input dictation-word-input" id="dictInput" maxlength="8" autofocus placeholder="写词语">
+      <button class="dictation-submit" onclick="submitDictation()">确认</button>
+    `;
+    const inp = document.getElementById("dictInput");
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") submitDictation(); });
+    setTimeout(() => inp.focus(), 100);
+    state.currentQ = q;
+    state.answering = true;
+    return;
+  }
+
+  if (q.mode === "dictation_handwrite") {
+    const charCount = q.answer.length;
+    const canvasW = charCount * 140;
+    opts.style.display = "flex";
+    opts.style.gridTemplateColumns = "";
+    opts.style.flexDirection = "column";
+    opts.style.alignItems = "center";
+    opts.style.gap = "12px";
+
+    opts.innerHTML = `
+      <div class="canvas-wrap">
+        <div class="hw-canvas-box" style="position:relative;width:${canvasW}px;height:140px">
+          <canvas id="writeCanvas" width="${canvasW}" height="140" style="width:${canvasW}px;height:140px"></canvas>
+          <div class="hw-grid-lines" id="hwGrid"></div>
+        </div>
+        <div class="canvas-controls">
+          <button class="canvas-btn" onclick="clearCanvas()">清除</button>
+          <button class="canvas-btn" id="hwSubmitBtn" onclick="submitHandwriting()">确认</button>
+        </div>
+        <div id="hwStatus" style="color:#999;font-size:14px;min-height:20px;text-align:center"></div>
+      </div>
+    `;
+    // Draw grid lines between character cells
+    const gridEl = document.getElementById("hwGrid");
+    for (let i = 1; i < charCount; i++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line";
+      line.style.left = (i * 140) + "px";
+      gridEl.appendChild(line);
+    }
+    initCanvas();
+    state.currentQ = q;
+    state.answering = true;
+    return;
+  }
+
+  // Reset grid style for multiple-choice modes
+  opts.style.display = "grid";
+  opts.style.gridTemplateColumns = "1fr 1fr";
+  opts.style.flexDirection = "";
+  opts.style.alignItems = "";
+
   const colors = ["#5a67d8", "#d69e2e", "#38a169", "#e53e3e"];
   q.options.forEach((opt, i) => {
     const btn = document.createElement("button");
@@ -809,6 +910,7 @@ function handleAnswer(selected, q, btn) {
     allBtns[q.correct_index].classList.add("reveal");
     state.combo = 0;
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 正确答案: <strong>${q.answer}</strong> &nbsp; 组词: ${q.word_hint}`;
+    recordWrongAnswer(q);
   }
 
   updateScoreboard();
@@ -823,6 +925,191 @@ function handleAnswer(selected, q, btn) {
     okBtn.onclick = () => loadQuestion();
     hint.appendChild(okBtn);
   }
+}
+
+// --- Dictation ---
+function submitDictation() {
+  const inp = document.getElementById("dictInput");
+  if (!inp) return;
+  const userInput = inp.value.trim();
+  if (!userInput) return;
+  handleDictationAnswer(userInput, state.currentQ);
+}
+
+function handleDictationAnswer(userInput, q) {
+  if (!state.answering) return;
+  state.answering = false;
+
+  const isCorrect = userInput === q.answer;
+  const hint = document.getElementById("hintArea");
+
+  state.totalQuestions += 1;
+  if (isCorrect) {
+    state.correctAnswers += 1;
+    state.combo += 1;
+    if (state.combo > state.comboMax) state.comboMax = state.combo;
+    const bonus = Math.min(state.combo, 10);
+    const points = 10 + bonus * 2;
+    state.score += points;
+    hint.innerHTML = `<span class="correct-text">正确! +${points}分</span>`;
+
+    if (state.combo > 0 && state.combo % 5 === 0) spawnConfetti();
+    const comboEl = document.getElementById("comboBox");
+    comboEl.classList.remove("hot");
+    void comboEl.offsetWidth;
+    comboEl.classList.add("hot");
+  } else {
+    state.combo = 0;
+    hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: <strong>${userInput}</strong> &nbsp; 正确答案: <strong>${q.answer}</strong>`;
+    recordWrongAnswer(q);
+  }
+
+  updateScoreboard();
+
+  if (isCorrect) {
+    setTimeout(loadQuestion, 100);
+  } else {
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "OK";
+    okBtn.className = "ok-btn";
+    okBtn.onclick = () => loadQuestion();
+    hint.appendChild(okBtn);
+  }
+}
+
+// --- Canvas handwriting ---
+let canvasStrokes = [];
+let currentStroke = null;
+let isDrawing = false;
+
+function initCanvas() {
+  canvasStrokes = [];
+  const canvas = document.getElementById("writeCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#2d3748";
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [t.clientX - rect.left, t.clientY - rect.top];
+  }
+
+  function startStroke(e) {
+    e.preventDefault();
+    isDrawing = true;
+    const [x, y] = getPos(e);
+    currentStroke = [[x], [y], [Date.now()]];
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+
+  function moveStroke(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const [x, y] = getPos(e);
+    currentStroke[0].push(x);
+    currentStroke[1].push(y);
+    currentStroke[2].push(Date.now());
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  function endStroke(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    isDrawing = false;
+    if (currentStroke && currentStroke[0].length > 0) {
+      canvasStrokes.push(currentStroke);
+    }
+    currentStroke = null;
+  }
+
+  canvas.addEventListener("mousedown", startStroke);
+  canvas.addEventListener("mousemove", moveStroke);
+  canvas.addEventListener("mouseup", endStroke);
+  canvas.addEventListener("mouseleave", endStroke);
+  canvas.addEventListener("touchstart", startStroke);
+  canvas.addEventListener("touchmove", moveStroke);
+  canvas.addEventListener("touchend", endStroke);
+}
+
+function clearCanvas() {
+  canvasStrokes = [];
+  const canvas = document.getElementById("writeCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+async function submitHandwriting() {
+  if (canvasStrokes.length === 0) return;
+  if (!state.answering) return;
+
+  const canvas = document.getElementById("writeCanvas");
+  const statusEl = document.getElementById("hwStatus");
+  const btn = document.getElementById("hwSubmitBtn");
+  statusEl.textContent = "正在识别...";
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/handwriting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
+    });
+    const data = await res.json();
+
+    // Google API returns: ["SUCCESS", [["zh-t-i0-handwrit", ["词1","词2",...]]]]
+    let topResult = null;
+    try {
+      if (data[0] === "SUCCESS") {
+        topResult = data[1][0][1][0];
+      }
+    } catch (e) {}
+
+    if (!topResult) {
+      statusEl.textContent = "未能识别，请清除后重写";
+      btn.disabled = false;
+      return;
+    }
+
+    statusEl.textContent = `识别结果: ${topResult}`;
+    handleDictationAnswer(topResult, state.currentQ);
+  } catch (e) {
+    statusEl.textContent = "识别失败，请重试";
+    btn.disabled = false;
+  }
+}
+
+// --- Wrong answer recording ---
+function recordWrongAnswer(q) {
+  if (!state.user) return;
+  let character, pinyin;
+  if (q.mode === "char_to_pinyin") {
+    character = q.question;
+    pinyin = q.answer;
+  } else if (q.mode === "listen_to_char") {
+    character = q.answer;
+    pinyin = q.question_pinyin || "";
+  } else {
+    // dictation modes: answer is a word, question is pinyin
+    character = q.answer;
+    pinyin = q.question;
+  }
+  fetch("/api/wrong_answers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      character, pinyin,
+      words: q.word_hint || q.answer || "",
+      grade: state.grade,
+      mode: state.mode,
+    }),
+  });
 }
 
 function updateScoreboard() {
