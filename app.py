@@ -1,10 +1,14 @@
+import asyncio
 import hashlib
+import io
 import json
 import os
 import random
 import sqlite3
 import urllib.request
-from flask import Flask, g, jsonify, render_template, request, session
+
+import edge_tts
+from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
 from characters import CHARACTERS
 from words import WORDS
 
@@ -318,7 +322,7 @@ def scores_api():
 @app.route("/history")
 def history_page():
     if "user_id" not in session:
-        return render_template("index.html")
+        return redirect(url_for("index"))
     return render_template("history.html", username=session["username"])
 
 
@@ -365,21 +369,80 @@ def wrong_answers_api():
     db = get_db()
     if date:
         rows = db.execute(
-            "SELECT DISTINCT character, pinyin, words, grade FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? ORDER BY created_at",
+            "SELECT DISTINCT character, pinyin, words, grade, mode, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? ORDER BY created_at",
             (session["user_id"], date),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT DISTINCT character, pinyin, words, grade, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT DISTINCT character, pinyin, words, grade, mode, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? ORDER BY created_at DESC",
             (session["user_id"],),
         ).fetchall()
     return jsonify({"wrong_answers": [dict(r) for r in rows]})
 
 
+@app.route("/api/review_question", methods=["POST"])
+def review_question():
+    """Generate a question for a specific wrong-answer item, using its original mode."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    data = request.get_json()
+    character = data.get("character", "")
+    pinyin = data.get("pinyin", "")
+    words = data.get("words", "")
+    grade = data.get("grade", "")
+    mode = data.get("mode", "char_to_pinyin")
+
+    char_list = CHARACTERS.get(grade, [])
+    if len(char_list) < 4:
+        return jsonify({"error": "年级数据不足"}), 400
+
+    # Build a "correct" entry compatible with _pick_distractors
+    correct = {"char": character, "pinyin": pinyin, "words": words.split("、") if words else []}
+    others = [c for c in char_list if c["char"] != character]
+
+    if mode == "char_to_pinyin":
+        distractors = _pick_distractors(correct, others, key="pinyin")
+        options = [pinyin] + [d["pinyin"] for d in distractors]
+        random.shuffle(options)
+        return jsonify({
+            "mode": mode, "question": character, "options": options,
+            "correct_index": options.index(pinyin),
+            "answer": pinyin, "word_hint": words,
+        })
+
+    if mode == "pinyin_to_char":
+        distractors = _pick_distractors(correct, others, key="char")
+        options = [character] + [d["char"] for d in distractors]
+        random.shuffle(options)
+        return jsonify({
+            "mode": mode, "question": pinyin, "options": options,
+            "correct_index": options.index(character),
+            "answer": character, "word_hint": words,
+        })
+
+    if mode == "listen_to_char":
+        distractors = _pick_distractors(correct, others, key="char", exclude_homophones=True)
+        options = [character] + [d["char"] for d in distractors]
+        random.shuffle(options)
+        return jsonify({
+            "mode": mode, "question": character, "question_pinyin": pinyin,
+            "options": options, "correct_index": options.index(character),
+            "answer": character, "word_hint": words,
+        })
+
+    if mode == "dictation_handwrite":
+        return jsonify({
+            "mode": mode, "question": pinyin, "answer": character,
+        })
+
+    return jsonify({"error": f"Unknown mode: {mode}"}), 400
+
+
 @app.route("/review")
 def review_page():
     if "user_id" not in session:
-        return render_template("index.html")
+        return redirect(url_for("index"))
     return render_template("review.html", username=session["username"])
 
 
@@ -450,6 +513,26 @@ def question():
         return jsonify(result), 400
 
     return jsonify(result)
+
+
+@app.route("/api/tts")
+def tts():
+    text = request.args.get("text", "").strip()
+    if not text:
+        return "Missing text", 400
+
+    async def generate_audio():
+        communicate = edge_tts.Communicate(
+            text, voice="zh-CN-XiaoxiaoNeural", rate="-30%"
+        )
+        buf = io.BytesIO()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buf.write(chunk["data"])
+        return buf.getvalue()
+
+    audio_data = asyncio.run(generate_audio())
+    return Response(audio_data, mimetype="audio/mpeg")
 
 
 if __name__ == "__main__":

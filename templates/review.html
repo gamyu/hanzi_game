@@ -36,7 +36,7 @@
     background: #fff;
     border-radius: 20px;
     width: 100%;
-    max-width: 600px;
+    max-width: 700px;
     padding: 24px 20px;
     box-shadow: 0 20px 60px rgba(0,0,0,0.2);
   }
@@ -47,17 +47,18 @@
   }
 
   th, td {
-    padding: 12px 10px;
+    padding: 12px 8px;
     text-align: center;
-    font-size: 15px;
+    font-size: 14px;
   }
 
   th {
     background: #fff5f5;
     color: #c53030;
     font-weight: 700;
-    font-size: 14px;
+    font-size: 13px;
     border-bottom: 2px solid #fed7d7;
+    white-space: nowrap;
   }
 
   tr:not(:last-child) td {
@@ -69,7 +70,7 @@
   td { color: #2d3748; }
 
   .char-cell {
-    font-size: 36px;
+    font-size: 32px;
     font-weight: 900;
     color: #2d3748;
   }
@@ -77,6 +78,17 @@
   .pinyin-cell {
     color: #5a67d8;
     font-weight: 600;
+  }
+
+  .mode-cell {
+    font-size: 12px;
+    color: #718096;
+  }
+
+  .date-cell {
+    font-size: 12px;
+    color: #a0aec0;
+    white-space: nowrap;
   }
 
   .empty {
@@ -91,6 +103,7 @@
     gap: 12px;
     margin-top: 20px;
     justify-content: center;
+    flex-wrap: wrap;
   }
 
   .action-btn {
@@ -108,10 +121,197 @@
 
   .action-btn:hover { background: rgba(255,255,255,0.3); }
 
+  .action-btn.primary {
+    background: rgba(255,255,255,0.9);
+    color: #c53030;
+    border-color: #fff;
+  }
+
+  .action-btn.primary:hover { background: #fff; }
+
+  /* --- Quiz overlay --- */
+  .quiz-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .quiz-overlay.active { display: flex; }
+
+  .quiz-box {
+    background: #fff;
+    border-radius: 24px;
+    width: 90%;
+    max-width: 460px;
+    padding: 32px 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    text-align: center;
+    position: relative;
+  }
+
+  .quiz-progress {
+    font-size: 13px;
+    color: #a0aec0;
+    margin-bottom: 8px;
+  }
+
+  .quiz-mode-tag {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #ebf4ff;
+    color: #3182ce;
+    margin-bottom: 16px;
+  }
+
+  .quiz-question {
+    font-size: 48px;
+    font-weight: 900;
+    color: #2d3748;
+    margin: 12px 0;
+  }
+
+  .quiz-question.pinyin-display {
+    font-size: 28px;
+    font-weight: 700;
+    color: #5a67d8;
+  }
+
+  .quiz-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .quiz-opt {
+    padding: 14px 8px;
+    border: 2px solid #e2e8f0;
+    border-radius: 14px;
+    background: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    color: #2d3748;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .quiz-opt:hover { border-color: #5a67d8; background: #ebf4ff; }
+
+  .quiz-opt.correct {
+    border-color: #48bb78;
+    background: #f0fff4;
+    color: #276749;
+  }
+
+  .quiz-opt.wrong {
+    border-color: #fc8181;
+    background: #fff5f5;
+    color: #c53030;
+  }
+
+  .quiz-opt[disabled] { pointer-events: none; }
+
+  .quiz-hint {
+    font-size: 14px;
+    color: #718096;
+    margin-top: 8px;
+  }
+
+  .quiz-result {
+    font-size: 18px;
+    font-weight: 700;
+    margin: 20px 0 12px;
+  }
+
+  .quiz-result .score { color: #5a67d8; }
+
+  .quiz-close {
+    padding: 10px 36px;
+    border: none;
+    border-radius: 16px;
+    background: #5a67d8;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+
+  .quiz-close:hover { background: #4c51bf; }
+
+  .quiz-x {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: #a0aec0;
+    cursor: pointer;
+    line-height: 1;
+    padding: 4px;
+  }
+
+  .quiz-x:hover { color: #e53e3e; }
+
+  .listen-btn {
+    font-size: 48px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: transform 0.15s;
+  }
+
+  .listen-btn:hover { transform: scale(1.15); }
+
+  /* dictation input */
+  .dictation-input {
+    font-size: 28px;
+    text-align: center;
+    padding: 10px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 14px;
+    width: 80%;
+    margin: 16px auto;
+    display: block;
+    font-family: inherit;
+  }
+
+  .dictation-input:focus { outline: none; border-color: #5a67d8; }
+
+  .dictation-submit {
+    padding: 10px 40px;
+    border: none;
+    border-radius: 14px;
+    background: #5a67d8;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .dictation-result {
+    font-size: 32px;
+    font-weight: 900;
+    margin: 8px 0;
+  }
+
+  .dictation-result.correct { color: #48bb78; }
+  .dictation-result.wrong { color: #e53e3e; }
+
   @media (max-width: 420px) {
-    th, td { padding: 10px 6px; font-size: 13px; }
-    .char-cell { font-size: 28px; }
-    .card { padding: 16px 12px; }
+    th, td { padding: 10px 4px; font-size: 12px; }
+    .char-cell { font-size: 24px; }
+    .card { padding: 16px 10px; }
+    .quiz-question { font-size: 36px; }
+    .quiz-opt { font-size: 16px; padding: 10px 6px; }
   }
 </style>
 </head>
@@ -120,7 +320,7 @@
 <h1>错题复习</h1>
 <p class="subtitle" id="dateLabel">加载中...</p>
 
-<div class="card">
+<div class="card" id="listCard">
   <table>
     <thead>
       <tr>
@@ -128,21 +328,38 @@
         <th>拼音</th>
         <th>组词</th>
         <th>年级</th>
+        <th>模式</th>
+        <th>日期</th>
       </tr>
     </thead>
     <tbody id="reviewBody">
-      <tr><td colspan="4" class="empty">加载中...</td></tr>
+      <tr><td colspan="6" class="empty">加载中...</td></tr>
     </tbody>
   </table>
 </div>
 
 <div class="btn-row">
+  <button class="action-btn primary" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习</button>
   <button class="action-btn" onclick="window.close()">关闭</button>
 </div>
 
+<!-- Quiz overlay -->
+<div class="quiz-overlay" id="quizOverlay" onclick="if(event.target===this)closeQuiz()">
+  <div class="quiz-box" id="quizBox"></div>
+</div>
+
 <script>
+const MODE_LABELS = {
+  char_to_pinyin: "看字选拼音",
+  pinyin_to_char: "看拼音选字",
+  listen_to_char: "听音选字",
+  dictation_handwrite: "看拼音写词语",
+};
+
 const params = new URLSearchParams(window.location.search);
 const date = params.get("date") || "";
+
+let wrongItems = [];
 
 async function loadWrongAnswers() {
   document.getElementById("dateLabel").textContent = date ? `${date} - {{ username }}` : "{{ username }}";
@@ -154,21 +371,213 @@ async function loadWrongAnswers() {
   body.innerHTML = "";
 
   const items = data.wrong_answers || [];
+  wrongItems = items;
+
   if (items.length === 0) {
-    body.innerHTML = '<tr><td colspan="4" class="empty">没有错题记录</td></tr>';
+    body.innerHTML = '<tr><td colspan="6" class="empty">没有错题记录</td></tr>';
+    document.getElementById("startReviewBtn").style.display = "none";
     return;
   }
+
+  document.getElementById("startReviewBtn").style.display = "";
 
   items.forEach(w => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="char-cell">${w.character}</td>
       <td class="pinyin-cell">${w.pinyin}</td>
-      <td>${w.words}</td>
+      <td>${w.words || ""}</td>
       <td>${w.grade}</td>
+      <td class="mode-cell">${MODE_LABELS[w.mode] || w.mode}</td>
+      <td class="date-cell">${w.date || ""}</td>
     `;
     body.appendChild(tr);
   });
+}
+
+// --- TTS helper ---
+let ttsAudio = null;
+function speakText(text) {
+  if (ttsAudio) { ttsAudio.pause(); ttsAudio.currentTime = 0; }
+  const url = `/api/tts?text=${encodeURIComponent(text)}`;
+  ttsAudio = new Audio(url);
+  ttsAudio.play();
+}
+
+// --- Review quiz ---
+let reviewQueue = [];
+let reviewIndex = 0;
+let reviewCorrect = 0;
+let reviewTotal = 0;
+
+function startReview() {
+  // Shuffle a copy of wrongItems
+  reviewQueue = [...wrongItems].sort(() => Math.random() - 0.5);
+  reviewIndex = 0;
+  reviewCorrect = 0;
+  reviewTotal = reviewQueue.length;
+  document.getElementById("quizOverlay").classList.add("active");
+  loadReviewQuestion();
+}
+
+async function loadReviewQuestion() {
+  if (reviewIndex >= reviewQueue.length) {
+    showReviewResult();
+    return;
+  }
+
+  const item = reviewQueue[reviewIndex];
+  const box = document.getElementById("quizBox");
+  box.innerHTML = '<div style="color:#a0aec0;padding:24px">加载中...</div>';
+
+  const res = await fetch("/api/review_question", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      character: item.character,
+      pinyin: item.pinyin,
+      words: item.words || "",
+      grade: item.grade,
+      mode: item.mode,
+    }),
+  });
+  const q = await res.json();
+
+  if (q.error) {
+    // Skip this item if question generation fails
+    reviewIndex++;
+    loadReviewQuestion();
+    return;
+  }
+
+  renderReviewQuestion(q, item);
+}
+
+function renderReviewQuestion(q, item) {
+  const box = document.getElementById("quizBox");
+  const progress = `<div class="quiz-progress">第 ${reviewIndex + 1} / ${reviewTotal} 题</div>`;
+  const modeTag = `<div class="quiz-mode-tag">${MODE_LABELS[q.mode] || q.mode}</div>`;
+
+  const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
+
+  if (q.mode === "dictation_handwrite") {
+    box.innerHTML = `
+      ${closeBtn}${progress}${modeTag}
+      <div class="quiz-question pinyin-display">${q.question}</div>
+      <input class="dictation-input" id="dictInput" placeholder="写出词语" autocomplete="off">
+      <br>
+      <button class="dictation-submit" onclick="checkDictation(this)">确认</button>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+    const input = document.getElementById("dictInput");
+    input.focus();
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") checkDictation(document.querySelector(".dictation-submit"));
+    });
+    box._answer = q.answer;
+    return;
+  }
+
+  if (q.mode === "listen_to_char") {
+    box.innerHTML = `
+      ${closeBtn}${progress}${modeTag}
+      <div>听读音，选汉字</div>
+      <button class="listen-btn" onclick="speakText('${q.question}')">&#128264;</button>
+      <div class="quiz-options" id="quizOpts"></div>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+    setTimeout(() => speakText(q.question), 200);
+  } else if (q.mode === "char_to_pinyin") {
+    box.innerHTML = `
+      ${closeBtn}${progress}${modeTag}
+      <div class="quiz-question">${q.question}</div>
+      <div class="quiz-options" id="quizOpts"></div>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+  } else {
+    // pinyin_to_char
+    box.innerHTML = `
+      ${closeBtn}${progress}${modeTag}
+      <div class="quiz-question pinyin-display">${q.question}</div>
+      <div class="quiz-options" id="quizOpts"></div>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+  }
+
+  const optsEl = document.getElementById("quizOpts");
+  q.options.forEach((opt, i) => {
+    const btn = document.createElement("button");
+    btn.className = "quiz-opt";
+    btn.textContent = opt;
+    btn.onclick = () => handleReviewAnswer(btn, i, q);
+    optsEl.appendChild(btn);
+  });
+}
+
+function handleReviewAnswer(btn, idx, q) {
+  const allBtns = document.querySelectorAll(".quiz-opt");
+  allBtns.forEach(b => b.disabled = true);
+
+  if (idx === q.correct_index) {
+    btn.classList.add("correct");
+    reviewCorrect++;
+  } else {
+    btn.classList.add("wrong");
+    allBtns[q.correct_index].classList.add("correct");
+  }
+
+  if (q.word_hint) {
+    document.getElementById("quizHint").textContent = `组词: ${q.word_hint}`;
+  }
+
+  setTimeout(() => {
+    reviewIndex++;
+    loadReviewQuestion();
+  }, 1200);
+}
+
+function checkDictation(btn) {
+  const input = document.getElementById("dictInput");
+  const answer = document.getElementById("quizBox")._answer;
+  const userAnswer = input.value.trim();
+  if (!userAnswer) return;
+
+  btn.disabled = true;
+  input.disabled = true;
+
+  const hint = document.getElementById("quizHint");
+  if (userAnswer === answer) {
+    reviewCorrect++;
+    hint.innerHTML = `<div class="dictation-result correct">${answer} ✓</div>`;
+  } else {
+    hint.innerHTML = `<div class="dictation-result wrong">${userAnswer} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>`;
+  }
+
+  setTimeout(() => {
+    reviewIndex++;
+    loadReviewQuestion();
+  }, 1500);
+}
+
+function showReviewResult() {
+  const box = document.getElementById("quizBox");
+  const pct = reviewTotal > 0 ? Math.round(reviewCorrect / reviewTotal * 100) : 0;
+  box.innerHTML = `
+    <div style="font-size:48px;margin-bottom:16px">${pct >= 80 ? "🎉" : pct >= 60 ? "💪" : "📖"}</div>
+    <div class="quiz-result">
+      复习完成!<br>
+      <span class="score">${reviewCorrect} / ${reviewTotal}</span> 正确率 ${pct}%
+    </div>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <button class="quiz-close" onclick="startReview()">再来一轮</button>
+      <button class="quiz-close" style="background:#a0aec0" onclick="closeQuiz()">返回列表</button>
+    </div>
+  `;
+}
+
+function closeQuiz() {
+  document.getElementById("quizOverlay").classList.remove("active");
+  if (ttsAudio) { ttsAudio.pause(); }
 }
 
 loadWrongAnswers();

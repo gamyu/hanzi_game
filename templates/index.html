@@ -634,8 +634,8 @@ const MODES = [
 ];
 
 let state = {
-  grade: "一年级上",
-  mode: "char_to_pinyin",
+  grade: localStorage.getItem("hanzi_grade") || "一年级上",
+  mode: localStorage.getItem("hanzi_mode") || "char_to_pinyin",
   score: 0,
   combo: 0,
   comboMax: 0,
@@ -822,6 +822,7 @@ function renderGrades(grades) {
     btn.onclick = async () => {
       await saveScore();
       state.grade = g;
+      localStorage.setItem("hanzi_grade", g);
       state.score = 0;
       state.combo = 0;
       state.comboMax = 0;
@@ -846,6 +847,7 @@ function renderModes() {
     btn.onclick = async () => {
       await saveScore();
       state.mode = m.id;
+      localStorage.setItem("hanzi_mode", m.id);
       state.score = 0;
       state.combo = 0;
       state.comboMax = 0;
@@ -1200,51 +1202,19 @@ function updateScoreboard() {
   document.getElementById("comboBox").textContent = `连击: ${state.combo}`;
 }
 
-// --- TTS ---
-let cachedZhVoice = null;
-
-function pickChineseVoice() {
-  if (cachedZhVoice) return cachedZhVoice;
-  const voices = window.speechSynthesis.getVoices();
-  // Prefer premium/enhanced zh-CN voices (Apple: Tingting, Lili; Google: Google 普通话)
-  const preferred = ["Tingting", "Lili", "Google 普通话"];
-  for (const name of preferred) {
-    const v = voices.find(v => v.name.includes(name) && v.lang.startsWith("zh"));
-    if (v) { cachedZhVoice = v; return v; }
-  }
-  // Fallback: any zh-CN voice, then any zh voice
-  cachedZhVoice = voices.find(v => v.lang === "zh-CN")
-    || voices.find(v => v.lang.startsWith("zh"))
-    || null;
-  return cachedZhVoice;
-}
+// --- TTS (edge-tts via server) ---
+let ttsAudio = null;
 
 function speakChar(char) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-
-  const voice = pickChineseVoice();
-
-  // Speak twice with a pause between for clarity
-  function speakOnce(onEnd) {
-    const utter = new SpeechSynthesisUtterance(char);
-    utter.lang = "zh-CN";
-    utter.rate = 0.45;
-    utter.pitch = 1.0;
-    if (voice) utter.voice = voice;
-    if (onEnd) utter.onend = onEnd;
-    window.speechSynthesis.speak(utter);
+  // Stop any currently playing audio
+  if (ttsAudio) {
+    ttsAudio.pause();
+    ttsAudio.currentTime = 0;
   }
 
-  speakOnce(() => {
-    setTimeout(() => speakOnce(), 500);
-  });
-}
-
-// Preload voices
-if ("speechSynthesis" in window) {
-  window.speechSynthesis.onvoiceschanged = () => { cachedZhVoice = null; };
-  window.speechSynthesis.getVoices();
+  const url = `/api/tts?text=${encodeURIComponent(char)}`;
+  ttsAudio = new Audio(url);
+  ttsAudio.play();
 }
 
 // --- Confetti ---
