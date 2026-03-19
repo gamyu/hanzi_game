@@ -490,6 +490,80 @@
 
   .canvas-btn:hover { border-color: #5a67d8; background: #ebf4ff; }
 
+  /* Leaderboard */
+  .lb-tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  .lb-tab {
+    padding: 6px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 16px;
+    background: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #718096;
+    transition: all 0.2s;
+  }
+
+  .lb-tab.active {
+    background: #5a67d8;
+    color: #fff;
+    border-color: #5a67d8;
+  }
+
+  .lb-my-rank {
+    text-align: center;
+    padding: 10px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #ebf4ff, #e9d8fd);
+    border-radius: 12px;
+    font-weight: 700;
+    color: #5a67d8;
+    font-size: 15px;
+  }
+
+  .lb-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .lb-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid #f0f0f0;
+    gap: 12px;
+  }
+
+  .lb-row.me { background: #ebf4ff; border-radius: 8px; }
+
+  .lb-rank {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 14px;
+    flex-shrink: 0;
+    background: #e2e8f0;
+    color: #718096;
+  }
+
+  .lb-rank.gold { background: #f6e05e; color: #744210; }
+  .lb-rank.silver { background: #e2e8f0; color: #4a5568; }
+  .lb-rank.bronze { background: #fbd38d; color: #7b341e; }
+
+  .lb-name { flex: 1; font-weight: 600; font-size: 15px; }
+  .lb-score { font-weight: 700; color: #5a67d8; font-size: 15px; }
+  .lb-acc { font-size: 12px; color: #a0aec0; margin-left: 4px; }
 
 </style>
 </head>
@@ -538,6 +612,17 @@
   </div>
 </div>
 
+<!-- Leaderboard modal -->
+<div class="modal-overlay hidden" id="lbModal">
+  <div class="modal" style="max-width:460px">
+    <h2>排行榜</h2>
+    <div class="lb-tabs" id="lbTabs"></div>
+    <div class="lb-my-rank" id="lbMyRank"></div>
+    <div class="lb-list" id="lbList"></div>
+    <button class="modal-close" onclick="document.getElementById('lbModal').classList.add('hidden')">关闭</button>
+  </div>
+</div>
+
 <div class="celebration" id="celebration"></div>
 
 <script>
@@ -576,11 +661,15 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span>${state.user}</span>
+      <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
     `;
   } else {
-    bar.innerHTML = `<button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>`;
+    bar.innerHTML = `
+      <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
+      <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
+    `;
   }
 }
 
@@ -655,6 +744,61 @@ async function saveScore() {
 async function showScores() {
   await saveScore();
   window.open("/history", "_blank");
+}
+
+// --- Leaderboard ---
+const MODE_LABELS = {
+  char_to_pinyin: "看字选拼音",
+  pinyin_to_char: "看拼音选字",
+  listen_to_char: "听音选字",
+  dictation_handwrite: "看拼音写词语",
+};
+
+async function showLeaderboard() {
+  const modal = document.getElementById("lbModal");
+  modal.classList.remove("hidden");
+
+  // Render mode tabs
+  const tabs = document.getElementById("lbTabs");
+  const allModes = [{ id: "", label: "全部" }, ...MODES];
+  tabs.innerHTML = allModes.map(m =>
+    `<button class="lb-tab${m.id === "" ? " active" : ""}" onclick="loadLeaderboard('${m.id}', this)">${m.label}</button>`
+  ).join("");
+
+  loadLeaderboard("", tabs.querySelector(".lb-tab"));
+}
+
+async function loadLeaderboard(mode, tabBtn) {
+  // Update active tab
+  document.querySelectorAll(".lb-tab").forEach(t => t.classList.remove("active"));
+  if (tabBtn) tabBtn.classList.add("active");
+
+  const res = await fetch(`/api/leaderboard?mode=${encodeURIComponent(mode)}`);
+  const data = await res.json();
+
+  const myRankEl = document.getElementById("lbMyRank");
+  if (data.my_rank) {
+    myRankEl.innerHTML = `你的排名: 第${data.my_rank.rank}名 | 累积${data.my_rank.total_score}分 | 正确率${data.my_rank.accuracy}%`;
+    myRankEl.style.display = "block";
+  } else {
+    myRankEl.style.display = "none";
+  }
+
+  const list = document.getElementById("lbList");
+  if (!data.leaderboard || data.leaderboard.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:#a0aec0;padding:20px">暂无数据</div>';
+    return;
+  }
+
+  list.innerHTML = data.leaderboard.map(r => {
+    const rankClass = r.rank === 1 ? "gold" : r.rank === 2 ? "silver" : r.rank === 3 ? "bronze" : "";
+    const isMe = state.user && r.username === state.user;
+    return `<div class="lb-row${isMe ? " me" : ""}">
+      <div class="lb-rank ${rankClass}">${r.rank}</div>
+      <div class="lb-name">${r.username}</div>
+      <div class="lb-score">${r.total_score}分<span class="lb-acc">${r.accuracy}%</span></div>
+    </div>`;
+  }).join("");
 }
 
 // --- Init ---
@@ -1027,11 +1171,14 @@ function recordWrongAnswer(q) {
   if (q.mode === "char_to_pinyin") {
     character = q.question;
     pinyin = q.answer;
+  } else if (q.mode === "pinyin_to_char") {
+    character = q.answer;
+    pinyin = q.question;
   } else if (q.mode === "listen_to_char") {
     character = q.answer;
     pinyin = q.question_pinyin || "";
   } else {
-    // dictation modes: answer is a word, question is pinyin
+    // dictation: answer is a word, question is pinyin
     character = q.answer;
     pinyin = q.question;
   }

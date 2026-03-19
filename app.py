@@ -383,6 +383,54 @@ def review_page():
     return render_template("review.html", username=session["username"])
 
 
+@app.route("/api/leaderboard")
+def leaderboard():
+    mode = request.args.get("mode", "")
+    db = get_db()
+    if mode:
+        rows = db.execute(
+            """SELECT u.username,
+                      SUM(s.score) as total_score,
+                      SUM(s.correct_answers) as total_correct,
+                      SUM(s.total_questions) as total_questions
+               FROM scores s
+               JOIN users u ON s.user_id = u.id
+               WHERE s.mode = ?
+               GROUP BY s.user_id
+               ORDER BY total_score DESC
+               LIMIT 50""",
+            (mode,),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """SELECT u.username,
+                      SUM(s.score) as total_score,
+                      SUM(s.correct_answers) as total_correct,
+                      SUM(s.total_questions) as total_questions
+               FROM scores s
+               JOIN users u ON s.user_id = u.id
+               GROUP BY s.user_id
+               ORDER BY total_score DESC
+               LIMIT 50""",
+        ).fetchall()
+
+    result = []
+    for i, r in enumerate(rows):
+        d = dict(r)
+        d["rank"] = i + 1
+        d["accuracy"] = round(d["total_correct"] / d["total_questions"] * 100) if d["total_questions"] > 0 else 0
+        result.append(d)
+
+    my_rank = None
+    if "user_id" in session:
+        for r in result:
+            if r["username"] == session["username"]:
+                my_rank = r
+                break
+
+    return jsonify({"leaderboard": result, "my_rank": my_rank})
+
+
 @app.route("/api/grades")
 def grades():
     grade_list = list(CHARACTERS.keys())
