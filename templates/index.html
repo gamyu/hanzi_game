@@ -755,6 +755,7 @@ const MODE_LABELS = {
 };
 
 async function showLeaderboard() {
+  await saveScore();
   const modal = document.getElementById("lbModal");
   modal.classList.remove("hidden");
 
@@ -1200,28 +1201,49 @@ function updateScoreboard() {
 }
 
 // --- TTS ---
+let cachedZhVoice = null;
+
+function pickChineseVoice() {
+  if (cachedZhVoice) return cachedZhVoice;
+  const voices = window.speechSynthesis.getVoices();
+  // Prefer premium/enhanced zh-CN voices (Apple: Tingting, Lili; Google: Google 普通话)
+  const preferred = ["Tingting", "Lili", "Google 普通话"];
+  for (const name of preferred) {
+    const v = voices.find(v => v.name.includes(name) && v.lang.startsWith("zh"));
+    if (v) { cachedZhVoice = v; return v; }
+  }
+  // Fallback: any zh-CN voice, then any zh voice
+  cachedZhVoice = voices.find(v => v.lang === "zh-CN")
+    || voices.find(v => v.lang.startsWith("zh"))
+    || null;
+  return cachedZhVoice;
+}
+
 function speakChar(char) {
   if (!("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
 
-  // Try to find a Chinese voice
-  const voices = window.speechSynthesis.getVoices();
-  const zhVoice = voices.find(v => v.lang.startsWith("zh"));
+  const voice = pickChineseVoice();
 
-  // Speak the character twice with a pause for clarity
-  const text = char + "，" + char;
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.lang = "zh-CN";
-  utter.rate = 0.6;
-  utter.pitch = 1.1;
-  if (zhVoice) utter.voice = zhVoice;
+  // Speak twice with a pause between for clarity
+  function speakOnce(onEnd) {
+    const utter = new SpeechSynthesisUtterance(char);
+    utter.lang = "zh-CN";
+    utter.rate = 0.45;
+    utter.pitch = 1.0;
+    if (voice) utter.voice = voice;
+    if (onEnd) utter.onend = onEnd;
+    window.speechSynthesis.speak(utter);
+  }
 
-  window.speechSynthesis.speak(utter);
+  speakOnce(() => {
+    setTimeout(() => speakOnce(), 500);
+  });
 }
 
 // Preload voices
 if ("speechSynthesis" in window) {
-  window.speechSynthesis.onvoiceschanged = () => {};
+  window.speechSynthesis.onvoiceschanged = () => { cachedZhVoice = null; };
   window.speechSynthesis.getVoices();
 }
 
