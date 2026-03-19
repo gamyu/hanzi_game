@@ -157,7 +157,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "word_hint": "、".join(correct["words"]),
         }
 
-    if mode in ("dictation_keyboard", "dictation_handwrite"):
+    if mode == "dictation_handwrite":
         word_list = WORDS.get(grade, [])
         if not word_list:
             return {"error": "该年级暂无词语数据"}

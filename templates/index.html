@@ -429,29 +429,6 @@
   .modal-close:hover { color: #333; }
 
   /* Dictation mode */
-  .dictation-input {
-    width: 120px;
-    height: 120px;
-    border: 3px solid #e2e8f0;
-    border-radius: 16px;
-    font-size: 72px;
-    text-align: center;
-    color: #2d3748;
-    outline: none;
-    transition: border-color 0.2s;
-    line-height: 120px;
-  }
-
-  .dictation-input.dictation-word-input {
-    width: 280px;
-    height: 80px;
-    font-size: 48px;
-    line-height: 80px;
-    letter-spacing: 8px;
-  }
-
-  .dictation-input:focus { border-color: #5a67d8; }
-
   .hw-canvas-box {
     border: 3px solid #e2e8f0;
     border-radius: 16px;
@@ -481,21 +458,6 @@
     width: 1px;
     border-left: 2px dashed #e2e8f0;
   }
-
-  .dictation-submit {
-    padding: 12px 48px;
-    border: none;
-    border-radius: 12px;
-    background: linear-gradient(135deg, #5a67d8, #764ba2);
-    color: #fff;
-    font-size: 20px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: transform 0.2s;
-  }
-
-  .dictation-submit:hover { transform: scale(1.05); }
-  .dictation-submit:active { transform: scale(0.95); }
 
   .canvas-wrap {
     display: flex;
@@ -583,8 +545,7 @@ const MODES = [
   { id: "char_to_pinyin", label: "看字选拼音" },
   { id: "pinyin_to_char", label: "看拼音选字" },
   { id: "listen_to_char", label: "听音选字" },
-  { id: "dictation_keyboard", label: "看拼音写词语(键盘)" },
-  { id: "dictation_handwrite", label: "看拼音写词语(手写)" },
+  { id: "dictation_handwrite", label: "看拼音写词语" },
 ];
 
 let state = {
@@ -792,7 +753,7 @@ function renderQuestion(q) {
     `;
     // Auto-play on load
     setTimeout(() => speakChar(q.question), 300);
-  } else if (q.mode === "dictation_keyboard" || q.mode === "dictation_handwrite") {
+  } else if (q.mode === "dictation_handwrite") {
     area.innerHTML = `
       <div class="question-label">看拼音写词语</div>
       <div class="question-pinyin">${q.question}</div>
@@ -801,24 +762,6 @@ function renderQuestion(q) {
 
   // Options / input area
   opts.innerHTML = "";
-
-  if (q.mode === "dictation_keyboard") {
-    opts.style.display = "flex";
-    opts.style.gridTemplateColumns = "";
-    opts.style.flexDirection = "column";
-    opts.style.alignItems = "center";
-    opts.style.gap = "16px";
-    opts.innerHTML = `
-      <input class="dictation-input dictation-word-input" id="dictInput" maxlength="8" autofocus placeholder="写词语">
-      <button class="dictation-submit" onclick="submitDictation()">确认</button>
-    `;
-    const inp = document.getElementById("dictInput");
-    inp.addEventListener("keydown", e => { if (e.key === "Enter") submitDictation(); });
-    setTimeout(() => inp.focus(), 100);
-    state.currentQ = q;
-    state.answering = true;
-    return;
-  }
 
   if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
@@ -928,14 +871,6 @@ function handleAnswer(selected, q, btn) {
 }
 
 // --- Dictation ---
-function submitDictation() {
-  const inp = document.getElementById("dictInput");
-  if (!inp) return;
-  const userInput = inp.value.trim();
-  if (!userInput) return;
-  handleDictationAnswer(userInput, state.currentQ);
-}
-
 function handleDictationAnswer(userInput, q) {
   if (!state.answering) return;
   state.answering = false;
