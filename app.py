@@ -12,6 +12,76 @@ from flask import Flask, Response, g, jsonify, redirect, render_template, reques
 from characters import CHARACTERS
 from words import WORDS
 
+# --- Build lesson/unit structure for grades that have lesson tags ---
+# Parse comments from words.py source to extract lesson mapping
+LESSON_DATA = {}  # grade -> {lesson_num -> {"识字": [...], "词语": [...]}}
+UNIT_MAP = {}     # grade -> {unit_name -> [lesson_nums]}
+
+
+def _build_lesson_data():
+    """Parse words.py source comments to build lesson structure."""
+    import re
+    words_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "words.py")
+    with open(words_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    grade = None
+    current_tag = None  # (type, lesson_num)
+    grade_data = {}
+
+    for line in lines:
+        s = line.strip()
+        # Detect grade section
+        gm = re.match(r'"([\u4e00-\u9fff]+)":\s*\[', s)
+        if gm:
+            if grade and grade_data:
+                LESSON_DATA[grade] = grade_data
+            grade = gm.group(1)
+            grade_data = {}
+            current_tag = None
+            continue
+
+        # Detect lesson comment
+        cm = re.match(r'#\s*(识字表|词语表)\s*-\s*第(\d+)课', s)
+        if cm:
+            table_type = "识字" if cm.group(1) == "识字表" else "词语"
+            lesson_num = int(cm.group(2))
+            current_tag = (table_type, lesson_num)
+            if lesson_num not in grade_data:
+                grade_data[lesson_num] = {"识字": [], "词语": []}
+            continue
+
+        # Skip 语文园地 comments
+        if re.match(r'#\s*(识字表|词语表)\s*-\s*语文园地', s):
+            current_tag = None
+            continue
+
+        # Parse word entry
+        wm = re.match(r'\{"word":\s*"(.+?)",\s*"pinyin":\s*"(.+?)"\}', s)
+        if wm and current_tag:
+            table_type, lesson_num = current_tag
+            grade_data[lesson_num][table_type].append({
+                "word": wm.group(1), "pinyin": wm.group(2),
+            })
+
+    if grade and grade_data:
+        LESSON_DATA[grade] = grade_data
+
+    # Define unit mapping (四年级下册 统编版)
+    UNIT_MAP["四年级下"] = {
+        "第一单元": [1, 2, 3, 4],
+        "第二单元": [5, 6, 7, 8],
+        "第三单元": [9, 10, 11],
+        "第四单元": [12, 13, 14, 15],
+        "第五单元": [16, 17],
+        "第六单元": [18, 19, 20],
+        "第七单元": [21, 22, 23, 24],
+        "第八单元": [25, 26, 27, 28],
+    }
+
+
+_build_lesson_data()
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
@@ -65,7 +135,23 @@ def init_db():
             words TEXT NOT NULL,
             grade TEXT NOT NULL,
             mode TEXT NOT NULL,
+            review_count INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS mastered_words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            character TEXT NOT NULL,
+            pinyin TEXT NOT NULL,
+            words TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            review_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            mastered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
@@ -75,6 +161,9 @@ def init_db():
         db.execute("ALTER TABLE scores ADD COLUMN total_questions INTEGER NOT NULL DEFAULT 0")
     if "correct_answers" not in cols:
         db.execute("ALTER TABLE scores ADD COLUMN correct_answers INTEGER NOT NULL DEFAULT 0")
+    wa_cols = [row[1] for row in db.execute("PRAGMA table_info(wrong_answers)").fetchall()]
+    if "review_count" not in wa_cols:
+        db.execute("ALTER TABLE wrong_answers ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0")
     db.commit()
     db.close()
 
@@ -201,6 +290,89 @@ def _pick_distractors(correct: dict, others: list, key: str, count: int = 3,
         return random.sample(candidates, len(candidates)) if candidates else []
 
     return random.sample(candidates, count)
+
+
+def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
+    """Generate a question from specific lessons only."""
+    grade_lessons = LESSON_DATA.get(grade, {})
+    if not grade_lessons:
+        return {"error": "该年级暂无按课数据"}
+
+    # Collect entries from the requested lessons
+    shizi_entries = []  # 识字表 single chars
+    ciyu_entries = []   # 词语表 compound words
+    for ln in lessons:
+        ld = grade_lessons.get(ln, {})
+        shizi_entries.extend(ld.get("识字", []))
+        ciyu_entries.extend(ld.get("词语", []))
+
+    if mode == "dictation_handwrite":
+        if not ciyu_entries:
+            return {"error": "该课/单元暂无词语数据"}
+        word_entry = random.choice(ciyu_entries)
+        return {
+            "mode": mode,
+            "question": word_entry["pinyin"],
+            "answer": word_entry["word"],
+        }
+
+    # For char modes, convert 识字 entries to CHARACTERS-compatible format
+    if not shizi_entries:
+        return {"error": "该课/单元暂无识字数据"}
+
+    # Build char_list with {char, pinyin, words} format
+    char_list = []
+    for e in shizi_entries:
+        char_list.append({
+            "char": e["word"], "pinyin": e["pinyin"], "words": [],
+        })
+
+    if len(char_list) < 2:
+        return {"error": "该课字数太少，无法出题"}
+
+    correct = random.choice(char_list)
+    # Use full grade characters for distractors so there are enough options
+    all_chars = CHARACTERS.get(grade, [])
+    # Also include other lesson chars as distractor pool
+    distractor_pool = [c for c in char_list if c["char"] != correct["char"]]
+    distractor_pool += [c for c in all_chars if c["char"] != correct["char"]]
+
+    if mode == "char_to_pinyin":
+        distractors = _pick_distractors(correct, distractor_pool, key="pinyin")
+        options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
+        random.shuffle(options)
+        return {
+            "mode": mode, "question": correct["char"], "options": options,
+            "correct_index": options.index(correct["pinyin"]),
+            "answer": correct["pinyin"],
+            "word_hint": "、".join(correct["words"]),
+        }
+
+    if mode == "pinyin_to_char":
+        distractors = _pick_distractors(correct, distractor_pool, key="char")
+        options = [correct["char"]] + [d["char"] for d in distractors]
+        random.shuffle(options)
+        return {
+            "mode": mode, "question": correct["pinyin"], "options": options,
+            "correct_index": options.index(correct["char"]),
+            "answer": correct["char"],
+            "word_hint": "、".join(correct["words"]),
+        }
+
+    if mode == "listen_to_char":
+        distractors = _pick_distractors(correct, distractor_pool, key="char",
+                                        exclude_homophones=True)
+        options = [correct["char"]] + [d["char"] for d in distractors]
+        random.shuffle(options)
+        return {
+            "mode": mode, "question": correct["char"],
+            "question_pinyin": correct["pinyin"],
+            "options": options, "correct_index": options.index(correct["char"]),
+            "answer": correct["char"],
+            "word_hint": "、".join(correct["words"]),
+        }
+
+    return {"error": f"Unknown mode: {mode}"}
 
 
 @app.route("/")
@@ -369,12 +541,12 @@ def wrong_answers_api():
     db = get_db()
     if date:
         rows = db.execute(
-            "SELECT DISTINCT character, pinyin, words, grade, mode, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? ORDER BY created_at",
+            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? GROUP BY character, mode ORDER BY review_count ASC, created_at",
             (session["user_id"], date),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT DISTINCT character, pinyin, words, grade, mode, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? GROUP BY character, mode ORDER BY review_count ASC, created_at DESC",
             (session["user_id"],),
         ).fetchall()
     return jsonify({"wrong_answers": [dict(r) for r in rows]})
@@ -439,6 +611,59 @@ def review_question():
     return jsonify({"error": f"Unknown mode: {mode}"}), 400
 
 
+@app.route("/api/review_done", methods=["POST"])
+def review_done():
+    """Increment review_count for a wrong answer. Move to mastered if count >= 3."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    data = request.get_json()
+    character = data.get("character", "")
+    mode = data.get("mode", "")
+    db = get_db()
+
+    db.execute(
+        "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = ? AND character = ? AND mode = ?",
+        (session["user_id"], character, mode),
+    )
+    db.commit()
+
+    # Check if any rows now have review_count >= 3 — move to mastered
+    rows = db.execute(
+        "SELECT * FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+        (session["user_id"], character, mode),
+    ).fetchall()
+
+    mastered = False
+    for r in rows:
+        db.execute(
+            "INSERT INTO mastered_words (user_id, character, pinyin, words, grade, mode, review_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (r["user_id"], r["character"], r["pinyin"], r["words"], r["grade"], r["mode"], r["review_count"], r["created_at"]),
+        )
+        mastered = True
+
+    if mastered:
+        db.execute(
+            "DELETE FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+            (session["user_id"], character, mode),
+        )
+        db.commit()
+
+    return jsonify({"ok": True, "mastered": mastered})
+
+
+@app.route("/api/mastered_words")
+def mastered_words_api():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    rows = db.execute(
+        "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date, DATE(mastered_at) as mastered_date FROM mastered_words WHERE user_id = ? ORDER BY mastered_at DESC",
+        (session["user_id"],),
+    ).fetchall()
+    return jsonify({"mastered_words": [dict(r) for r in rows]})
+
+
 @app.route("/review")
 def review_page():
     if "user_id" not in session:
@@ -500,15 +725,57 @@ def grades():
     return jsonify({"grades": grade_list})
 
 
+@app.route("/api/lessons")
+def lessons_api():
+    """Return lesson/unit structure for a grade (if available)."""
+    grade = request.args.get("grade", "")
+    grade_lessons = LESSON_DATA.get(grade)
+    if not grade_lessons:
+        return jsonify({"has_lessons": False})
+
+    units = UNIT_MAP.get(grade, {})
+    # Build lesson list with content counts
+    lesson_list = []
+    for ln in sorted(grade_lessons.keys()):
+        ld = grade_lessons[ln]
+        lesson_list.append({
+            "lesson": ln,
+            "shizi_count": len(ld.get("识字", [])),
+            "ciyu_count": len(ld.get("词语", [])),
+        })
+
+    unit_list = [{"name": name, "lessons": lns}
+                 for name, lns in units.items()]
+
+    return jsonify({
+        "has_lessons": True,
+        "lessons": lesson_list,
+        "units": unit_list,
+    })
+
+
 @app.route("/api/question")
 def question():
     grade = request.args.get("grade", "一年级上")
     mode = request.args.get("mode", "char_to_pinyin")
+    lesson = request.args.get("lesson", "")  # e.g. "5" or "1,2,3,4" for unit
+    unit = request.args.get("unit", "")      # e.g. "第一单元"
 
     if grade not in CHARACTERS:
         return jsonify({"error": f"Unknown grade: {grade}"}), 400
 
-    result = _generate_question(grade, mode)
+    # Determine lesson list if filtering
+    lesson_nums = []
+    if unit and grade in UNIT_MAP:
+        lesson_nums = UNIT_MAP[grade].get(unit, [])
+    elif lesson:
+        lesson_nums = [int(x) for x in lesson.split(",") if x.strip().isdigit()]
+
+    if lesson_nums:
+        result = _generate_lesson_question(grade, mode, lesson_nums)
+    else:
+        result = _generate_question(grade, mode)
+
     if "error" in result:
         return jsonify(result), 400
 
@@ -522,9 +789,7 @@ def tts():
         return "Missing text", 400
 
     async def generate_audio():
-        communicate = edge_tts.Communicate(
-            text, voice="zh-CN-XiaoxiaoNeural", rate="-30%"
-        )
+        communicate = edge_tts.Communicate(text, voice="zh-CN-XiaoxiaoNeural", rate="-30%")
         buf = io.BytesIO()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":

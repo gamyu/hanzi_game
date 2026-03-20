@@ -32,6 +32,36 @@
     margin-bottom: 24px;
   }
 
+  /* --- Tab bar --- */
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    margin-bottom: 16px;
+    width: 100%;
+    max-width: 700px;
+  }
+
+  .tab-btn {
+    flex: 1;
+    padding: 10px 0;
+    border: 2px solid rgba(255,255,255,0.4);
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.8);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .tab-btn:first-child { border-radius: 12px 0 0 12px; }
+  .tab-btn:last-child { border-radius: 0 12px 12px 0; }
+
+  .tab-btn.active {
+    background: rgba(255,255,255,0.9);
+    color: #c53030;
+    border-color: #fff;
+  }
+
   .card {
     background: #fff;
     border-radius: 20px;
@@ -61,11 +91,18 @@
     white-space: nowrap;
   }
 
+  .mastered-card th {
+    background: #f0fff4;
+    color: #276749;
+    border-bottom: 2px solid #c6f6d5;
+  }
+
   tr:not(:last-child) td {
     border-bottom: 1px solid #edf2f7;
   }
 
   tr:hover td { background: #fff5f5; }
+  .mastered-card tr:hover td { background: #f0fff4; }
 
   td { color: #2d3748; }
 
@@ -90,6 +127,15 @@
     color: #a0aec0;
     white-space: nowrap;
   }
+
+  .review-count-cell {
+    font-weight: 700;
+    font-size: 15px;
+  }
+
+  .review-count-0 { color: #e53e3e; }
+  .review-count-1 { color: #dd6b20; }
+  .review-count-2 { color: #d69e2e; }
 
   .empty {
     text-align: center;
@@ -271,7 +317,6 @@
 
   .listen-btn:hover { transform: scale(1.15); }
 
-  /* dictation input */
   .dictation-input {
     font-size: 28px;
     text-align: center;
@@ -320,7 +365,12 @@
 <h1>错题复习</h1>
 <p class="subtitle" id="dateLabel">加载中...</p>
 
-<div class="card" id="listCard">
+<div class="tab-bar">
+  <button class="tab-btn active" id="tabWrong" onclick="switchTab('wrong')">待复习</button>
+  <button class="tab-btn" id="tabMastered" onclick="switchTab('mastered')">已掌握</button>
+</div>
+
+<div class="card" id="wrongCard">
   <table>
     <thead>
       <tr>
@@ -330,15 +380,35 @@
         <th>年级</th>
         <th>模式</th>
         <th>日期</th>
+        <th>已复习</th>
       </tr>
     </thead>
     <tbody id="reviewBody">
-      <tr><td colspan="6" class="empty">加载中...</td></tr>
+      <tr><td colspan="7" class="empty">加载中...</td></tr>
     </tbody>
   </table>
 </div>
 
-<div class="btn-row">
+<div class="card mastered-card" id="masteredCard" style="display:none">
+  <table>
+    <thead>
+      <tr>
+        <th>汉字</th>
+        <th>拼音</th>
+        <th>组词</th>
+        <th>年级</th>
+        <th>模式</th>
+        <th>复习次数</th>
+        <th>掌握日期</th>
+      </tr>
+    </thead>
+    <tbody id="masteredBody">
+      <tr><td colspan="7" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="btn-row" id="btnRow">
   <button class="action-btn primary" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习</button>
   <button class="action-btn" onclick="window.close()">关闭</button>
 </div>
@@ -360,6 +430,17 @@ const params = new URLSearchParams(window.location.search);
 const date = params.get("date") || "";
 
 let wrongItems = [];
+let currentTab = "wrong";
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById("tabWrong").classList.toggle("active", tab === "wrong");
+  document.getElementById("tabMastered").classList.toggle("active", tab === "mastered");
+  document.getElementById("wrongCard").style.display = tab === "wrong" ? "" : "none";
+  document.getElementById("masteredCard").style.display = tab === "mastered" ? "" : "none";
+  document.getElementById("startReviewBtn").style.display = (tab === "wrong" && wrongItems.length > 0) ? "" : "none";
+  if (tab === "mastered") loadMastered();
+}
 
 async function loadWrongAnswers() {
   document.getElementById("dateLabel").textContent = date ? `${date} - {{ username }}` : "{{ username }}";
@@ -374,12 +455,45 @@ async function loadWrongAnswers() {
   wrongItems = items;
 
   if (items.length === 0) {
-    body.innerHTML = '<tr><td colspan="6" class="empty">没有错题记录</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="empty">没有错题记录</td></tr>';
     document.getElementById("startReviewBtn").style.display = "none";
     return;
   }
 
-  document.getElementById("startReviewBtn").style.display = "";
+  if (currentTab === "wrong") {
+    document.getElementById("startReviewBtn").style.display = "";
+  }
+
+  items.forEach(w => {
+    const rc = w.review_count || 0;
+    const rcClass = rc >= 2 ? "review-count-2" : rc >= 1 ? "review-count-1" : "review-count-0";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="char-cell">${w.character}</td>
+      <td class="pinyin-cell">${w.pinyin}</td>
+      <td>${w.words || ""}</td>
+      <td>${w.grade}</td>
+      <td class="mode-cell">${MODE_LABELS[w.mode] || w.mode}</td>
+      <td class="date-cell">${w.date || ""}</td>
+      <td class="review-count-cell ${rcClass}">${rc}次</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+async function loadMastered() {
+  const body = document.getElementById("masteredBody");
+  body.innerHTML = '<tr><td colspan="7" class="empty">加载中...</td></tr>';
+
+  const res = await fetch("/api/mastered_words");
+  const data = await res.json();
+  const items = data.mastered_words || [];
+  body.innerHTML = "";
+
+  if (items.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">还没有已掌握的错题</td></tr>';
+    return;
+  }
 
   items.forEach(w => {
     const tr = document.createElement("tr");
@@ -389,7 +503,8 @@ async function loadWrongAnswers() {
       <td>${w.words || ""}</td>
       <td>${w.grade}</td>
       <td class="mode-cell">${MODE_LABELS[w.mode] || w.mode}</td>
-      <td class="date-cell">${w.date || ""}</td>
+      <td>${w.review_count || 0}次</td>
+      <td class="date-cell">${w.mastered_date || ""}</td>
     `;
     body.appendChild(tr);
   });
@@ -411,8 +526,8 @@ let reviewCorrect = 0;
 let reviewTotal = 0;
 
 function startReview() {
-  // Shuffle a copy of wrongItems
-  reviewQueue = [...wrongItems].sort(() => Math.random() - 0.5);
+  // Items already sorted by review_count ASC from API, no need to re-sort
+  reviewQueue = [...wrongItems];
   reviewIndex = 0;
   reviewCorrect = 0;
   reviewTotal = reviewQueue.length;
@@ -444,7 +559,6 @@ async function loadReviewQuestion() {
   const q = await res.json();
 
   if (q.error) {
-    // Skip this item if question generation fails
     reviewIndex++;
     loadReviewQuestion();
     return;
@@ -457,7 +571,6 @@ function renderReviewQuestion(q, item) {
   const box = document.getElementById("quizBox");
   const progress = `<div class="quiz-progress">第 ${reviewIndex + 1} / ${reviewTotal} 题</div>`;
   const modeTag = `<div class="quiz-mode-tag">${MODE_LABELS[q.mode] || q.mode}</div>`;
-
   const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
 
   if (q.mode === "dictation_handwrite") {
@@ -475,6 +588,7 @@ function renderReviewQuestion(q, item) {
       if (e.key === "Enter") checkDictation(document.querySelector(".dictation-submit"));
     });
     box._answer = q.answer;
+    box._item = item;
     return;
   }
 
@@ -495,7 +609,6 @@ function renderReviewQuestion(q, item) {
       <div class="quiz-hint" id="quizHint"></div>
     `;
   } else {
-    // pinyin_to_char
     box.innerHTML = `
       ${closeBtn}${progress}${modeTag}
       <div class="quiz-question pinyin-display">${q.question}</div>
@@ -509,18 +622,27 @@ function renderReviewQuestion(q, item) {
     const btn = document.createElement("button");
     btn.className = "quiz-opt";
     btn.textContent = opt;
-    btn.onclick = () => handleReviewAnswer(btn, i, q);
+    btn.onclick = () => handleReviewAnswer(btn, i, q, item);
     optsEl.appendChild(btn);
   });
 }
 
-function handleReviewAnswer(btn, idx, q) {
+async function markReviewed(item) {
+  await fetch("/api/review_done", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character: item.character, mode: item.mode }),
+  });
+}
+
+function handleReviewAnswer(btn, idx, q, item) {
   const allBtns = document.querySelectorAll(".quiz-opt");
   allBtns.forEach(b => b.disabled = true);
 
   if (idx === q.correct_index) {
     btn.classList.add("correct");
     reviewCorrect++;
+    markReviewed(item);
   } else {
     btn.classList.add("wrong");
     allBtns[q.correct_index].classList.add("correct");
@@ -537,8 +659,10 @@ function handleReviewAnswer(btn, idx, q) {
 }
 
 function checkDictation(btn) {
+  const box = document.getElementById("quizBox");
   const input = document.getElementById("dictInput");
-  const answer = document.getElementById("quizBox")._answer;
+  const answer = box._answer;
+  const item = box._item;
   const userAnswer = input.value.trim();
   if (!userAnswer) return;
 
@@ -549,6 +673,7 @@ function checkDictation(btn) {
   if (userAnswer === answer) {
     reviewCorrect++;
     hint.innerHTML = `<div class="dictation-result correct">${answer} ✓</div>`;
+    markReviewed(item);
   } else {
     hint.innerHTML = `<div class="dictation-result wrong">${userAnswer} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>`;
   }
@@ -569,15 +694,21 @@ function showReviewResult() {
       <span class="score">${reviewCorrect} / ${reviewTotal}</span> 正确率 ${pct}%
     </div>
     <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-      <button class="quiz-close" onclick="startReview()">再来一轮</button>
+      <button class="quiz-close" onclick="restartReview()">再来一轮</button>
       <button class="quiz-close" style="background:#a0aec0" onclick="closeQuiz()">返回列表</button>
     </div>
   `;
 }
 
+async function restartReview() {
+  await loadWrongAnswers();
+  startReview();
+}
+
 function closeQuiz() {
   document.getElementById("quizOverlay").classList.remove("active");
   if (ttsAudio) { ttsAudio.pause(); }
+  loadWrongAnswers();
 }
 
 loadWrongAnswers();

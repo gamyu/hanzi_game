@@ -248,6 +248,28 @@
     border-color: #fff;
   }
 
+  .lesson-btn {
+    padding: 6px 12px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.85);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    backdrop-filter: blur(4px);
+    white-space: nowrap;
+  }
+
+  .lesson-btn:hover { background: rgba(255,255,255,0.25); }
+
+  .lesson-btn.active {
+    background: #fff;
+    color: #e53e3e;
+    border-color: #fff;
+  }
+
   .section-label {
     color: rgba(255,255,255,0.8);
     font-size: 13px;
@@ -593,27 +615,31 @@
 <div class="controls">
   <div class="section-label">选择年级</div>
   <div class="control-row" id="gradeRow"></div>
+  <div id="lessonSection" style="display:none">
+    <div class="section-label">按课/单元复习（可选）</div>
+    <div class="control-row" id="lessonRow"></div>
+  </div>
   <div class="section-label">游戏模式</div>
   <div class="control-row" id="modeRow"></div>
 </div>
 
 <!-- Auth modal -->
-<div class="modal-overlay hidden" id="authModal">
+<div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this)hideAuthModal()">
   <div class="modal">
     <div class="modal-tabs">
       <button class="modal-tab active" onclick="switchTab('login')">登录</button>
       <button class="modal-tab" onclick="switchTab('register')">注册</button>
     </div>
     <div class="modal-error" id="authError"></div>
-    <input type="text" id="authUsername" placeholder="用户名" maxlength="20">
-    <input type="password" id="authPassword" placeholder="密码">
+    <input type="text" id="authUsername" placeholder="用户名" maxlength="20" onkeydown="if(event.key==='Enter')document.getElementById('authPassword').focus()">
+    <input type="password" id="authPassword" placeholder="密码" onkeydown="if(event.key==='Enter')submitAuth()">
     <button class="modal-submit" id="authSubmit" onclick="submitAuth()">登录</button>
     <button class="modal-close" onclick="hideAuthModal()">取消</button>
   </div>
 </div>
 
 <!-- Leaderboard modal -->
-<div class="modal-overlay hidden" id="lbModal">
+<div class="modal-overlay hidden" id="lbModal" onclick="if(event.target===this)this.classList.add('hidden')">
   <div class="modal" style="max-width:460px">
     <h2>排行榜</h2>
     <div class="lb-tabs" id="lbTabs"></div>
@@ -636,6 +662,7 @@ const MODES = [
 let state = {
   grade: localStorage.getItem("hanzi_grade") || "一年级上",
   mode: localStorage.getItem("hanzi_mode") || "char_to_pinyin",
+  lesson: null,   // null = all, number = specific lesson, string = unit name
   score: 0,
   combo: 0,
   comboMax: 0,
@@ -645,6 +672,8 @@ let state = {
   user: null,
   authTab: "login",
 };
+
+let lessonInfo = null; // cached lesson/unit data for current grade
 
 // --- Auth ---
 async function checkLogin() {
@@ -679,6 +708,7 @@ function showAuthModal() {
   document.getElementById("authUsername").value = "";
   document.getElementById("authPassword").value = "";
   switchTab("login");
+  setTimeout(() => document.getElementById("authUsername").focus(), 50);
 }
 
 function hideAuthModal() {
@@ -802,6 +832,67 @@ async function loadLeaderboard(mode, tabBtn) {
   }).join("");
 }
 
+// --- Lesson/Unit selector ---
+async function loadLessonInfo(grade) {
+  const res = await fetch(`/api/lessons?grade=${encodeURIComponent(grade)}`);
+  lessonInfo = await res.json();
+  renderLessons();
+}
+
+function renderLessons() {
+  const section = document.getElementById("lessonSection");
+  const row = document.getElementById("lessonRow");
+
+  if (!lessonInfo || !lessonInfo.has_lessons) {
+    section.style.display = "none";
+    state.lesson = null;
+    return;
+  }
+
+  section.style.display = "";
+  row.innerHTML = "";
+
+  // "全部" button
+  const allBtn = document.createElement("button");
+  allBtn.className = "lesson-btn" + (state.lesson === null ? " active" : "");
+  allBtn.textContent = "全部";
+  allBtn.onclick = () => {
+    state.lesson = null;
+    document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
+    allBtn.classList.add("active");
+    loadQuestion();
+  };
+  row.appendChild(allBtn);
+
+  // Unit buttons
+  lessonInfo.units.forEach(u => {
+    const btn = document.createElement("button");
+    btn.className = "lesson-btn" + (state.lesson === u.name ? " active" : "");
+    btn.textContent = u.name;
+    btn.onclick = () => {
+      state.lesson = u.name;
+      document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadQuestion();
+    };
+    row.appendChild(btn);
+  });
+
+  // Individual lesson buttons
+  lessonInfo.lessons.forEach(l => {
+    const btn = document.createElement("button");
+    btn.className = "lesson-btn" + (state.lesson === l.lesson ? " active" : "");
+    btn.textContent = `第${l.lesson}课`;
+    btn.onclick = () => {
+      state.lesson = l.lesson;
+      document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadQuestion();
+    };
+    row.appendChild(btn);
+  });
+}
+
 // --- Init ---
 async function init() {
   await checkLogin();
@@ -809,6 +900,7 @@ async function init() {
   const data = await res.json();
   renderGrades(data.grades);
   renderModes();
+  await loadLessonInfo(state.grade);
   loadQuestion();
 }
 
@@ -823,6 +915,7 @@ function renderGrades(grades) {
       await saveScore();
       state.grade = g;
       localStorage.setItem("hanzi_grade", g);
+      state.lesson = null;
       state.score = 0;
       state.combo = 0;
       state.comboMax = 0;
@@ -831,6 +924,7 @@ function renderGrades(grades) {
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
+      await loadLessonInfo(g);
       loadQuestion();
     };
     row.appendChild(btn);
@@ -867,7 +961,15 @@ async function loadQuestion() {
   state.answering = false;
   document.getElementById("hintArea").innerHTML = "";
 
-  const res = await fetch(`/api/question?grade=${encodeURIComponent(state.grade)}&mode=${state.mode}`);
+  let url = `/api/question?grade=${encodeURIComponent(state.grade)}&mode=${state.mode}`;
+  if (state.lesson !== null) {
+    if (typeof state.lesson === "string" && state.lesson.startsWith("第")) {
+      url += `&unit=${encodeURIComponent(state.lesson)}`;
+    } else {
+      url += `&lesson=${state.lesson}`;
+    }
+  }
+  const res = await fetch(url);
   const q = await res.json();
 
   if (q.error) {
