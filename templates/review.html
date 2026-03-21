@@ -514,8 +514,9 @@ async function loadMastered() {
 let ttsAudio = null;
 function speakText(text) {
   if (ttsAudio) { ttsAudio.pause(); ttsAudio.currentTime = 0; }
-  const url = `/api/tts?text=${encodeURIComponent(text)}`;
+  const url = `/api/tts?text=${encodeURIComponent(text)}&elongate=true`;
   ttsAudio = new Audio(url);
+  ttsAudio.volume = 1.0;
   ttsAudio.play();
 }
 

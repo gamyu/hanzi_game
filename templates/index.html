@@ -1314,8 +1314,9 @@ function speakChar(char) {
     ttsAudio.currentTime = 0;
   }
 
-  const url = `/api/tts?text=${encodeURIComponent(char)}`;
+  const url = `/api/tts?text=${encodeURIComponent(char)}&elongate=true`;
   ttsAudio = new Audio(url);
+  ttsAudio.volume = 1.0;
   ttsAudio.play();
 }
 

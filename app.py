@@ -788,8 +788,12 @@ def tts():
     if not text:
         return "Missing text", 400
 
+    elongate = request.args.get("elongate", "false") == "true"
+    spoken_text = "，".join([text + "～～～～"] * 3) if elongate else text
+
     async def generate_audio():
-        communicate = edge_tts.Communicate(text, voice="zh-CN-XiaoxiaoNeural", rate="-30%")
+        rate = "-70%" if elongate else "-30%"
+        communicate = edge_tts.Communicate(spoken_text, voice="zh-CN-YunyangNeural", rate=rate, volume="+50%")
         buf = io.BytesIO()
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
