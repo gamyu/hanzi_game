@@ -284,9 +284,11 @@ def _generate_question(grade: str, mode: str) -> dict:
 
     if mode == "dictation_handwrite":
         word_list = WORDS.get(grade, [])
-        if not word_list:
+        # Only pick multi-character words (词语), exclude single characters (识字表)
+        ciyu_list = [w for w in word_list if len(w["word"]) >= 2]
+        if not ciyu_list:
             return {"error": "该年级暂无词语数据"}
-        word_entry = random.choice(word_list)
+        word_entry = random.choice(ciyu_list)
         return {
             "mode": mode,
             "question": word_entry["pinyin"],
@@ -875,6 +877,86 @@ def admin_delete_item(item_id):
     db.execute("DELETE FROM shop_items WHERE id = ?", (item_id,))
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/users")
+def admin_users():
+    """Return all registered users with summary stats."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    users = db.execute(
+        """SELECT u.id, u.username, u.coins, u.created_at,
+                  COALESCE(SUM(s.score), 0) as total_score,
+                  COALESCE(SUM(s.total_questions), 0) as total_questions,
+                  COALESCE(SUM(s.correct_answers), 0) as correct_answers
+           FROM users u
+           LEFT JOIN scores s ON u.id = s.user_id
+           GROUP BY u.id
+           ORDER BY total_score DESC"""
+    ).fetchall()
+
+    result = []
+    for u in users:
+        d = dict(u)
+        d["accuracy"] = round(d["correct_answers"] / d["total_questions"] * 100) if d["total_questions"] > 0 else 0
+        # Count wrong answers
+        wa = db.execute("SELECT COUNT(*) as cnt FROM wrong_answers WHERE user_id = ?", (u["id"],)).fetchone()
+        d["wrong_count"] = wa["cnt"]
+        # Count mastered
+        ma = db.execute("SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = ?", (u["id"],)).fetchone()
+        d["mastered_count"] = ma["cnt"]
+        result.append(d)
+
+    return jsonify({"users": result})
+
+
+@app.route("/api/admin/user/<int:user_id>/details")
+def admin_user_details(user_id):
+    """Return detailed history for a specific user."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    user = db.execute("SELECT id, username, coins, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+
+    # Score history grouped by date
+    scores = db.execute(
+        """SELECT DATE(created_at) as date, grade, mode,
+                  SUM(total_questions) as total_questions,
+                  SUM(correct_answers) as correct_answers,
+                  SUM(score) as score
+           FROM scores WHERE user_id = ?
+           GROUP BY DATE(created_at), grade, mode
+           ORDER BY date DESC LIMIT 200""",
+        (user_id,),
+    ).fetchall()
+
+    # Wrong answers
+    wrong_answers = db.execute(
+        """SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date
+           FROM wrong_answers WHERE user_id = ?
+           ORDER BY created_at DESC""",
+        (user_id,),
+    ).fetchall()
+
+    # Mastered words
+    mastered = db.execute(
+        """SELECT character, pinyin, words, grade, mode, DATE(mastered_at) as mastered_date
+           FROM mastered_words WHERE user_id = ?
+           ORDER BY mastered_at DESC""",
+        (user_id,),
+    ).fetchall()
+
+    return jsonify({
+        "user": dict(user),
+        "scores": [dict(r) for r in scores],
+        "wrong_answers": [dict(r) for r in wrong_answers],
+        "mastered": [dict(r) for r in mastered],
+    })
 
 
 @app.route("/api/admin/settings", methods=["GET", "POST"])

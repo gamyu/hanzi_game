@@ -481,6 +481,14 @@
     border-left: 2px dashed #e2e8f0;
   }
 
+  .hw-grid-line-h {
+    position: absolute;
+    left: 10%;
+    width: 80%;
+    height: 1px;
+    border-top: 2px dashed #e2e8f0;
+  }
+
   .canvas-wrap {
     display: flex;
     flex-direction: column;
@@ -729,6 +737,24 @@
 
   .admin-link:hover { color: rgba(255,255,255,0.9); }
 
+  /* Admin user detail tables */
+  #adminUserDetailContent table {
+    font-size: 13px;
+  }
+
+  #adminUserDetailContent th {
+    text-align: center;
+    font-size: 12px;
+    color: #718096;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  #adminUserDetailContent td {
+    padding: 4px 6px;
+    font-size: 13px;
+  }
+
 </style>
 </head>
 <body>
@@ -815,8 +841,12 @@
 
 <!-- Admin panel modal -->
 <div class="modal-overlay hidden" id="adminModal" onclick="if(event.target===this)this.classList.add('hidden')">
-  <div class="modal" style="max-width:500px">
+  <div class="modal" style="max-width:600px">
     <h2>管理员面板</h2>
+    <div class="admin-section">
+      <h3>用户记录查询</h3>
+      <div class="admin-item-list" id="adminUserList" style="max-height:300px"></div>
+    </div>
     <div class="admin-section">
       <h3>积分兑换比例</h3>
       <div class="admin-row">
@@ -839,6 +869,15 @@
     </div>
     <button class="modal-close" onclick="adminLogout()">退出管理员</button>
     <button class="modal-close" onclick="document.getElementById('adminModal').classList.add('hidden')">关闭</button>
+  </div>
+</div>
+
+<!-- Admin user detail modal -->
+<div class="modal-overlay hidden" id="adminUserDetailModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:600px;max-height:90vh;overflow-y:auto">
+    <h2 id="adminUserDetailTitle">用户详情</h2>
+    <div id="adminUserDetailContent"></div>
+    <button class="modal-close" onclick="document.getElementById('adminUserDetailModal').classList.add('hidden')">关闭</button>
   </div>
 </div>
 
@@ -866,6 +905,9 @@ let state = {
   authTab: "login",
   coins: 0,
   isAdmin: false,
+  seenQuestions: new Set(),  // track seen question keys to avoid repeats
+  retryQueue: [],            // queue of questions to retry after wrong answer
+  retryCount: 0,             // how many times current retry has been attempted
 };
 
 let lessonInfo = null; // cached lesson/unit data for current grade
@@ -1153,8 +1195,84 @@ async function showAdminPanel() {
   document.getElementById("adminRate").value = setData.exchange_rate;
   document.getElementById("adminRateMsg").textContent = "";
 
+  // Load users
+  await refreshAdminUsers();
+
   // Load items
   await refreshAdminItems();
+}
+
+async function refreshAdminUsers() {
+  const res = await fetch("/api/admin/users");
+  const data = await res.json();
+  const list = document.getElementById("adminUserList");
+  if (!data.users || data.users.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:#a0aec0;padding:16px;font-size:13px">暂无用户</div>';
+    return;
+  }
+  list.innerHTML = data.users.map(u => `
+    <div class="admin-item-row" style="cursor:pointer" onclick="showUserDetail(${u.id}, '${u.username}')">
+      <span style="flex:1"><strong>${u.username}</strong></span>
+      <span style="font-size:12px;color:#718096;margin-right:8px">总分${u.total_score} | 题${u.total_questions} | 正确率${u.accuracy}% | 错题${u.wrong_count} | 已掌握${u.mastered_count}</span>
+      <span style="font-size:12px;color:#d69e2e">${u.coins}币</span>
+    </div>
+  `).join("");
+}
+
+async function showUserDetail(userId, username) {
+  const res = await fetch(`/api/admin/user/${userId}/details`);
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  document.getElementById("adminUserDetailTitle").textContent = `${username} 的详情`;
+  const content = document.getElementById("adminUserDetailContent");
+
+  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", dictation_handwrite: "看拼音写词语" };
+
+  let html = '';
+
+  // Score history
+  html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">历史成绩</h3>';
+  if (data.scores.length === 0) {
+    html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无成绩</div>';
+  } else {
+    html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>年级</th><th>模式</th><th>题数</th><th>正确</th><th>得分</th></tr>';
+    data.scores.forEach(s => {
+      const acc = s.total_questions > 0 ? Math.round(s.correct_answers / s.total_questions * 100) : 0;
+      html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px">${s.date}</td><td style="text-align:center">${s.grade}</td><td style="text-align:center">${modeLabels[s.mode] || s.mode}</td><td style="text-align:center">${s.total_questions}</td><td style="text-align:center">${s.correct_answers}(${acc}%)</td><td style="text-align:center;font-weight:700;color:#5a67d8">${s.score}</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
+  // Wrong answers
+  html += '<h3 style="font-size:15px;margin:16px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">错题记录 <span style="font-size:12px;color:#a0aec0">(' + data.wrong_answers.length + '题)</span></h3>';
+  if (data.wrong_answers.length === 0) {
+    html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无错题</div>';
+  } else {
+    html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">字/词</th><th>拼音</th><th>组词</th><th>模式</th><th>复习次数</th><th>日期</th></tr>';
+    data.wrong_answers.forEach(w => {
+      const rcColor = w.review_count === 0 ? '#e53e3e' : w.review_count >= 2 ? '#38a169' : '#d69e2e';
+      html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px;font-size:18px;font-weight:700">${w.character}</td><td>${w.pinyin}</td><td style="font-size:12px">${w.words}</td><td style="text-align:center;font-size:12px">${modeLabels[w.mode] || w.mode}</td><td style="text-align:center;color:${rcColor};font-weight:700">${w.review_count}</td><td style="font-size:12px">${w.date}</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
+  // Mastered
+  html += '<h3 style="font-size:15px;margin:16px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">已掌握 <span style="font-size:12px;color:#a0aec0">(' + data.mastered.length + '词)</span></h3>';
+  if (data.mastered.length === 0) {
+    html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无</div>';
+  } else {
+    html += '<div style="max-height:150px;overflow-y:auto;font-size:13px;display:flex;flex-wrap:wrap;gap:6px">';
+    data.mastered.forEach(m => {
+      html += `<span style="background:#c6f6d5;padding:2px 8px;border-radius:8px;font-weight:600">${m.character}</span>`;
+    });
+    html += '</div>';
+  }
+
+  content.innerHTML = html;
+  document.getElementById("adminUserDetailModal").classList.remove("hidden");
 }
 
 async function saveExchangeRate() {
@@ -1326,6 +1444,9 @@ function renderGrades(grades) {
       state.comboMax = 0;
       state.totalQuestions = 0;
       state.correctAnswers = 0;
+      state.seenQuestions.clear();
+      state.retryQueue = [];
+      state.retryCount = 0;
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -1352,6 +1473,9 @@ function renderModes() {
       state.comboMax = 0;
       state.totalQuestions = 0;
       state.correctAnswers = 0;
+      state.seenQuestions.clear();
+      state.retryQueue = [];
+      state.retryCount = 0;
       updateScoreboard();
       document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -1366,6 +1490,27 @@ async function loadQuestion() {
   state.answering = false;
   document.getElementById("hintArea").innerHTML = "";
 
+  // Check retry queue first (wrong answer to repeat immediately)
+  if (state.retryQueue.length > 0) {
+    const retryQ = state.retryQueue[0];
+    if (retryQ.mode === "dictation_handwrite") {
+      renderQuestion(retryQ);
+      return;
+    }
+    // For multiple choice, reshuffle the options
+    const reshuffled = Object.assign({}, retryQ);
+    const opts = [...reshuffled.options];
+    // Shuffle options
+    for (let i = opts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    reshuffled.options = opts;
+    reshuffled.correct_index = opts.indexOf(reshuffled.answer);
+    renderQuestion(reshuffled);
+    return;
+  }
+
   let url = `/api/question?grade=${encodeURIComponent(state.grade)}&mode=${state.mode}`;
   if (state.lesson !== null) {
     if (typeof state.lesson === "string" && state.lesson.startsWith("第")) {
@@ -1374,8 +1519,24 @@ async function loadQuestion() {
       url += `&lesson=${state.lesson}`;
     }
   }
-  const res = await fetch(url);
-  const q = await res.json();
+
+  // Try to get a question not seen before, with retries
+  let q = null;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const res = await fetch(url);
+    q = await res.json();
+    if (q.error) break;
+    const qKey = state.mode + "|" + (q.answer || q.question);
+    if (!state.seenQuestions.has(qKey)) {
+      state.seenQuestions.add(qKey);
+      break;
+    }
+    // If we've seen all questions, clear and accept this one
+    if (attempt === 7) {
+      state.seenQuestions.clear();
+      state.seenQuestions.add(qKey);
+    }
+  }
 
   if (q.error) {
     document.getElementById("questionArea").innerHTML = `<div style="color:#e53e3e">${q.error}</div>`;
@@ -1419,7 +1580,13 @@ function renderQuestion(q) {
 
   if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
-    const canvasW = charCount * 140;
+    const cellSize = 168;
+    const isMobile = window.innerWidth <= 500;
+    // For 3+ chars on mobile, use 2-column layout
+    const cols = (isMobile && charCount >= 3) ? 2 : charCount;
+    const rows = Math.ceil(charCount / cols);
+    const canvasW = cols * cellSize;
+    const canvasH = rows * cellSize;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -1428,8 +1595,8 @@ function renderQuestion(q) {
 
     opts.innerHTML = `
       <div class="canvas-wrap">
-        <div class="hw-canvas-box" style="position:relative;width:${canvasW}px;height:140px">
-          <canvas id="writeCanvas" width="${canvasW}" height="140" style="width:${canvasW}px;height:140px"></canvas>
+        <div class="hw-canvas-box" style="position:relative;width:${canvasW}px;height:${canvasH}px">
+          <canvas id="writeCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
           <div class="hw-grid-lines" id="hwGrid"></div>
         </div>
         <div class="canvas-controls">
@@ -1441,10 +1608,18 @@ function renderQuestion(q) {
     `;
     // Draw grid lines between character cells
     const gridEl = document.getElementById("hwGrid");
-    for (let i = 1; i < charCount; i++) {
+    // Vertical lines between columns
+    for (let i = 1; i < cols; i++) {
       const line = document.createElement("div");
       line.className = "hw-grid-line";
-      line.style.left = (i * 140) + "px";
+      line.style.left = (i * cellSize) + "px";
+      gridEl.appendChild(line);
+    }
+    // Horizontal lines between rows
+    for (let r = 1; r < rows; r++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line-h";
+      line.style.top = (r * cellSize) + "px";
       gridEl.appendChild(line);
     }
     initCanvas();
@@ -1506,13 +1681,31 @@ function handleAnswer(selected, q, btn) {
     btn.classList.add("wrong");
     allBtns[q.correct_index].classList.add("reveal");
     state.combo = 0;
-    hint.innerHTML = `<span class="wrong-text">答错了!</span> 正确答案: <strong>${q.answer}</strong> &nbsp; 组词: ${q.word_hint}`;
-    recordWrongAnswer(q);
+    hint.innerHTML = `<span class="wrong-text">答错了!</span><br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span><br><span style="color:#718096">组词: ${q.word_hint}</span>`;
+    // Only record and queue retry for first attempt (not retries)
+    if (state.retryQueue.length === 0) {
+      recordWrongAnswer(q);
+      state.retryQueue.push(q);
+      state.retryCount = 0;
+    } else {
+      // This is a retry attempt
+      state.retryCount += 1;
+      if (state.retryCount >= 2) {
+        // Max 2 retries, move on
+        state.retryQueue.shift();
+        state.retryCount = 0;
+      }
+    }
   }
 
   updateScoreboard();
 
   if (isCorrect) {
+    // If this was a retry and answered correctly, remove from queue
+    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
+      state.retryQueue.shift();
+      state.retryCount = 0;
+    }
     setTimeout(loadQuestion, 100);
   } else {
     // Show OK button and wait for user to click
@@ -1549,13 +1742,27 @@ function handleDictationAnswer(userInput, q) {
     comboEl.classList.add("hot");
   } else {
     state.combo = 0;
-    hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: <strong>${userInput}</strong> &nbsp; 正确答案: <strong>${q.answer}</strong>`;
-    recordWrongAnswer(q);
+    hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
+    if (state.retryQueue.length === 0) {
+      recordWrongAnswer(q);
+      state.retryQueue.push(q);
+      state.retryCount = 0;
+    } else {
+      state.retryCount += 1;
+      if (state.retryCount >= 2) {
+        state.retryQueue.shift();
+        state.retryCount = 0;
+      }
+    }
   }
 
   updateScoreboard();
 
   if (isCorrect) {
+    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
+      state.retryQueue.shift();
+      state.retryCount = 0;
+    }
     setTimeout(loadQuestion, 100);
   } else {
     const okBtn = document.createElement("button");
