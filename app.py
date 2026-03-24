@@ -85,6 +85,8 @@ _build_lesson_data()
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
 DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hanzi.db")
 
 
@@ -155,6 +157,33 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS shop_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            price INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            item_id INTEGER NOT NULL,
+            purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (item_id) REFERENCES shop_items(id)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    # Default exchange rate: 100 points = 1 coin
+    db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('exchange_rate', '100')")
     # Migrate: add columns if missing
     cols = [row[1] for row in db.execute("PRAGMA table_info(scores)").fetchall()]
     if "total_questions" not in cols:
@@ -164,6 +193,9 @@ def init_db():
     wa_cols = [row[1] for row in db.execute("PRAGMA table_info(wrong_answers)").fetchall()]
     if "review_count" not in wa_cols:
         db.execute("ALTER TABLE wrong_answers ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0")
+    user_cols = [row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()]
+    if "coins" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
     db.commit()
     db.close()
 
@@ -463,8 +495,14 @@ def scores_api():
             "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session["user_id"], grade, mode, score, combo_max, total_questions, correct_answers),
         )
+        # Award coins based on exchange rate
+        sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
+        rate = int(sr["value"]) if sr else 100
+        coins_earned = score // rate
+        if coins_earned > 0:
+            db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
         db.commit()
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "coins_earned": coins_earned})
 
     db = get_db()
     rows = db.execute(
@@ -780,6 +818,127 @@ def question():
         return jsonify(result), 400
 
     return jsonify(result)
+
+
+# --- Admin routes ---
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    data = request.get_json()
+    password = data.get("password", "")
+    if password != ADMIN_PASSWORD:
+        return jsonify({"error": "管理员密码错误"}), 401
+    session["is_admin"] = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("is_admin", None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/check")
+def admin_check():
+    return jsonify({"is_admin": session.get("is_admin", False)})
+
+
+@app.route("/api/admin/items", methods=["GET", "POST"])
+def admin_items():
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    if request.method == "POST":
+        data = request.get_json()
+        name = (data.get("name") or "").strip()
+        description = (data.get("description") or "").strip()
+        price = data.get("price", 0)
+        if not name or not isinstance(price, int) or price <= 0:
+            return jsonify({"error": "名称和价格（正整数）不能为空"}), 400
+        db.execute(
+            "INSERT INTO shop_items (name, description, price) VALUES (?, ?, ?)",
+            (name, description, price),
+        )
+        db.commit()
+        return jsonify({"ok": True})
+
+    rows = db.execute("SELECT * FROM shop_items ORDER BY created_at DESC").fetchall()
+    return jsonify({"items": [dict(r) for r in rows]})
+
+
+@app.route("/api/admin/items/<int:item_id>", methods=["DELETE"])
+def admin_delete_item(item_id):
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+    db = get_db()
+    db.execute("DELETE FROM shop_items WHERE id = ?", (item_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/settings", methods=["GET", "POST"])
+def admin_settings():
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    if request.method == "POST":
+        data = request.get_json()
+        rate = data.get("exchange_rate")
+        if not isinstance(rate, int) or rate <= 0:
+            return jsonify({"error": "兑换比例必须为正整数"}), 400
+        db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('exchange_rate', ?)", (str(rate),))
+        db.commit()
+        return jsonify({"ok": True})
+
+    row = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
+    rate = int(row["value"]) if row else 100
+    return jsonify({"exchange_rate": rate})
+
+
+# --- Shop & Coins routes ---
+
+@app.route("/api/coins")
+def coins_api():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    row = db.execute("SELECT coins FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    # Get exchange rate
+    sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
+    rate = int(sr["value"]) if sr else 100
+    return jsonify({"coins": row["coins"] if row else 0, "exchange_rate": rate})
+
+
+@app.route("/api/shop")
+def shop_api():
+    db = get_db()
+    rows = db.execute("SELECT id, name, description, price FROM shop_items ORDER BY created_at DESC").fetchall()
+    return jsonify({"items": [dict(r) for r in rows]})
+
+
+@app.route("/api/shop/buy", methods=["POST"])
+def shop_buy():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json()
+    item_id = data.get("item_id")
+
+    db = get_db()
+    item = db.execute("SELECT * FROM shop_items WHERE id = ?", (item_id,)).fetchone()
+    if not item:
+        return jsonify({"error": "商品不存在"}), 404
+
+    user = db.execute("SELECT coins FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if user["coins"] < item["price"]:
+        return jsonify({"error": "金币不足"}), 400
+
+    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (item["price"], session["user_id"]))
+    db.execute("INSERT INTO purchases (user_id, item_id) VALUES (?, ?)", (session["user_id"], item_id))
+    db.commit()
+    new_coins = user["coins"] - item["price"]
+    return jsonify({"ok": True, "coins": new_coins})
 
 
 @app.route("/api/tts")

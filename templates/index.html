@@ -587,6 +587,148 @@
   .lb-score { font-weight: 700; color: #5a67d8; font-size: 15px; }
   .lb-acc { font-size: 12px; color: #a0aec0; margin-left: 4px; }
 
+  /* Coins display */
+  .coins-box {
+    background: rgba(255,255,255,0.2);
+    border-radius: 20px;
+    padding: 8px 20px;
+    font-size: 18px;
+    font-weight: bold;
+    backdrop-filter: blur(4px);
+    color: #ffe066;
+  }
+
+  /* Shop modal */
+  .shop-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+
+  .shop-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 14px;
+    background: #fafafa;
+  }
+
+  .shop-item-info { flex: 1; }
+  .shop-item-name { font-weight: 700; font-size: 16px; color: #2d3748; }
+  .shop-item-desc { font-size: 13px; color: #718096; margin-top: 2px; }
+  .shop-item-price { font-weight: 700; color: #d69e2e; font-size: 15px; margin-right: 12px; }
+
+  .shop-buy-btn {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #f6d365, #fda085);
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .shop-buy-btn:hover { transform: scale(1.05); }
+  .shop-buy-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  .shop-coins-bar {
+    text-align: center;
+    padding: 10px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #fefcbf, #fef3c7);
+    border-radius: 12px;
+    font-weight: 700;
+    color: #b7791f;
+    font-size: 16px;
+  }
+
+  .shop-empty {
+    text-align: center;
+    color: #a0aec0;
+    padding: 40px 20px;
+    font-size: 15px;
+  }
+
+  /* Admin panel */
+  .admin-section {
+    margin-bottom: 20px;
+  }
+
+  .admin-section h3 {
+    font-size: 16px;
+    color: #2d3748;
+    margin-bottom: 10px;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 6px;
+  }
+
+  .admin-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .admin-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .admin-input:focus { border-color: #5a67d8; }
+
+  .admin-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 10px;
+    background: #5a67d8;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: transform 0.2s;
+    white-space: nowrap;
+  }
+
+  .admin-btn:hover { transform: scale(1.03); }
+  .admin-btn.danger { background: #e53e3e; }
+
+  .admin-item-list {
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .admin-item-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .admin-item-row span { font-size: 14px; }
+
+  .admin-link {
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 4px 8px;
+    transition: color 0.2s;
+  }
+
+  .admin-link:hover { color: rgba(255,255,255,0.9); }
+
 </style>
 </head>
 <body>
@@ -599,6 +741,7 @@
 
 <div class="top-bar">
   <div class="score-box" id="scoreBox">得分: 0</div>
+  <div class="coins-box" id="coinsBox" style="display:none">金币: 0</div>
   <div class="combo-box" id="comboBox">连击: 0</div>
 </div>
 
@@ -649,6 +792,56 @@
   </div>
 </div>
 
+<!-- Shop modal -->
+<div class="modal-overlay hidden" id="shopModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:460px">
+    <h2>商店</h2>
+    <div class="shop-coins-bar" id="shopCoinsBar">金币: 0</div>
+    <div class="shop-grid" id="shopGrid"></div>
+    <button class="modal-close" onclick="document.getElementById('shopModal').classList.add('hidden')">关闭</button>
+  </div>
+</div>
+
+<!-- Admin login modal -->
+<div class="modal-overlay hidden" id="adminLoginModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal">
+    <h2>管理员登录</h2>
+    <div class="modal-error" id="adminLoginError"></div>
+    <input type="password" id="adminPassword" placeholder="管理员密码" onkeydown="if(event.key==='Enter')submitAdminLogin()">
+    <button class="modal-submit" onclick="submitAdminLogin()">登录</button>
+    <button class="modal-close" onclick="document.getElementById('adminLoginModal').classList.add('hidden')">取消</button>
+  </div>
+</div>
+
+<!-- Admin panel modal -->
+<div class="modal-overlay hidden" id="adminModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:500px">
+    <h2>管理员面板</h2>
+    <div class="admin-section">
+      <h3>积分兑换比例</h3>
+      <div class="admin-row">
+        <input type="number" class="admin-input" id="adminRate" min="1" placeholder="多少积分=1金币" style="max-width:180px">
+        <span style="font-size:13px;color:#718096">积分 = 1 金币</span>
+        <button class="admin-btn" onclick="saveExchangeRate()">保存</button>
+      </div>
+      <div id="adminRateMsg" style="font-size:13px;color:#38a169;min-height:18px"></div>
+    </div>
+    <div class="admin-section">
+      <h3>商店商品</h3>
+      <div class="admin-row">
+        <input type="text" class="admin-input" id="adminItemName" placeholder="商品名称">
+        <input type="text" class="admin-input" id="adminItemDesc" placeholder="描述（可选）" style="max-width:120px">
+        <input type="number" class="admin-input" id="adminItemPrice" placeholder="价格" min="1" style="max-width:80px">
+        <button class="admin-btn" onclick="addShopItem()">添加</button>
+      </div>
+      <div id="adminItemMsg" style="font-size:13px;color:#e53e3e;min-height:18px"></div>
+      <div class="admin-item-list" id="adminItemList"></div>
+    </div>
+    <button class="modal-close" onclick="adminLogout()">退出管理员</button>
+    <button class="modal-close" onclick="document.getElementById('adminModal').classList.add('hidden')">关闭</button>
+  </div>
+</div>
+
 <div class="celebration" id="celebration"></div>
 
 <script>
@@ -671,6 +864,8 @@ let state = {
   answering: false,
   user: null,
   authTab: "login",
+  coins: 0,
+  isAdmin: false,
 };
 
 let lessonInfo = null; // cached lesson/unit data for current grade
@@ -681,23 +876,47 @@ async function checkLogin() {
   const data = await res.json();
   if (data.logged_in) {
     state.user = data.username;
+    await loadCoins();
   }
+  // Check admin status
+  const adminRes = await fetch("/api/admin/check");
+  const adminData = await adminRes.json();
+  state.isAdmin = adminData.is_admin;
   renderUserBar();
+}
+
+async function loadCoins() {
+  if (!state.user) return;
+  const res = await fetch("/api/coins");
+  const data = await res.json();
+  if (!data.error) {
+    state.coins = data.coins;
+    const coinsBox = document.getElementById("coinsBox");
+    coinsBox.textContent = `金币: ${state.coins}`;
+    coinsBox.style.display = "";
+  }
 }
 
 function renderUserBar() {
   const bar = document.getElementById("userBar");
+  const adminBtn = state.isAdmin
+    ? `<button class="user-btn" onclick="showAdminPanel()">管理员</button>`
+    : `<button class="admin-link" onclick="showAdminLogin()">管理员</button>`;
   if (state.user) {
     bar.innerHTML = `
       <span>${state.user}</span>
+      <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
+      ${adminBtn}
     `;
   } else {
     bar.innerHTML = `
+      <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
+      ${adminBtn}
     `;
   }
 }
@@ -742,6 +961,7 @@ async function submitAuth() {
   }
 
   state.user = data.username;
+  await loadCoins();
   renderUserBar();
   hideAuthModal();
 }
@@ -750,14 +970,16 @@ async function doLogout() {
   await saveScore();
   await fetch("/api/logout", { method: "POST" });
   state.user = null;
+  state.coins = 0;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
+  document.getElementById("coinsBox").style.display = "none";
   renderUserBar();
 }
 
 async function saveScore() {
   if (!state.user || state.totalQuestions === 0) return;
-  await fetch("/api/scores", {
+  const res = await fetch("/api/scores", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -769,6 +991,10 @@ async function saveScore() {
       correct_answers: state.correctAnswers,
     }),
   });
+  const data = await res.json();
+  if (data.coins_earned > 0) {
+    await loadCoins();
+  }
 }
 
 async function showScores() {
@@ -832,6 +1058,184 @@ async function loadLeaderboard(mode, tabBtn) {
   }).join("");
 }
 
+// --- Shop ---
+async function showShop() {
+  const modal = document.getElementById("shopModal");
+  modal.classList.remove("hidden");
+
+  // Show coins bar
+  const coinsBar = document.getElementById("shopCoinsBar");
+  if (state.user) {
+    await loadCoins();
+    coinsBar.textContent = `我的金币: ${state.coins}`;
+    coinsBar.style.display = "";
+  } else {
+    coinsBar.style.display = "none";
+  }
+
+  // Load items
+  const res = await fetch("/api/shop");
+  const data = await res.json();
+  const grid = document.getElementById("shopGrid");
+
+  if (!data.items || data.items.length === 0) {
+    grid.innerHTML = '<div class="shop-empty">商店暂无商品，敬请期待!</div>';
+    return;
+  }
+
+  grid.innerHTML = data.items.map(item => {
+    const canBuy = state.user && state.coins >= item.price;
+    return `<div class="shop-item">
+      <div class="shop-item-info">
+        <div class="shop-item-name">${item.name}</div>
+        ${item.description ? `<div class="shop-item-desc">${item.description}</div>` : ""}
+      </div>
+      <div class="shop-item-price">${item.price} 金币</div>
+      <button class="shop-buy-btn" onclick="buyItem(${item.id}, '${item.name}', ${item.price})" ${canBuy ? "" : "disabled"}>${state.user ? "购买" : "登录后购买"}</button>
+    </div>`;
+  }).join("");
+}
+
+async function buyItem(itemId, name, price) {
+  if (!state.user) return;
+  if (!confirm(`确定花费 ${price} 金币购买「${name}」？`)) return;
+
+  const res = await fetch("/api/shop/buy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id: itemId }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+    return;
+  }
+  state.coins = data.coins;
+  document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
+  alert(`购买成功!`);
+  showShop(); // Refresh
+}
+
+// --- Admin ---
+function showAdminLogin() {
+  document.getElementById("adminLoginModal").classList.remove("hidden");
+  document.getElementById("adminLoginError").textContent = "";
+  document.getElementById("adminPassword").value = "";
+  setTimeout(() => document.getElementById("adminPassword").focus(), 50);
+}
+
+async function submitAdminLogin() {
+  const password = document.getElementById("adminPassword").value;
+  const res = await fetch("/api/admin/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById("adminLoginError").textContent = data.error;
+    return;
+  }
+  state.isAdmin = true;
+  document.getElementById("adminLoginModal").classList.add("hidden");
+  renderUserBar();
+  showAdminPanel();
+}
+
+async function showAdminPanel() {
+  if (!state.isAdmin) return;
+  const modal = document.getElementById("adminModal");
+  modal.classList.remove("hidden");
+
+  // Load exchange rate
+  const setRes = await fetch("/api/admin/settings");
+  const setData = await setRes.json();
+  document.getElementById("adminRate").value = setData.exchange_rate;
+  document.getElementById("adminRateMsg").textContent = "";
+
+  // Load items
+  await refreshAdminItems();
+}
+
+async function saveExchangeRate() {
+  const rate = parseInt(document.getElementById("adminRate").value);
+  if (!rate || rate <= 0) {
+    document.getElementById("adminRateMsg").textContent = "请输入正整数";
+    document.getElementById("adminRateMsg").style.color = "#e53e3e";
+    return;
+  }
+  const res = await fetch("/api/admin/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ exchange_rate: rate }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById("adminRateMsg").textContent = data.error;
+    document.getElementById("adminRateMsg").style.color = "#e53e3e";
+  } else {
+    document.getElementById("adminRateMsg").textContent = "已保存";
+    document.getElementById("adminRateMsg").style.color = "#38a169";
+  }
+}
+
+async function addShopItem() {
+  const name = document.getElementById("adminItemName").value.trim();
+  const description = document.getElementById("adminItemDesc").value.trim();
+  const price = parseInt(document.getElementById("adminItemPrice").value);
+  const msg = document.getElementById("adminItemMsg");
+
+  if (!name || !price || price <= 0) {
+    msg.textContent = "名称和价格（正整数）不能为空";
+    return;
+  }
+
+  const res = await fetch("/api/admin/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description, price }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    msg.textContent = data.error;
+    return;
+  }
+  msg.textContent = "";
+  document.getElementById("adminItemName").value = "";
+  document.getElementById("adminItemDesc").value = "";
+  document.getElementById("adminItemPrice").value = "";
+  await refreshAdminItems();
+}
+
+async function refreshAdminItems() {
+  const res = await fetch("/api/admin/items");
+  const data = await res.json();
+  const list = document.getElementById("adminItemList");
+  if (!data.items || data.items.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:#a0aec0;padding:16px;font-size:13px">暂无商品</div>';
+    return;
+  }
+  list.innerHTML = data.items.map(item => `
+    <div class="admin-item-row">
+      <span><strong>${item.name}</strong> — ${item.price} 金币${item.description ? " (" + item.description + ")" : ""}</span>
+      <button class="admin-btn danger" onclick="deleteItem(${item.id})" style="padding:4px 12px;font-size:12px">删除</button>
+    </div>
+  `).join("");
+}
+
+async function deleteItem(id) {
+  if (!confirm("确定删除该商品？")) return;
+  await fetch(`/api/admin/items/${id}`, { method: "DELETE" });
+  await refreshAdminItems();
+}
+
+async function adminLogout() {
+  await fetch("/api/admin/logout", { method: "POST" });
+  state.isAdmin = false;
+  document.getElementById("adminModal").classList.add("hidden");
+  renderUserBar();
+}
+
 // --- Lesson/Unit selector ---
 async function loadLessonInfo(grade) {
   const res = await fetch(`/api/lessons?grade=${encodeURIComponent(grade)}`);
@@ -878,8 +1282,9 @@ function renderLessons() {
     row.appendChild(btn);
   });
 
-  // Individual lesson buttons
+  // Individual lesson buttons (skip lessons with no vocabulary)
   lessonInfo.lessons.forEach(l => {
+    if (l.ciyu_count === 0) return;
     const btn = document.createElement("button");
     btn.className = "lesson-btn" + (state.lesson === l.lesson ? " active" : "");
     btn.textContent = `第${l.lesson}课`;
