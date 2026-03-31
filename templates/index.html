@@ -248,28 +248,6 @@
     border-color: #fff;
   }
 
-  .lesson-btn {
-    padding: 6px 12px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-radius: 16px;
-    background: rgba(255,255,255,0.1);
-    color: rgba(255,255,255,0.85);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    backdrop-filter: blur(4px);
-    white-space: nowrap;
-  }
-
-  .lesson-btn:hover { background: rgba(255,255,255,0.25); }
-
-  .lesson-btn.active {
-    background: #fff;
-    color: #e53e3e;
-    border-color: #fff;
-  }
-
   .section-label {
     color: rgba(255,255,255,0.8);
     font-size: 13px;
@@ -292,6 +270,7 @@
     height: 12px;
     border-radius: 2px;
     animation: fall 1.5s ease-out forwards;
+    pointer-events: none;
   }
 
   @keyframes fall {
@@ -784,10 +763,6 @@
 <div class="controls">
   <div class="section-label">选择年级</div>
   <div class="control-row" id="gradeRow"></div>
-  <div id="lessonSection" style="display:none">
-    <div class="section-label">按课/单元复习（可选）</div>
-    <div class="control-row" id="lessonRow"></div>
-  </div>
   <div class="section-label">游戏模式</div>
   <div class="control-row" id="modeRow"></div>
 </div>
@@ -867,6 +842,10 @@
       <div id="adminItemMsg" style="font-size:13px;color:#e53e3e;min-height:18px"></div>
       <div class="admin-item-list" id="adminItemList"></div>
     </div>
+    <div class="admin-section">
+      <h3>每日作业管理</h3>
+      <div id="adminHomeworkContent" style="max-height:400px;overflow-y:auto"></div>
+    </div>
     <button class="modal-close" onclick="adminLogout()">退出管理员</button>
     <button class="modal-close" onclick="document.getElementById('adminModal').classList.add('hidden')">关闭</button>
   </div>
@@ -894,7 +873,6 @@ const MODES = [
 let state = {
   grade: localStorage.getItem("hanzi_grade") || "一年级上",
   mode: localStorage.getItem("hanzi_mode") || "char_to_pinyin",
-  lesson: null,   // null = all, number = specific lesson, string = unit name
   score: 0,
   combo: 0,
   comboMax: 0,
@@ -910,7 +888,6 @@ let state = {
   retryCount: 0,             // how many times current retry has been attempted
 };
 
-let lessonInfo = null; // cached lesson/unit data for current grade
 
 // --- Auth ---
 async function checkLogin() {
@@ -947,6 +924,7 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span>${state.user}</span>
+      <button class="user-btn" onclick="window.open('/homework','_blank')">每日作业</button>
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
@@ -1013,34 +991,65 @@ async function doLogout() {
   await fetch("/api/logout", { method: "POST" });
   state.user = null;
   state.coins = 0;
-  state.totalQuestions = 0;
-  state.correctAnswers = 0;
   document.getElementById("coinsBox").style.display = "none";
   renderUserBar();
 }
 
 async function saveScore() {
   if (!state.user || state.totalQuestions === 0) return;
-  const res = await fetch("/api/scores", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grade: state.grade,
-      mode: state.mode,
-      score: state.score,
-      combo_max: state.comboMax,
-      total_questions: state.totalQuestions,
-      correct_answers: state.correctAnswers,
-    }),
-  });
-  const data = await res.json();
-  if (data.coins_earned > 0) {
-    await loadCoins();
+  const payload = {
+    grade: state.grade,
+    mode: state.mode,
+    score: state.score,
+    combo_max: state.comboMax,
+    total_questions: state.totalQuestions,
+    correct_answers: state.correctAnswers,
+  };
+  // Reset counters immediately so we don't double-save
+  state.score = 0;
+  state.combo = 0;
+  state.comboMax = 0;
+  state.totalQuestions = 0;
+  state.correctAnswers = 0;
+  updateScoreboard();
+  try {
+    const res = await fetch("/api/scores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.coins_earned > 0) {
+      await loadCoins();
+    }
+  } catch (e) {
+    // If save fails, try sendBeacon as fallback
+    navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
   }
 }
 
-async function showScores() {
-  await saveScore();
+// Fire-and-forget save (non-blocking, for use in button handlers)
+function saveScoreAsync() {
+  if (!state.user || state.totalQuestions === 0) return;
+  const payload = {
+    grade: state.grade,
+    mode: state.mode,
+    score: state.score,
+    combo_max: state.comboMax,
+    total_questions: state.totalQuestions,
+    correct_answers: state.correctAnswers,
+  };
+  state.score = 0;
+  state.combo = 0;
+  state.comboMax = 0;
+  state.totalQuestions = 0;
+  state.correctAnswers = 0;
+  updateScoreboard();
+  navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+}
+
+function showScores() {
+  saveScoreAsync();
   window.open("/history", "_blank");
 }
 
@@ -1200,6 +1209,9 @@ async function showAdminPanel() {
 
   // Load items
   await refreshAdminItems();
+
+  // Load homework
+  await loadAdminHomework();
 }
 
 async function refreshAdminUsers() {
@@ -1354,66 +1366,122 @@ async function adminLogout() {
   renderUserBar();
 }
 
-// --- Lesson/Unit selector ---
-async function loadLessonInfo(grade) {
-  const res = await fetch(`/api/lessons?grade=${encodeURIComponent(grade)}`);
-  lessonInfo = await res.json();
-  renderLessons();
+// --- Admin Homework ---
+let hwGrades = []; // cached from server
+
+async function loadAdminHomework() {
+  const res = await fetch("/api/admin/homework/overview");
+  const data = await res.json();
+  hwGrades = data.grades || [];
+  const content = document.getElementById("adminHomeworkContent");
+
+  let html = '';
+
+  // User list with plans
+  if (data.users && data.users.length > 0) {
+    html += '<div style="margin-bottom:12px;font-size:13px;font-weight:600;color:#4a5568">已设置作业的用户:</div>';
+    data.users.forEach(u => {
+      const recPct = u.total_lessons > 0 ? Math.round((u.recognition_lesson - 1) / u.total_lessons * 100) : 0;
+      const wrtPct = u.total_lessons > 0 ? Math.round((u.writing_lesson - 1) / u.total_lessons * 100) : 0;
+      html += `<div class="admin-item-row" style="flex-wrap:wrap;gap:4px">
+        <span><strong>${u.username}</strong> — ${u.grade_short} (认${u.recognition_lesson}/${u.total_lessons} 写${u.writing_lesson}/${u.total_lessons})</span>
+        <span style="font-size:12px;color:#718096">认${recPct}% 写${wrtPct}%</span>
+      </div>`;
+      // Today's assignments
+      if (u.today_assignments && u.today_assignments.length > 0) {
+        u.today_assignments.forEach(a => {
+          const tl = a.type === "recognition" ? "认字" : "写字";
+          if (a.status === "completed") {
+            const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
+            const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
+            html += `<div style="padding:2px 0 2px 16px;font-size:12px;color:#718096">
+              ${tl}第${a.lesson_num}课: <span style="color:${accColor};font-weight:700">${acc}%</span> (${a.correct_answers}/${a.total_questions})
+              ${acc < 80 ? `<button style="font-size:11px;padding:1px 6px;margin-left:4px;cursor:pointer;border:1px solid #e53e3e;background:#fff5f5;border-radius:4px;color:#e53e3e" onclick="repeatAssignment(${a.id})">重复</button>` : ''}
+            </div>`;
+          } else {
+            html += `<div style="padding:2px 0 2px 16px;font-size:12px;color:#d69e2e">${tl}第${a.lesson_num}课: 待完成</div>`;
+          }
+        });
+      }
+    });
+  }
+
+  // Assign homework form
+  html += '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0">';
+  html += '<div style="font-size:13px;font-weight:600;color:#4a5568;margin-bottom:8px">布置新作业计划:</div>';
+  html += '<div class="admin-row" style="flex-wrap:wrap;gap:6px">';
+  html += '<select id="hwUserId" class="admin-input" style="max-width:120px"><option value="">选择用户</option></select>';
+  html += '<select id="hwGrade" class="admin-input" style="max-width:100px"><option value="">选择年级</option></select>';
+  html += '<input type="number" id="hwRecLesson" class="admin-input" style="max-width:60px" placeholder="认课" min="1" value="1">';
+  html += '<input type="number" id="hwWrtLesson" class="admin-input" style="max-width:60px" placeholder="写课" min="1" value="1">';
+  html += '<button class="admin-btn" onclick="saveHomeworkPlan()">保存</button>';
+  html += '</div>';
+  html += '<div id="hwPlanMsg" style="font-size:12px;min-height:16px;margin-top:4px"></div>';
+  html += '</div>';
+
+  content.innerHTML = html;
+
+  // Populate user select
+  const userRes = await fetch("/api/admin/users");
+  const userData = await userRes.json();
+  const userSelect = document.getElementById("hwUserId");
+  (userData.users || []).forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u.id;
+    opt.textContent = u.username;
+    userSelect.appendChild(opt);
+  });
+
+  // Populate grade select
+  const gradeSelect = document.getElementById("hwGrade");
+  hwGrades.forEach(g => {
+    const opt = document.createElement("option");
+    opt.value = g.grade;
+    opt.textContent = `${g.short} (${g.total_lessons}课)`;
+    gradeSelect.appendChild(opt);
+  });
 }
 
-function renderLessons() {
-  const section = document.getElementById("lessonSection");
-  const row = document.getElementById("lessonRow");
+async function saveHomeworkPlan() {
+  const userId = document.getElementById("hwUserId").value;
+  const grade = document.getElementById("hwGrade").value;
+  const recLesson = parseInt(document.getElementById("hwRecLesson").value) || 1;
+  const wrtLesson = parseInt(document.getElementById("hwWrtLesson").value) || 1;
+  const msg = document.getElementById("hwPlanMsg");
 
-  if (!lessonInfo || !lessonInfo.has_lessons) {
-    section.style.display = "none";
-    state.lesson = null;
+  if (!userId || !grade) {
+    msg.textContent = "请选择用户和年级";
+    msg.style.color = "#e53e3e";
     return;
   }
 
-  section.style.display = "";
-  row.innerHTML = "";
-
-  // "全部" button
-  const allBtn = document.createElement("button");
-  allBtn.className = "lesson-btn" + (state.lesson === null ? " active" : "");
-  allBtn.textContent = "全部";
-  allBtn.onclick = () => {
-    state.lesson = null;
-    document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
-    allBtn.classList.add("active");
-    loadQuestion();
-  };
-  row.appendChild(allBtn);
-
-  // Unit buttons
-  lessonInfo.units.forEach(u => {
-    const btn = document.createElement("button");
-    btn.className = "lesson-btn" + (state.lesson === u.name ? " active" : "");
-    btn.textContent = u.name;
-    btn.onclick = () => {
-      state.lesson = u.name;
-      document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      loadQuestion();
-    };
-    row.appendChild(btn);
+  const res = await fetch("/api/admin/homework/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: parseInt(userId), grade, recognition_lesson: recLesson, writing_lesson: wrtLesson }),
   });
+  const data = await res.json();
+  if (data.error) {
+    msg.textContent = data.error;
+    msg.style.color = "#e53e3e";
+  } else {
+    msg.textContent = "已保存";
+    msg.style.color = "#38a169";
+    await loadAdminHomework();
+  }
+}
 
-  // Individual lesson buttons (skip lessons with no vocabulary)
-  lessonInfo.lessons.forEach(l => {
-    if (l.ciyu_count === 0) return;
-    const btn = document.createElement("button");
-    btn.className = "lesson-btn" + (state.lesson === l.lesson ? " active" : "");
-    btn.textContent = `第${l.lesson}课`;
-    btn.onclick = () => {
-      state.lesson = l.lesson;
-      document.querySelectorAll(".lesson-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      loadQuestion();
-    };
-    row.appendChild(btn);
+async function repeatAssignment(assignmentId) {
+  if (!confirm("确定将这份作业设为明天重做?")) return;
+  const res = await fetch("/api/admin/homework/repeat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assignment_id: assignmentId }),
   });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  alert("已设置明天重复该作业");
+  await loadAdminHomework();
 }
 
 // --- Init ---
@@ -1423,7 +1491,6 @@ async function init() {
   const data = await res.json();
   renderGrades(data.grades);
   renderModes();
-  await loadLessonInfo(state.grade);
   loadQuestion();
 }
 
@@ -1434,23 +1501,16 @@ function renderGrades(grades) {
     const btn = document.createElement("button");
     btn.className = "grade-btn" + (g === state.grade ? " active" : "");
     btn.textContent = g;
-    btn.onclick = async () => {
-      await saveScore();
+    btn.onclick = () => {
+      saveScoreAsync();
       state.grade = g;
       localStorage.setItem("hanzi_grade", g);
-      state.lesson = null;
-      state.score = 0;
-      state.combo = 0;
-      state.comboMax = 0;
-      state.totalQuestions = 0;
-      state.correctAnswers = 0;
       state.seenQuestions.clear();
       state.retryQueue = [];
       state.retryCount = 0;
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      await loadLessonInfo(g);
       loadQuestion();
     };
     row.appendChild(btn);
@@ -1464,15 +1524,10 @@ function renderModes() {
     const btn = document.createElement("button");
     btn.className = "mode-btn" + (m.id === state.mode ? " active" : "");
     btn.textContent = m.label;
-    btn.onclick = async () => {
-      await saveScore();
+    btn.onclick = () => {
+      saveScoreAsync();
       state.mode = m.id;
       localStorage.setItem("hanzi_mode", m.id);
-      state.score = 0;
-      state.combo = 0;
-      state.comboMax = 0;
-      state.totalQuestions = 0;
-      state.correctAnswers = 0;
       state.seenQuestions.clear();
       state.retryQueue = [];
       state.retryCount = 0;
@@ -1512,13 +1567,6 @@ async function loadQuestion() {
   }
 
   let url = `/api/question?grade=${encodeURIComponent(state.grade)}&mode=${state.mode}`;
-  if (state.lesson !== null) {
-    if (typeof state.lesson === "string" && state.lesson.startsWith("第")) {
-      url += `&unit=${encodeURIComponent(state.lesson)}`;
-    } else {
-      url += `&lesson=${state.lesson}`;
-    }
-  }
 
   // Try to get a question not seen before, with retries
   let q = null;
@@ -1949,18 +1997,10 @@ function spawnConfetti() {
   }
 }
 
-// Save score when leaving the page
-window.addEventListener("beforeunload", () => {
-  if (state.user && state.totalQuestions > 0) {
-    navigator.sendBeacon("/api/scores", new Blob([JSON.stringify({
-      grade: state.grade,
-      mode: state.mode,
-      score: state.score,
-      combo_max: state.comboMax,
-      total_questions: state.totalQuestions,
-      correct_answers: state.correctAnswers,
-    })], { type: "application/json" }));
-  }
+// Save score when leaving the page or switching away
+window.addEventListener("beforeunload", () => { saveScoreAsync(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveScoreAsync();
 });
 
 init();

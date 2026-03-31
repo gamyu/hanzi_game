@@ -4,8 +4,13 @@ import io
 import json
 import os
 import random
+import smtplib
 import sqlite3
+import threading
 import urllib.request
+from datetime import date, datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import edge_tts
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
@@ -67,25 +72,60 @@ def _build_lesson_data():
     if grade and grade_data:
         LESSON_DATA[grade] = grade_data
 
-    # Define unit mapping (四年级下册 统编版)
-    UNIT_MAP["四年级下"] = {
-        "第一单元": [1, 2, 3, 4],
-        "第二单元": [5, 6, 7, 8],
-        "第三单元": [9, 10, 11],
-        "第四单元": [12, 13, 14, 15],
-        "第五单元": [16, 17],
-        "第六单元": [18, 19, 20],
-        "第七单元": [21, 22, 23, 24],
-        "第八单元": [25, 26, 27, 28],
-    }
 
 
 _build_lesson_data()
+
+# --- Build homework lesson structure for ALL grades ---
+HOMEWORK_LESSONS = {}  # grade -> {lesson_num: {"识字": [...], "词语": [...]}}
+
+GRADE_ORDER = [
+    "一年级上", "一年级下", "二年级上", "二年级下",
+    "三年级上", "三年级下", "四年级上", "四年级下",
+    "五年级上", "五年级下", "六年级上", "六年级下",
+]
+
+
+def _build_homework_lessons():
+    """Build homework lesson data for all grades, auto-chunking where needed."""
+    CHUNK_SIZE = 10
+    for grade in CHARACTERS:
+        if grade in LESSON_DATA and LESSON_DATA[grade]:
+            HOMEWORK_LESSONS[grade] = LESSON_DATA[grade]
+        else:
+            chars = CHARACTERS.get(grade, [])
+            words_list = WORDS.get(grade, [])
+            char_entries = [{"word": c["char"], "pinyin": c["pinyin"]} for c in chars]
+            ciyu_list = [w for w in words_list if len(w["word"]) >= 2]
+            char_chunks = [char_entries[i:i + CHUNK_SIZE] for i in range(0, len(char_entries), CHUNK_SIZE)]
+            word_chunks = [ciyu_list[i:i + CHUNK_SIZE] for i in range(0, len(ciyu_list), CHUNK_SIZE)]
+            num_lessons = max(len(char_chunks), len(word_chunks), 1)
+            lessons = {}
+            for i in range(num_lessons):
+                ln = i + 1
+                shizi = char_chunks[i] if i < len(char_chunks) else []
+                ciyu = word_chunks[i] if i < len(word_chunks) else []
+                lessons[ln] = {"识字": shizi, "词语": ciyu}
+            HOMEWORK_LESSONS[grade] = lessons
+
+
+_build_homework_lessons()
+
+
+def grade_short_name(grade):
+    """Convert '一年级上' to '一上'."""
+    return grade[0] + grade[-1]
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "jinhuanjoy@gmail.com")
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
 DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hanzi.db")
 
@@ -180,6 +220,36 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS homework_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            grade TEXT NOT NULL,
+            recognition_lesson INTEGER NOT NULL DEFAULT 1,
+            writing_lesson INTEGER NOT NULL DEFAULT 1,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS daily_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            type TEXT NOT NULL,
+            grade TEXT NOT NULL,
+            lesson_num INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            total_questions INTEGER NOT NULL DEFAULT 0,
+            correct_answers INTEGER NOT NULL DEFAULT 0,
+            time_spent INTEGER NOT NULL DEFAULT 0,
+            wrong_items TEXT NOT NULL DEFAULT '[]',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
     # Default exchange rate: 100 points = 1 coin
@@ -1021,6 +1091,490 @@ def shop_buy():
     db.commit()
     new_coins = user["coins"] - item["price"]
     return jsonify({"ok": True, "coins": new_coins})
+
+
+# === Homework System ===
+
+@app.route("/homework")
+def homework_page():
+    if "user_id" not in session:
+        return redirect(url_for("index"))
+    return render_template("homework.html", username=session["username"])
+
+
+def _get_or_create_today_assignments(db, user_id):
+    """Get or auto-create today's assignments for a user."""
+    today = date.today().isoformat()
+    existing = db.execute(
+        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        (user_id, today),
+    ).fetchall()
+    if existing:
+        return [dict(r) for r in existing]
+
+    # Find active homework plan
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if not plan:
+        return []
+
+    grade = plan["grade"]
+    lessons = HOMEWORK_LESSONS.get(grade, {})
+    total_lessons = len(lessons)
+    if total_lessons == 0:
+        return []
+
+    rec_lesson = plan["recognition_lesson"]
+    wrt_lesson = plan["writing_lesson"]
+
+    # Find next lesson that has content, skipping empty ones
+    def find_next_lesson(start, content_key):
+        for ln in range(start, total_lessons + 1):
+            ld = lessons.get(ln, {})
+            if ld.get(content_key):
+                return ln
+        return start  # fallback to current if all empty
+
+    rec_lesson = find_next_lesson(min(rec_lesson, total_lessons), "识字")
+    wrt_lesson = find_next_lesson(min(wrt_lesson, total_lessons), "词语")
+
+    # Create recognition assignment
+    db.execute(
+        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'recognition', ?, ?)",
+        (user_id, today, grade, rec_lesson),
+    )
+    # Create writing assignment
+    db.execute(
+        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'writing', ?, ?)",
+        (user_id, today, grade, wrt_lesson),
+    )
+    db.commit()
+
+    rows = db.execute(
+        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        (user_id, today),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.route("/api/homework/today")
+def homework_today():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    assignments = _get_or_create_today_assignments(db, session["user_id"])
+    # Also get plan info
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        (session["user_id"],),
+    ).fetchone()
+    plan_info = None
+    if plan:
+        grade = plan["grade"]
+        total = len(HOMEWORK_LESSONS.get(grade, {}))
+        plan_info = {
+            "grade": grade,
+            "grade_short": grade_short_name(grade),
+            "recognition_lesson": plan["recognition_lesson"],
+            "writing_lesson": plan["writing_lesson"],
+            "total_lessons": total,
+        }
+    return jsonify({"assignments": assignments, "plan": plan_info})
+
+
+@app.route("/api/homework/start/<int:assignment_id>")
+def homework_start(assignment_id):
+    """Generate all questions for a homework assignment."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    assignment = db.execute(
+        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        (assignment_id, session["user_id"]),
+    ).fetchone()
+    if not assignment:
+        return jsonify({"error": "作业不存在"}), 404
+
+    grade = assignment["grade"]
+    lesson_num = assignment["lesson_num"]
+    hw_type = assignment["type"]
+
+    lessons = HOMEWORK_LESSONS.get(grade, {})
+    lesson_data = lessons.get(lesson_num, {})
+
+    questions = []
+    if hw_type == "recognition":
+        entries = lesson_data.get("识字", [])
+        if not entries:
+            return jsonify({"error": "该课暂无识字数据"}), 400
+        # Build character list for distractors
+        all_chars = CHARACTERS.get(grade, [])
+        for entry in entries:
+            correct = {"char": entry["word"], "pinyin": entry["pinyin"], "words": []}
+            # Find words from CHARACTERS if available
+            for c in all_chars:
+                if c["char"] == entry["word"]:
+                    correct["words"] = c.get("words", [])
+                    break
+            others = [c for c in all_chars if c["char"] != correct["char"]]
+            # Randomly choose char_to_pinyin or pinyin_to_char
+            mode = random.choice(["char_to_pinyin", "pinyin_to_char"])
+            if mode == "char_to_pinyin":
+                distractors = _pick_distractors(correct, others, key="pinyin")
+                options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
+                random.shuffle(options)
+                questions.append({
+                    "mode": mode, "question": correct["char"],
+                    "options": options, "correct_index": options.index(correct["pinyin"]),
+                    "answer": correct["pinyin"],
+                    "word_hint": "、".join(correct["words"]),
+                    "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+                })
+            else:
+                distractors = _pick_distractors(correct, others, key="char")
+                options = [correct["char"]] + [d["char"] for d in distractors]
+                random.shuffle(options)
+                questions.append({
+                    "mode": mode, "question": correct["pinyin"],
+                    "options": options, "correct_index": options.index(correct["char"]),
+                    "answer": correct["char"],
+                    "word_hint": "、".join(correct["words"]),
+                    "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+                })
+        random.shuffle(questions)
+    elif hw_type == "writing":
+        entries = lesson_data.get("词语", [])
+        if not entries:
+            return jsonify({"error": "该课暂无词语数据"}), 400
+        for entry in entries:
+            questions.append({
+                "mode": "dictation_handwrite",
+                "question": entry["pinyin"],
+                "answer": entry["word"],
+                "display_char": entry["word"], "display_pinyin": entry["pinyin"],
+            })
+        random.shuffle(questions)
+
+    return jsonify({
+        "assignment_id": assignment_id,
+        "type": hw_type,
+        "grade": grade,
+        "lesson_num": lesson_num,
+        "questions": questions,
+        "total": len(questions),
+    })
+
+
+@app.route("/api/homework/submit", methods=["POST"])
+def homework_submit():
+    """Submit completed homework assignment results."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    data = request.get_json()
+    assignment_id = data.get("assignment_id")
+    total_questions = data.get("total_questions", 0)
+    correct_answers = data.get("correct_answers", 0)
+    time_spent = data.get("time_spent", 0)
+    wrong_items = json.dumps(data.get("wrong_items", []), ensure_ascii=False)
+
+    db = get_db()
+    assignment = db.execute(
+        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        (assignment_id, session["user_id"]),
+    ).fetchone()
+    if not assignment:
+        return jsonify({"error": "作业不存在"}), 404
+
+    # Update assignment
+    db.execute(
+        """UPDATE daily_assignments
+           SET status = 'completed', total_questions = ?, correct_answers = ?,
+               time_spent = ?, wrong_items = ?, completed_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (total_questions, correct_answers, time_spent, wrong_items, assignment_id),
+    )
+
+    # Advance lesson if this assignment was completed (not a repeat)
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        (session["user_id"],),
+    ).fetchone()
+    if plan and assignment["status"] == "pending":
+        grade = plan["grade"]
+        lessons = HOMEWORK_LESSONS.get(grade, {})
+        total_lessons = len(lessons)
+
+        def find_next_nonempty(start, content_key):
+            for ln in range(start, total_lessons + 1):
+                if lessons.get(ln, {}).get(content_key):
+                    return ln
+            return start
+
+        if assignment["type"] == "recognition":
+            new_lesson = find_next_nonempty(plan["recognition_lesson"] + 1, "识字")
+            new_lesson = min(new_lesson, total_lessons)
+            db.execute(
+                "UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?",
+                (new_lesson, plan["id"]),
+            )
+        elif assignment["type"] == "writing":
+            new_lesson = find_next_nonempty(plan["writing_lesson"] + 1, "词语")
+            new_lesson = min(new_lesson, total_lessons)
+            db.execute(
+                "UPDATE homework_plans SET writing_lesson = ? WHERE id = ?",
+                (new_lesson, plan["id"]),
+            )
+
+    # Also record wrong answers in the main wrong_answers table
+    for item in data.get("wrong_items", []):
+        db.execute(
+            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (?, ?, ?, ?, ?, ?)",
+            (session["user_id"], item.get("character", ""), item.get("pinyin", ""),
+             item.get("words", ""), assignment["grade"], item.get("mode", "")),
+        )
+
+    # Award coins
+    sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
+    rate = int(sr["value"]) if sr else 100
+    score = correct_answers * 10
+    coins_earned = score // rate
+    if coins_earned > 0:
+        db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
+
+    db.commit()
+
+    # Check if both assignments for today are completed
+    today = date.today().isoformat()
+    pending = db.execute(
+        "SELECT COUNT(*) as cnt FROM daily_assignments WHERE user_id = ? AND date = ? AND status != 'completed'",
+        (session["user_id"], today),
+    ).fetchone()
+
+    all_done = pending["cnt"] == 0
+    if all_done:
+        # Send email summary in background
+        _send_homework_email_async(db, session["user_id"], today)
+
+    return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done})
+
+
+@app.route("/api/homework/progress")
+def homework_progress():
+    """Get homework progress for all grades."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    db = get_db()
+    plans = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? ORDER BY id",
+        (session["user_id"],),
+    ).fetchall()
+
+    progress = []
+    for p in plans:
+        grade = p["grade"]
+        total = len(HOMEWORK_LESSONS.get(grade, {}))
+        rec_pct = round((p["recognition_lesson"] - 1) / total * 100) if total > 0 else 0
+        wrt_pct = round((p["writing_lesson"] - 1) / total * 100) if total > 0 else 0
+        overall_pct = round((rec_pct + wrt_pct) / 2)
+        progress.append({
+            "grade": grade,
+            "grade_short": grade_short_name(grade),
+            "recognition_lesson": p["recognition_lesson"],
+            "writing_lesson": p["writing_lesson"],
+            "total_lessons": total,
+            "recognition_pct": rec_pct,
+            "writing_pct": wrt_pct,
+            "overall_pct": overall_pct,
+            "active": p["active"],
+        })
+
+    # Also include recent history (last 7 days)
+    week_ago = (date.today() - timedelta(days=7)).isoformat()
+    history = db.execute(
+        """SELECT date, type, grade, lesson_num, status, total_questions, correct_answers, time_spent
+           FROM daily_assignments WHERE user_id = ? AND date >= ?
+           ORDER BY date DESC, type""",
+        (session["user_id"], week_ago),
+    ).fetchall()
+
+    return jsonify({"progress": progress, "history": [dict(r) for r in history]})
+
+
+def _send_homework_email_async(db, user_id, today):
+    """Send homework summary email in a background thread."""
+    if not SMTP_USER or not SMTP_PASSWORD:
+        return
+
+    user = db.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    assignments = db.execute(
+        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        (user_id, today),
+    ).fetchall()
+
+    username = user["username"] if user else "Unknown"
+    assignment_data = [dict(a) for a in assignments]
+
+    def send():
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"每日作业完成报告 - {username} ({today})"
+            msg["From"] = SMTP_USER
+            msg["To"] = ADMIN_EMAIL
+
+            type_labels = {"recognition": "认字", "writing": "写字"}
+            lines = [f"<h2>📚 {username} 的每日作业报告</h2>", f"<p>日期: {today}</p>"]
+            for a in assignment_data:
+                t = type_labels.get(a["type"], a["type"])
+                acc = round(a["correct_answers"] / a["total_questions"] * 100) if a["total_questions"] > 0 else 0
+                mins = a["time_spent"] // 60
+                secs = a["time_spent"] % 60
+                lines.append(f"<h3>{t}作业 - 第{a['lesson_num']}课 ({a['grade']})</h3>")
+                lines.append(f"<p>正确率: {a['correct_answers']}/{a['total_questions']} ({acc}%)</p>")
+                lines.append(f"<p>用时: {mins}分{secs}秒</p>")
+                wrong = json.loads(a["wrong_items"]) if a["wrong_items"] else []
+                if wrong:
+                    lines.append("<p>❌ 错题:</p><ul>")
+                    for w in wrong:
+                        lines.append(f"<li>{w.get('character', '')} ({w.get('pinyin', '')})</li>")
+                    lines.append("</ul>")
+                else:
+                    lines.append("<p>✅ 全部正确!</p>")
+
+            html = "\n".join(lines)
+            msg.attach(MIMEText(html, "html"))
+
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(SMTP_USER, ADMIN_EMAIL, msg.as_string())
+        except Exception as e:
+            print(f"[Email Error] {e}")
+
+    threading.Thread(target=send, daemon=True).start()
+
+
+# --- Admin Homework Routes ---
+
+@app.route("/api/admin/homework/plan", methods=["POST"])
+def admin_homework_plan():
+    """Create or update a homework plan for a user."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    data = request.get_json()
+    user_id = data.get("user_id")
+    grade = data.get("grade", "")
+    rec_lesson = data.get("recognition_lesson", 1)
+    wrt_lesson = data.get("writing_lesson", 1)
+
+    if grade not in HOMEWORK_LESSONS:
+        return jsonify({"error": f"无效年级: {grade}"}), 400
+
+    db = get_db()
+    # Deactivate existing plans for this user
+    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = ?", (user_id,))
+    # Create new plan
+    db.execute(
+        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson) VALUES (?, ?, ?, ?)",
+        (user_id, grade, rec_lesson, wrt_lesson),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/homework/repeat", methods=["POST"])
+def admin_homework_repeat():
+    """Repeat an assignment - create a copy for tomorrow with same lesson."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    data = request.get_json()
+    assignment_id = data.get("assignment_id")
+
+    db = get_db()
+    assignment = db.execute("SELECT * FROM daily_assignments WHERE id = ?", (assignment_id,)).fetchone()
+    if not assignment:
+        return jsonify({"error": "作业不存在"}), 404
+
+    # Create repeat for tomorrow
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    # Remove any existing assignment of same type for tomorrow
+    db.execute(
+        "DELETE FROM daily_assignments WHERE user_id = ? AND date = ? AND type = ?",
+        (assignment["user_id"], tomorrow, assignment["type"]),
+    )
+    db.execute(
+        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+        (assignment["user_id"], tomorrow, assignment["type"], assignment["grade"], assignment["lesson_num"]),
+    )
+    # Roll back the lesson advancement
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        (assignment["user_id"],),
+    ).fetchone()
+    if plan:
+        if assignment["type"] == "recognition":
+            db.execute(
+                "UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?",
+                (assignment["lesson_num"], plan["id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE homework_plans SET writing_lesson = ? WHERE id = ?",
+                (assignment["lesson_num"], plan["id"]),
+            )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/homework/overview")
+def admin_homework_overview():
+    """Get all users' homework status for admin."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    today = date.today().isoformat()
+
+    users = db.execute("SELECT id, username FROM users").fetchall()
+    result = []
+    for u in users:
+        plan = db.execute(
+            "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+            (u["id"],),
+        ).fetchone()
+        if not plan:
+            continue
+
+        assignments = db.execute(
+            "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ? ORDER BY type",
+            (u["id"], today),
+        ).fetchall()
+
+        grade = plan["grade"]
+        total_lessons = len(HOMEWORK_LESSONS.get(grade, {}))
+        result.append({
+            "user_id": u["id"],
+            "username": u["username"],
+            "grade": grade,
+            "grade_short": grade_short_name(grade),
+            "recognition_lesson": plan["recognition_lesson"],
+            "writing_lesson": plan["writing_lesson"],
+            "total_lessons": total_lessons,
+            "today_assignments": [dict(a) for a in assignments],
+        })
+
+    # Get available grades info
+    grades_info = []
+    for g in GRADE_ORDER:
+        if g in HOMEWORK_LESSONS:
+            grades_info.append({"grade": g, "short": grade_short_name(g), "total_lessons": len(HOMEWORK_LESSONS[g])})
+
+    return jsonify({"users": result, "grades": grades_info})
 
 
 @app.route("/api/tts")

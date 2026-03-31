@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>每日作业 - 汉字小达人</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #333;
+  }
+  .top-nav {
+    width: 100%; max-width: 700px;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 20px; color: #fff;
+  }
+  .top-nav a { color: #fff; text-decoration: none; font-size: 14px; opacity: 0.8; }
+  .top-nav a:hover { opacity: 1; }
+  .title { color: #fff; font-size: 28px; font-weight: 900; margin: 8px 0 16px; text-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+
+  /* Progress Section */
+  .progress-section {
+    width: 90%; max-width: 660px;
+    background: #fff; border-radius: 20px; padding: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15); margin-bottom: 20px;
+  }
+  .progress-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; color: #2d3748; }
+  .progress-grid {
+    display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;
+  }
+  .progress-item {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; width: 70px;
+  }
+  .progress-ring { position: relative; width: 60px; height: 60px; }
+  .progress-ring svg { transform: rotate(-90deg); }
+  .progress-ring circle {
+    fill: none; stroke-width: 5;
+  }
+  .progress-ring .bg { stroke: #e2e8f0; }
+  .progress-ring .fg { stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+  .progress-ring .fg.active { stroke: #667eea; }
+  .progress-ring .fg.done { stroke: #38a169; }
+  .progress-ring .fg.inactive { stroke: #a0aec0; }
+  .progress-pct {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 14px; font-weight: 700; color: #2d3748;
+  }
+  .progress-label { font-size: 13px; font-weight: 600; color: #4a5568; }
+  .progress-sub { font-size: 10px; color: #a0aec0; }
+
+  /* Today's Assignments */
+  .today-section {
+    width: 90%; max-width: 660px;
+    background: #fff; border-radius: 20px; padding: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15); margin-bottom: 20px;
+  }
+  .today-title { font-size: 18px; font-weight: 700; margin-bottom: 16px; color: #2d3748; }
+  .assignment-cards { display: flex; gap: 16px; flex-wrap: wrap; }
+  .assignment-card {
+    flex: 1; min-width: 240px;
+    border: 2px solid #e2e8f0; border-radius: 16px; padding: 20px;
+    text-align: center; cursor: pointer; transition: all 0.2s;
+  }
+  .assignment-card:hover { border-color: #667eea; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.2); }
+  .assignment-card.completed { border-color: #38a169; background: #f0fff4; cursor: default; }
+  .assignment-card.completed:hover { transform: none; box-shadow: none; }
+  .card-icon { font-size: 40px; margin-bottom: 8px; }
+  .card-type { font-size: 20px; font-weight: 700; color: #2d3748; }
+  .card-info { font-size: 14px; color: #718096; margin-top: 4px; }
+  .card-status { margin-top: 12px; font-size: 14px; font-weight: 600; }
+  .card-status.pending { color: #d69e2e; }
+  .card-status.completed { color: #38a169; }
+  .card-result { font-size: 13px; color: #4a5568; margin-top: 4px; }
+
+  .no-plan {
+    text-align: center; padding: 40px 20px; color: #718096;
+  }
+  .no-plan p { margin-bottom: 12px; }
+
+  /* Quiz Mode */
+  .quiz-section {
+    width: 90%; max-width: 660px;
+    background: #fff; border-radius: 20px; padding: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15); margin-bottom: 20px;
+    display: none;
+  }
+  .quiz-header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #e2e8f0;
+  }
+  .quiz-progress { font-size: 16px; font-weight: 700; color: #5a67d8; }
+  .quiz-timer { font-size: 14px; color: #718096; }
+  .quiz-bar { height: 6px; background: #e2e8f0; border-radius: 3px; margin-bottom: 20px; }
+  .quiz-bar-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); border-radius: 3px; transition: width 0.3s; }
+
+  .quiz-question-area {
+    min-height: 120px; display: flex; flex-direction: column;
+    justify-content: center; align-items: center; gap: 8px; margin-bottom: 20px;
+  }
+  .quiz-char { font-size: 96px; font-weight: 900; color: #2d3748; line-height: 1.1; }
+  .quiz-pinyin { font-size: 40px; font-weight: 700; color: #5a67d8; }
+  .quiz-label { font-size: 14px; color: #999; }
+
+  .quiz-options {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;
+  }
+  .quiz-opt-btn {
+    padding: 16px; border: 2px solid #e2e8f0; border-radius: 12px;
+    background: #fff; font-size: 22px; font-weight: 700; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .quiz-opt-btn:hover { border-color: #667eea; background: #f7f8ff; }
+  .quiz-opt-btn.correct { background: #c6f6d5; border-color: #38a169; }
+  .quiz-opt-btn.wrong { background: #fed7d7; border-color: #e53e3e; }
+  .quiz-opt-btn.reveal { background: #c6f6d5; border-color: #38a169; }
+  .quiz-opt-btn.disabled { pointer-events: none; opacity: 0.7; }
+
+  .quiz-hint { text-align: center; min-height: 40px; font-size: 14px; color: #718096; }
+  .quiz-hint .ok-btn {
+    margin-top: 8px; padding: 8px 32px; border: none; border-radius: 8px;
+    background: #667eea; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+
+  /* Handwriting in quiz */
+  .quiz-canvas-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .quiz-hw-box { position: relative; }
+  .quiz-hw-box canvas { border: 2px solid #e2e8f0; border-radius: 12px; background: #fafafa; touch-action: none; }
+  .hw-grid-lines { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+  .hw-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: #e2e8f0; }
+  .hw-grid-line-h { position: absolute; left: 0; right: 0; height: 1px; background: #e2e8f0; }
+  .quiz-canvas-btns { display: flex; gap: 12px; }
+  .quiz-canvas-btns button {
+    padding: 8px 24px; border: 2px solid #e2e8f0; border-radius: 8px;
+    background: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .quiz-canvas-btns button:hover { border-color: #667eea; }
+  .quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
+
+  /* Results */
+  .result-section {
+    width: 90%; max-width: 660px;
+    background: #fff; border-radius: 20px; padding: 32px 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15); margin-bottom: 20px;
+    text-align: center; display: none;
+  }
+  .result-icon { font-size: 64px; margin-bottom: 12px; }
+  .result-title { font-size: 24px; font-weight: 700; color: #2d3748; margin-bottom: 8px; }
+  .result-stats { font-size: 16px; color: #4a5568; margin-bottom: 16px; }
+  .result-stats span { font-weight: 700; color: #5a67d8; }
+  .result-wrong { text-align: left; margin: 16px 0; }
+  .result-wrong h4 { font-size: 15px; color: #e53e3e; margin-bottom: 8px; }
+  .result-wrong-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .result-wrong-item {
+    background: #fff5f5; border: 1px solid #feb2b2; border-radius: 8px;
+    padding: 6px 12px; font-size: 14px;
+  }
+  .result-wrong-item .char { font-size: 18px; font-weight: 700; }
+  .result-btn {
+    margin-top: 16px; padding: 12px 40px; border: none; border-radius: 12px;
+    background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
+    font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+
+  /* History */
+  .history-section {
+    width: 90%; max-width: 660px;
+    background: #fff; border-radius: 20px; padding: 24px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15); margin-bottom: 20px;
+  }
+  .history-title { font-size: 18px; font-weight: 700; margin-bottom: 12px; color: #2d3748; }
+  .history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .history-table th { background: #f7fafc; padding: 6px 8px; text-align: left; font-weight: 600; }
+  .history-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; }
+  .history-table .acc-good { color: #38a169; font-weight: 700; }
+  .history-table .acc-bad { color: #e53e3e; font-weight: 700; }
+
+  @media (max-width: 500px) {
+    .title { font-size: 22px; }
+    .progress-section, .today-section, .quiz-section, .result-section, .history-section { width: 95%; padding: 16px; }
+    .assignment-card { min-width: 100%; }
+    .quiz-char { font-size: 72px; }
+    .quiz-pinyin { font-size: 32px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top-nav">
+  <a href="/">← 返回游戏</a>
+  <span style="font-size:14px; opacity:0.7">{{ username }}</span>
+</div>
+
+<div class="title">每日作业</div>
+
+<!-- Progress Section -->
+<div class="progress-section" id="progressSection" style="display:none">
+  <div class="progress-title">学习进度</div>
+  <div class="progress-grid" id="progressGrid"></div>
+</div>
+
+<!-- Today's Assignments -->
+<div class="today-section" id="todaySection">
+  <div class="today-title">今日作业</div>
+  <div id="todayContent">
+    <div style="text-align:center;color:#a0aec0;padding:20px">加载中...</div>
+  </div>
+</div>
+
+<!-- Quiz Section (hidden until started) -->
+<div class="quiz-section" id="quizSection">
+  <div class="quiz-header">
+    <div class="quiz-progress" id="quizProgress">1/10</div>
+    <div class="quiz-timer" id="quizTimer">00:00</div>
+  </div>
+  <div class="quiz-bar"><div class="quiz-bar-fill" id="quizBarFill" style="width:0%"></div></div>
+  <div class="quiz-question-area" id="quizQuestionArea"></div>
+  <div class="quiz-options" id="quizOptionsArea"></div>
+  <div class="quiz-hint" id="quizHint"></div>
+</div>
+
+<!-- Result Section -->
+<div class="result-section" id="resultSection">
+  <div class="result-icon" id="resultIcon"></div>
+  <div class="result-title" id="resultTitle"></div>
+  <div class="result-stats" id="resultStats"></div>
+  <div class="result-wrong" id="resultWrong"></div>
+  <button class="result-btn" onclick="backToToday()">返回</button>
+</div>
+
+<!-- History Section -->
+<div class="history-section" id="historySection" style="display:none">
+  <div class="history-title">最近7天作业记录</div>
+  <div id="historyContent"></div>
+</div>
+
+<script>
+const TYPE_LABELS = { recognition: "认字", writing: "写字" };
+
+let quiz = {
+  assignmentId: null,
+  questions: [],
+  currentIndex: 0,
+  correctCount: 0,
+  wrongItems: [],
+  startTime: null,
+  timerInterval: null,
+  answering: false,
+};
+
+// Canvas state
+let canvasStrokes = [];
+let currentStroke = null;
+let isDrawing = false;
+
+// --- Load today's data ---
+async function loadToday() {
+  const res = await fetch("/api/homework/today");
+  const data = await res.json();
+
+  const content = document.getElementById("todayContent");
+
+  if (!data.plan) {
+    content.innerHTML = `<div class="no-plan">
+      <p style="font-size:48px">📝</p>
+      <p>尚未布置作业计划</p>
+      <p style="font-size:13px">请联系管理员设置你的作业计划</p>
+    </div>`;
+    return;
+  }
+
+  const plan = data.plan;
+  const assignments = data.assignments;
+
+  if (!assignments || assignments.length === 0) {
+    content.innerHTML = `<div class="no-plan">
+      <p>今日无作业</p>
+    </div>`;
+    return;
+  }
+
+  let html = '<div class="assignment-cards">';
+  assignments.forEach(a => {
+    const isCompleted = a.status === "completed";
+    const icon = a.type === "recognition" ? "📖" : "✍️";
+    const typeLabel = TYPE_LABELS[a.type];
+    const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
+    const mins = Math.floor(a.time_spent / 60);
+    const secs = a.time_spent % 60;
+
+    html += `<div class="assignment-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
+      <div class="card-icon">${icon}</div>
+      <div class="card-type">${typeLabel}作业</div>
+      <div class="card-info">第${a.lesson_num}课 · ${plan.grade_short}</div>`;
+
+    if (isCompleted) {
+      html += `<div class="card-status completed">✓ 已完成</div>
+        <div class="card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
+    } else {
+      html += `<div class="card-status pending">待完成</div>`;
+    }
+    html += `</div>`;
+  });
+  html += '</div>';
+  content.innerHTML = html;
+}
+
+// --- Load progress ---
+async function loadProgress() {
+  const res = await fetch("/api/homework/progress");
+  const data = await res.json();
+
+  if (!data.progress || data.progress.length === 0) {
+    document.getElementById("progressSection").style.display = "none";
+    document.getElementById("historySection").style.display = "none";
+    return;
+  }
+
+  document.getElementById("progressSection").style.display = "";
+  const grid = document.getElementById("progressGrid");
+  const circumference = 2 * Math.PI * 25; // r=25
+
+  grid.innerHTML = data.progress.map(p => {
+    const pct = p.overall_pct;
+    const offset = circumference - (pct / 100) * circumference;
+    const cls = !p.active ? "inactive" : pct >= 100 ? "done" : "active";
+    return `<div class="progress-item">
+      <div class="progress-ring">
+        <svg width="60" height="60">
+          <circle class="bg" cx="30" cy="30" r="25"/>
+          <circle class="fg ${cls}" cx="30" cy="30" r="25"
+            stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
+        </svg>
+        <div class="progress-pct">${pct}%</div>
+      </div>
+      <div class="progress-label">${p.grade_short}</div>
+      <div class="progress-sub">认${p.recognition_lesson - 1}/${p.total_lessons} 写${p.writing_lesson - 1}/${p.total_lessons}</div>
+    </div>`;
+  }).join("");
+
+  // Render history
+  if (data.history && data.history.length > 0) {
+    document.getElementById("historySection").style.display = "";
+    let hhtml = '<table class="history-table"><tr><th>日期</th><th>类型</th><th>课</th><th>正确率</th><th>用时</th></tr>';
+    data.history.forEach(h => {
+      if (h.status !== "completed") return;
+      const acc = h.total_questions > 0 ? Math.round(h.correct_answers / h.total_questions * 100) : 0;
+      const accCls = acc >= 80 ? "acc-good" : "acc-bad";
+      const mins = Math.floor(h.time_spent / 60);
+      const secs = h.time_spent % 60;
+      hhtml += `<tr><td>${h.date}</td><td>${TYPE_LABELS[h.type]}</td><td>第${h.lesson_num}课</td><td class="${accCls}">${acc}%</td><td>${mins}分${secs}秒</td></tr>`;
+    });
+    hhtml += '</table>';
+    document.getElementById("historyContent").innerHTML = hhtml;
+  }
+}
+
+// --- Quiz ---
+async function startQuiz(assignmentId) {
+  const res = await fetch(`/api/homework/start/${assignmentId}`);
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  quiz.assignmentId = assignmentId;
+  quiz.questions = data.questions;
+  quiz.currentIndex = 0;
+  quiz.correctCount = 0;
+  quiz.wrongItems = [];
+  quiz.startTime = Date.now();
+  quiz.answering = false;
+
+  // Show quiz, hide others
+  document.getElementById("todaySection").style.display = "none";
+  document.getElementById("progressSection").style.display = "none";
+  document.getElementById("historySection").style.display = "none";
+  document.getElementById("resultSection").style.display = "none";
+  document.getElementById("quizSection").style.display = "";
+
+  // Start timer
+  clearInterval(quiz.timerInterval);
+  quiz.timerInterval = setInterval(updateTimer, 1000);
+
+  showQuizQuestion();
+}
+
+function updateTimer() {
+  const elapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
+  const mins = String(Math.floor(elapsed / 60)).padStart(2, "0");
+  const secs = String(elapsed % 60).padStart(2, "0");
+  document.getElementById("quizTimer").textContent = `${mins}:${secs}`;
+}
+
+function showQuizQuestion() {
+  const q = quiz.questions[quiz.currentIndex];
+  const total = quiz.questions.length;
+  const idx = quiz.currentIndex + 1;
+
+  document.getElementById("quizProgress").textContent = `${idx}/${total}`;
+  document.getElementById("quizBarFill").style.width = `${(idx / total) * 100}%`;
+  document.getElementById("quizHint").innerHTML = "";
+
+  const area = document.getElementById("quizQuestionArea");
+  const opts = document.getElementById("quizOptionsArea");
+
+  if (q.mode === "char_to_pinyin") {
+    area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
+    opts.style.display = "grid";
+    opts.innerHTML = q.options.map((opt, i) =>
+      `<button class="quiz-opt-btn" onclick="quizAnswer(${i})">${opt}</button>`
+    ).join("");
+  } else if (q.mode === "pinyin_to_char") {
+    area.innerHTML = `<div class="quiz-label">请选择正确的汉字</div><div class="quiz-pinyin">${q.question}</div>`;
+    opts.style.display = "grid";
+    opts.innerHTML = q.options.map((opt, i) =>
+      `<button class="quiz-opt-btn" onclick="quizAnswer(${i})">${opt}</button>`
+    ).join("");
+  } else if (q.mode === "dictation_handwrite") {
+    area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="quiz-pinyin">${q.question}</div>`;
+    opts.style.display = "block";
+    const charCount = q.answer.length;
+    const cellSize = 168;
+    const isMobile = window.innerWidth <= 500;
+    const cols = (isMobile && charCount >= 3) ? 2 : charCount;
+    const rows = Math.ceil(charCount / cols);
+    const canvasW = cols * cellSize;
+    const canvasH = rows * cellSize;
+    opts.innerHTML = `<div class="quiz-canvas-wrap">
+      <div class="quiz-hw-box" style="width:${canvasW}px;height:${canvasH}px">
+        <canvas id="hwCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
+        <div class="hw-grid-lines" id="hwGridLines"></div>
+      </div>
+      <div class="quiz-canvas-btns">
+        <button onclick="clearHwCanvas()">清除</button>
+        <button id="hwSubmitBtn" onclick="submitHw()">确认</button>
+      </div>
+      <div class="quiz-hw-status" id="hwStatus"></div>
+    </div>`;
+    // Draw grid
+    const gridEl = document.getElementById("hwGridLines");
+    for (let i = 1; i < cols; i++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line";
+      line.style.left = (i * cellSize) + "px";
+      gridEl.appendChild(line);
+    }
+    for (let r = 1; r < rows; r++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line-h";
+      line.style.top = (r * cellSize) + "px";
+      gridEl.appendChild(line);
+    }
+    initHwCanvas();
+  }
+
+  quiz.answering = true;
+}
+
+function quizAnswer(selected) {
+  if (!quiz.answering) return;
+  quiz.answering = false;
+
+  const q = quiz.questions[quiz.currentIndex];
+  const btns = document.querySelectorAll(".quiz-opt-btn");
+  btns.forEach(b => b.classList.add("disabled"));
+
+  const isCorrect = selected === q.correct_index;
+  const hint = document.getElementById("quizHint");
+
+  if (isCorrect) {
+    btns[selected].classList.add("correct");
+    quiz.correctCount++;
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    setTimeout(nextQuestion, 800);
+  } else {
+    btns[selected].classList.add("wrong");
+    btns[q.correct_index].classList.add("reveal");
+    quiz.wrongItems.push({
+      character: q.display_char || q.answer,
+      pinyin: q.display_pinyin || q.question,
+      words: q.word_hint || "",
+      mode: q.mode,
+    });
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
+      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+  }
+}
+
+function handleHwAnswer(userInput) {
+  if (!quiz.answering) return;
+  quiz.answering = false;
+
+  const q = quiz.questions[quiz.currentIndex];
+  const isCorrect = userInput === q.answer;
+  const hint = document.getElementById("quizHint");
+
+  if (isCorrect) {
+    quiz.correctCount++;
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
+    setTimeout(nextQuestion, 800);
+  } else {
+    quiz.wrongItems.push({
+      character: q.answer,
+      pinyin: q.question,
+      words: q.answer,
+      mode: q.mode,
+    });
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
+      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+  }
+}
+
+function nextQuestion() {
+  quiz.currentIndex++;
+  if (quiz.currentIndex >= quiz.questions.length) {
+    finishQuiz();
+    return;
+  }
+  showQuizQuestion();
+}
+
+async function finishQuiz() {
+  clearInterval(quiz.timerInterval);
+  const timeSpent = Math.floor((Date.now() - quiz.startTime) / 1000);
+
+  // Submit to server
+  const res = await fetch("/api/homework/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      assignment_id: quiz.assignmentId,
+      total_questions: quiz.questions.length,
+      correct_answers: quiz.correctCount,
+      time_spent: timeSpent,
+      wrong_items: quiz.wrongItems,
+    }),
+  });
+  const data = await res.json();
+
+  // Show results
+  document.getElementById("quizSection").style.display = "none";
+  const resultSection = document.getElementById("resultSection");
+  resultSection.style.display = "";
+
+  const total = quiz.questions.length;
+  const correct = quiz.correctCount;
+  const acc = Math.round(correct / total * 100);
+  const mins = Math.floor(timeSpent / 60);
+  const secs = timeSpent % 60;
+
+  document.getElementById("resultIcon").textContent = acc >= 80 ? "🎉" : acc >= 60 ? "💪" : "📚";
+  document.getElementById("resultTitle").textContent = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
+  document.getElementById("resultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
+
+  if (data.coins_earned > 0) {
+    document.getElementById("resultStats").innerHTML += `<br>获得 <span>${data.coins_earned}</span> 金币!`;
+  }
+
+  const wrongDiv = document.getElementById("resultWrong");
+  if (quiz.wrongItems.length > 0) {
+    wrongDiv.innerHTML = `<h4>错题 (${quiz.wrongItems.length}个):</h4>
+      <div class="result-wrong-list">
+        ${quiz.wrongItems.map(w => `<div class="result-wrong-item"><span class="char">${w.character}</span> ${w.pinyin}</div>`).join("")}
+      </div>`;
+  } else {
+    wrongDiv.innerHTML = `<div style="color:#38a169;font-weight:600;margin:12px 0">全部正确! 太厉害了!</div>`;
+  }
+
+  if (data.all_done) {
+    document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
+  }
+}
+
+function backToToday() {
+  document.getElementById("resultSection").style.display = "none";
+  document.getElementById("todaySection").style.display = "";
+  loadToday();
+  loadProgress();
+}
+
+// --- Handwriting Canvas ---
+function initHwCanvas() {
+  canvasStrokes = [];
+  const canvas = document.getElementById("hwCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#2d3748";
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [t.clientX - rect.left, t.clientY - rect.top];
+  }
+
+  function startStroke(e) {
+    e.preventDefault();
+    isDrawing = true;
+    const [x, y] = getPos(e);
+    currentStroke = [[x], [y], [Date.now()]];
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+
+  function moveStroke(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const [x, y] = getPos(e);
+    currentStroke[0].push(x);
+    currentStroke[1].push(y);
+    currentStroke[2].push(Date.now());
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  function endStroke(e) {
+    if (!isDrawing) return;
+    e.preventDefault();
+    isDrawing = false;
+    if (currentStroke && currentStroke[0].length > 0) {
+      canvasStrokes.push(currentStroke);
+    }
+    currentStroke = null;
+  }
+
+  canvas.addEventListener("mousedown", startStroke);
+  canvas.addEventListener("mousemove", moveStroke);
+  canvas.addEventListener("mouseup", endStroke);
+  canvas.addEventListener("mouseleave", endStroke);
+  canvas.addEventListener("touchstart", startStroke);
+  canvas.addEventListener("touchmove", moveStroke);
+  canvas.addEventListener("touchend", endStroke);
+}
+
+function clearHwCanvas() {
+  canvasStrokes = [];
+  const canvas = document.getElementById("hwCanvas");
+  if (!canvas) return;
+  canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+}
+
+async function submitHw() {
+  if (canvasStrokes.length === 0) return;
+  if (!quiz.answering) return;
+
+  const canvas = document.getElementById("hwCanvas");
+  const statusEl = document.getElementById("hwStatus");
+  const btn = document.getElementById("hwSubmitBtn");
+  statusEl.textContent = "正在识别...";
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/handwriting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
+    });
+    const data = await res.json();
+    let topResult = null;
+    try {
+      if (data[0] === "SUCCESS") topResult = data[1][0][1][0];
+    } catch (e) {}
+    if (!topResult) {
+      statusEl.textContent = "未能识别，请清除后重写";
+      btn.disabled = false;
+      return;
+    }
+    statusEl.textContent = `识别结果: ${topResult}`;
+    handleHwAnswer(topResult);
+  } catch (e) {
+    statusEl.textContent = "识别失败，请重试";
+    btn.disabled = false;
+  }
+}
+
+// --- Init ---
+async function init() {
+  await loadToday();
+  await loadProgress();
+}
+
+init();
+</script>
+</body>
+</html>
