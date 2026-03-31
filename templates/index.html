@@ -761,6 +761,20 @@
   .hw-no-plan { text-align: center; padding: 40px 20px; color: #718096; }
   .hw-no-plan p { margin-bottom: 12px; }
 
+  /* Review section */
+  .hw-review-hint {
+    text-align: center; color: #e53e3e; font-size: 14px; margin-bottom: 12px;
+  }
+  .hw-review-card {
+    background: linear-gradient(135deg, #fff5f5, #fed7d7); border-radius: 16px;
+    padding: 20px; text-align: center; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .hw-review-card:active { transform: scale(0.97); }
+  .hw-review-card .icon { font-size: 36px; }
+  .hw-review-card .label { font-size: 16px; font-weight: 700; color: #c53030; margin-top: 8px; }
+  .hw-review-card .info { font-size: 13px; color: #742a2a; margin-top: 4px; }
+
   /* Homework quiz overlay */
   .hw-quiz-section {
     width: 90%; max-width: 660px;
@@ -835,10 +849,16 @@
     padding: 6px 12px; font-size: 14px;
   }
   .hw-result-wrong-item .char { font-size: 18px; font-weight: 700; }
+  .hw-result-actions {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 16px;
+  }
   .hw-result-btn {
-    margin-top: 16px; padding: 12px 40px; border: none; border-radius: 12px;
+    padding: 12px 40px; border: none; border-radius: 12px;
     background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
     font-size: 16px; font-weight: 700; cursor: pointer;
+  }
+  .hw-result-btn.next {
+    background: linear-gradient(135deg, #38a169, #2f855a);
   }
 
   /* Progress rings */
@@ -907,6 +927,12 @@
 <div id="homeworkView" style="display:none; width:100%; flex-direction:column; align-items:center;">
   <button class="view-toggle-btn" onclick="switchToGameView()">进入游戏</button>
 
+  <!-- Review Section (blocks new homework until completed) -->
+  <div class="hw-section" id="hwReviewSection" style="display:none">
+    <div class="hw-section-title">复习错题</div>
+    <div id="hwReviewContent"></div>
+  </div>
+
   <!-- Today's Assignments -->
   <div class="hw-section" id="hwTodaySection">
     <div class="hw-section-title">今日作业</div>
@@ -933,7 +959,9 @@
     <div class="hw-result-title" id="hwResultTitle"></div>
     <div class="hw-result-stats" id="hwResultStats"></div>
     <div class="hw-result-wrong" id="hwResultWrong"></div>
-    <button class="hw-result-btn" onclick="hwBackToToday()">返回</button>
+    <div class="hw-result-actions" id="hwResultActions">
+      <button class="hw-result-btn" onclick="hwBackToToday()">返回</button>
+    </div>
   </div>
 
   <!-- Progress Section -->
@@ -2229,6 +2257,7 @@ document.addEventListener("visibilitychange", () => {
 // HOMEWORK SYSTEM (integrated into main page)
 // =============================================
 const HW_TYPE_LABELS = { recognition: "认字", writing: "写字" };
+function gradeShort(g) { return g ? g[0] + g[g.length - 1] : ""; }
 
 let hwQuiz = {
   assignmentId: null,
@@ -2258,6 +2287,11 @@ function switchToHomeworkView() {
   hwView.style.alignItems = "center";
   hwView.style.width = "100%";
   document.getElementById("gameView").style.display = "none";
+  // Reset to main homework page: show today section, hide quiz/result/review
+  document.getElementById("hwTodaySection").style.display = "";
+  document.getElementById("hwQuizSection").style.display = "none";
+  document.getElementById("hwResultSection").style.display = "none";
+  document.getElementById("hwReviewSection").style.display = "none";
   loadHomeworkToday();
   loadHomeworkProgress();
 }
@@ -2270,10 +2304,32 @@ function switchToGameView() {
 }
 
 // --- Load today's homework ---
+let hwReviewItems = []; // stored for review quiz
+
 async function loadHomeworkToday() {
   const res = await fetch("/api/homework/today");
   const data = await res.json();
   const content = document.getElementById("hwTodayContent");
+  const reviewSection = document.getElementById("hwReviewSection");
+  const reviewContent = document.getElementById("hwReviewContent");
+
+  // Handle review needed (wrong answers from previous days)
+  hwReviewItems = data.review_needed || [];
+  if (hwReviewItems.length > 0) {
+    reviewSection.style.display = "";
+    reviewContent.innerHTML = `
+      <div class="hw-review-hint">完成错题复习后才能开始今日作业</div>
+      <div class="hw-review-card" onclick="startHwReview()">
+        <div class="icon">🔄</div>
+        <div class="label">复习昨日错题</div>
+        <div class="info">${hwReviewItems.length}道错题需要复习</div>
+      </div>`;
+    document.getElementById("hwTodaySection").style.display = "none";
+    return;
+  } else {
+    reviewSection.style.display = "none";
+    document.getElementById("hwTodaySection").style.display = "";
+  }
 
   if (!data.plan) {
     content.innerHTML = `<div class="hw-no-plan">
@@ -2292,29 +2348,41 @@ async function loadHomeworkToday() {
     return;
   }
 
-  let html = '<div class="hw-cards">';
+  // Group by type, show one card per type: pending one if exists, otherwise last completed
+  const byType = {};
   assignments.forEach(a => {
+    if (!byType[a.type]) byType[a.type] = [];
+    byType[a.type].push(a);
+  });
+
+  let html = '<div class="hw-cards">';
+  for (const type of ["recognition", "writing"]) {
+    const group = byType[type];
+    if (!group) continue;
+    const pending = group.find(a => a.status === "pending");
+    const a = pending || group[group.length - 1];
     const isCompleted = a.status === "completed";
-    const icon = a.type === "recognition" ? "📖" : "✍️";
-    const typeLabel = HW_TYPE_LABELS[a.type];
-    const modeLabel = a.type === "recognition" ? "看字选拼音" : "看拼音写字";
+    const icon = type === "recognition" ? "📖" : "✍️";
+    const typeLabel = HW_TYPE_LABELS[type];
+    const modeLabel = type === "recognition" ? "看字选拼音" : "看拼音写字";
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
+    const completedCount = group.filter(x => x.status === "completed").length;
 
     html += `<div class="hw-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startHwQuiz(${a.id})"`}>
       <div class="hw-card-icon">${icon}</div>
       <div class="hw-card-type">${typeLabel}作业</div>
-      <div class="hw-card-info">第${a.lesson_num}课 · ${plan.grade_short} · ${modeLabel}</div>`;
+      <div class="hw-card-info">第${a.lesson_num}课 · ${gradeShort(a.grade)} · ${modeLabel}</div>`;
 
     if (isCompleted) {
-      html += `<div class="hw-card-status done">✓ 已完成</div>
+      html += `<div class="hw-card-status done">✓ 已完成 (今日${completedCount}课)</div>
         <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
     } else {
-      html += `<div class="hw-card-status pending">待完成</div>`;
+      html += `<div class="hw-card-status pending">${completedCount > 0 ? '继续下一课' : '待完成'}</div>`;
     }
     html += `</div>`;
-  });
+  }
   html += '</div>';
   content.innerHTML = html;
 }
@@ -2376,6 +2444,7 @@ async function startHwQuiz(assignmentId) {
   if (data.error) { alert(data.error); return; }
 
   hwQuiz.assignmentId = assignmentId;
+  hwQuiz.type = data.type;
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
   // Build working queue: each question once, retries added dynamically
@@ -2617,14 +2686,241 @@ async function finishHwQuiz() {
   if (data.all_done) {
     document.getElementById("hwResultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
   }
+
+  // Show "继续下一课" button if next assignment was auto-created
+  const actionsDiv = document.getElementById("hwResultActions");
+  const typeLabel = hwQuiz.type === "recognition" ? "认字" : "写字";
+  if (data.next_assignment) {
+    hwQuiz.nextAssignmentId = data.next_assignment.id;
+    actionsDiv.innerHTML = `
+      <button class="hw-result-btn" onclick="hwBackToToday()">返回</button>
+      <button class="hw-result-btn next" onclick="startHwQuiz(${data.next_assignment.id})">继续下一课 · ${gradeShort(data.next_assignment.grade)}${typeLabel}第${data.next_assignment.lesson_num}课 →</button>`;
+  } else {
+    hwQuiz.nextAssignmentId = null;
+    actionsDiv.innerHTML = `<button class="hw-result-btn" onclick="hwBackToToday()">返回</button>`;
+  }
 }
 
 function hwBackToToday() {
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "none";
+  document.getElementById("hwReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "";
   loadHomeworkToday();
   loadHomeworkProgress();
+}
+
+// --- Review Quiz ---
+let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0 };
+
+function startHwReview() {
+  // Build review questions from hwReviewItems
+  const questions = [];
+  hwReviewItems.forEach(item => {
+    if (item.mode === "char_to_pinyin" || item.mode === "listen_to_char") {
+      // Recognition review: show char, pick pinyin
+      questions.push({
+        mode: "char_to_pinyin",
+        question: item.character,
+        answer: item.pinyin,
+        word_hint: item.words || "",
+        display_char: item.character,
+        display_pinyin: item.pinyin,
+        _reviewItem: item,
+      });
+    } else if (item.mode === "dictation_handwrite") {
+      // Writing review: show pinyin, write word
+      questions.push({
+        mode: "dictation_handwrite",
+        question: item.pinyin,
+        answer: item.character,
+        display_char: item.character,
+        display_pinyin: item.pinyin,
+        _reviewItem: item,
+      });
+    }
+  });
+
+  if (questions.length === 0) { hwBackToToday(); return; }
+
+  // For char_to_pinyin, generate options
+  const allPinyins = hwReviewItems.map(i => i.pinyin).filter(Boolean);
+  questions.forEach(q => {
+    if (q.mode === "char_to_pinyin") {
+      const opts = new Set([q.answer]);
+      const pool = allPinyins.filter(p => p !== q.answer);
+      while (opts.size < Math.min(4, allPinyins.length) && pool.length > 0) {
+        const idx = Math.floor(Math.random() * pool.length);
+        opts.add(pool.splice(idx, 1)[0]);
+      }
+      q.options = [...opts].sort(() => Math.random() - 0.5);
+      q.correct_index = q.options.indexOf(q.answer);
+    }
+  });
+
+  // Shuffle
+  for (let i = questions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [questions[i], questions[j]] = [questions[j], questions[i]];
+  }
+
+  hwReview.items = hwReviewItems;
+  hwReview.questions = questions;
+  hwReview.totalOriginal = questions.length;
+  hwReview.currentIndex = 0;
+  hwReview.correctCount = 0;
+  hwReview.wrongItems = [];
+  hwReview.startTime = Date.now();
+  hwReview.answering = false;
+  hwReview.answeredCorrectly = new Set();
+  hwReview.retryMap = {};
+
+  // Show quiz section
+  document.getElementById("hwReviewSection").style.display = "none";
+  document.getElementById("hwTodaySection").style.display = "none";
+  document.getElementById("hwQuizSection").style.display = "";
+  clearInterval(hwReview.timerInterval);
+  hwReview.timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - hwReview.startTime) / 1000);
+    document.getElementById("hwQuizTimer").textContent = `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+  }, 1000);
+
+  showHwReviewQuestion();
+}
+
+function showHwReviewQuestion() {
+  const q = hwReview.questions[hwReview.currentIndex];
+  const total = hwReview.totalOriginal;
+  const idx = hwReview.currentIndex + 1;
+  document.getElementById("hwQuizProgress").textContent = `复习 ${idx}/${total}`;
+  document.getElementById("hwQuizBarFill").style.width = `${(idx / total) * 100}%`;
+
+  const area = document.getElementById("hwQuizQuestionArea");
+  const opts = document.getElementById("hwQuizOptionsArea");
+  const hint = document.getElementById("hwQuizHint");
+  hint.innerHTML = "";
+
+  if (q.mode === "char_to_pinyin") {
+    area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
+    opts.innerHTML = q.options.map((o, i) =>
+      `<button class="hw-quiz-opt-btn" onclick="hwReviewAnswer(${i})">${o}</button>`
+    ).join("");
+  } else if (q.mode === "dictation_handwrite") {
+    area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="hw-quiz-pinyin">${q.question}</div>
+      <div class="hw-canvas-wrap"><canvas id="hwQuizCanvas" width="280" height="140"></canvas>
+      <button class="hw-canvas-clear" onclick="clearHwQuizCanvas()">清除</button></div>`;
+    opts.innerHTML = `<button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>`;
+    setTimeout(initHwQuizCanvas, 50);
+  }
+  hwReview.answering = true;
+}
+
+function hwReviewAnswer(selected) {
+  if (!hwReview.answering) return;
+  hwReview.answering = false;
+  const q = hwReview.questions[hwReview.currentIndex];
+  const hint = document.getElementById("hwQuizHint");
+  const isCorrect = selected === q.correct_index;
+  const qKey = `${q.question}_${q.mode}`;
+
+  if (isCorrect) {
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.correctCount++;
+      hwReview.answeredCorrectly.add(qKey);
+    }
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
+    setTimeout(nextHwReviewQuestion, 800);
+  } else {
+    const retryCount = hwReview.retryMap[qKey] || 0;
+    hwReview.retryMap[qKey] = retryCount + 1;
+    if (retryCount + 1 < 2) {
+      hwReview.questions.splice(hwReview.currentIndex + 1, 0, { ...q, _isRetry: true });
+    }
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
+      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
+  }
+}
+
+async function submitHwReviewHandwrite() {
+  if (!hwReview.answering) return;
+  hwReview.answering = false;
+  const q = hwReview.questions[hwReview.currentIndex];
+  const hint = document.getElementById("hwQuizHint");
+  const canvas = document.getElementById("hwQuizCanvas");
+  if (!canvas) return;
+
+  // Use handwriting recognition
+  const strokes = hwCanvasStrokes.map(s => [s.map(p => p.x), s.map(p => p.y)]);
+  if (strokes.length === 0) {
+    hint.innerHTML = `<span style="color:#e53e3e">请先写字</span>`;
+    hwReview.answering = true;
+    return;
+  }
+  let userInput = "";
+  try {
+    const res = await fetch("/api/handwrite", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes, width: canvas.width, height: canvas.height }),
+    });
+    const result = await res.json();
+    if (result[0] === "SUCCESS" && result[1]?.[0]?.[1]?.length > 0)
+      userInput = result[1][0][1][0];
+  } catch(e) {}
+
+  const qKey = `${q.question}_${q.mode}`;
+  if (userInput === q.answer) {
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.correctCount++;
+      hwReview.answeredCorrectly.add(qKey);
+    }
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
+    setTimeout(nextHwReviewQuestion, 800);
+  } else {
+    const retryCount = hwReview.retryMap[qKey] || 0;
+    hwReview.retryMap[qKey] = retryCount + 1;
+    if (retryCount + 1 < 2) {
+      hwReview.questions.splice(hwReview.currentIndex + 1, 0, { ...q, _isRetry: true });
+    }
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
+      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
+  }
+}
+
+function nextHwReviewQuestion() {
+  hwReview.currentIndex++;
+  if (hwReview.currentIndex >= hwReview.questions.length) {
+    finishHwReview();
+    return;
+  }
+  showHwReviewQuestion();
+}
+
+async function finishHwReview() {
+  clearInterval(hwReview.timerInterval);
+
+  // Submit review results to mark items as reviewed
+  await fetch("/api/homework/review_submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: hwReview.items }),
+  });
+
+  const timeSpent = Math.floor((Date.now() - hwReview.startTime) / 1000);
+  const total = hwReview.totalOriginal;
+  const correct = hwReview.correctCount;
+  const acc = Math.round(correct / total * 100);
+  const mins = Math.floor(timeSpent / 60);
+  const secs = timeSpent % 60;
+
+  document.getElementById("hwQuizSection").style.display = "none";
+  document.getElementById("hwResultSection").style.display = "";
+  document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : "💪";
+  document.getElementById("hwResultTitle").textContent = "复习完成!";
+  document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
+  document.getElementById("hwResultWrong").innerHTML = "";
+  document.getElementById("hwResultActions").innerHTML = `<button class="hw-result-btn" onclick="hwBackToToday()">开始今日作业</button>`;
 }
 
 // --- Homework Quiz Canvas ---

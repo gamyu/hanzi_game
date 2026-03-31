@@ -112,6 +112,26 @@ def _build_homework_lessons():
 _build_homework_lessons()
 
 
+def find_next_lesson_across_grades(current_grade, current_lesson, content_key):
+    """Find the next lesson with content, advancing to next grade if needed.
+    Returns (grade, lesson_num) or (None, None) if all exhausted."""
+    lessons = HOMEWORK_LESSONS.get(current_grade, {})
+    total = len(lessons)
+    # Search in current grade first
+    for ln in range(current_lesson, total + 1):
+        if lessons.get(ln, {}).get(content_key):
+            return current_grade, ln
+    # Current grade exhausted, try next grades
+    idx = GRADE_ORDER.index(current_grade) if current_grade in GRADE_ORDER else -1
+    for gi in range(idx + 1, len(GRADE_ORDER)):
+        next_grade = GRADE_ORDER[gi]
+        next_lessons = HOMEWORK_LESSONS.get(next_grade, {})
+        for ln in range(1, len(next_lessons) + 1):
+            if next_lessons.get(ln, {}).get(content_key):
+                return next_grade, ln
+    return None, None
+
+
 def grade_short_name(grade):
     """Convert '一年级上' to '一上'."""
     return grade[0] + grade[-1]
@@ -1105,12 +1125,6 @@ def homework_page():
 def _get_or_create_today_assignments(db, user_id):
     """Get or auto-create today's assignments for a user."""
     today = date.today().isoformat()
-    existing = db.execute(
-        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
-        (user_id, today),
-    ).fetchall()
-    if existing:
-        return [dict(r) for r in existing]
 
     # Find active homework plan
     plan = db.execute(
@@ -1118,39 +1132,61 @@ def _get_or_create_today_assignments(db, user_id):
         (user_id,),
     ).fetchone()
     if not plan:
-        return []
+        existing = db.execute(
+            "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+            (user_id, today),
+        ).fetchall()
+        return [dict(r) for r in existing]
 
-    grade = plan["grade"]
-    lessons = HOMEWORK_LESSONS.get(grade, {})
-    total_lessons = len(lessons)
-    if total_lessons == 0:
-        return []
+    existing = db.execute(
+        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        (user_id, today),
+    ).fetchall()
 
-    rec_lesson = plan["recognition_lesson"]
-    wrt_lesson = plan["writing_lesson"]
-
-    # Find next lesson that has content, skipping empty ones
-    def find_next_lesson(start, content_key):
-        for ln in range(start, total_lessons + 1):
-            ld = lessons.get(ln, {})
-            if ld.get(content_key):
-                return ln
-        return start  # fallback to current if all empty
-
-    rec_lesson = find_next_lesson(min(rec_lesson, total_lessons), "识字")
-    wrt_lesson = find_next_lesson(min(wrt_lesson, total_lessons), "词语")
-
-    # Create recognition assignment
-    db.execute(
-        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'recognition', ?, ?)",
-        (user_id, today, grade, rec_lesson),
-    )
-    # Create writing assignment
-    db.execute(
-        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'writing', ?, ?)",
-        (user_id, today, grade, wrt_lesson),
-    )
-    db.commit()
+    if not existing:
+        # First visit today: create initial assignments using cross-grade search
+        rec_grade, rec_ln = find_next_lesson_across_grades(
+            plan["grade"], plan["recognition_lesson"], "识字")
+        wrt_grade, wrt_ln = find_next_lesson_across_grades(
+            plan["grade"], plan["writing_lesson"], "词语")
+        if rec_grade and rec_ln:
+            db.execute(
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'recognition', ?, ?)",
+                (user_id, today, rec_grade, rec_ln),
+            )
+        if wrt_grade and wrt_ln:
+            db.execute(
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'writing', ?, ?)",
+                (user_id, today, wrt_grade, wrt_ln),
+            )
+        db.commit()
+    else:
+        # Auto-create next lesson for each type if all of that type are completed
+        changed = False
+        for hw_type, content_key in [("recognition", "识字"), ("writing", "词语")]:
+            type_assignments = [dict(r) for r in existing if r["type"] == hw_type]
+            if not type_assignments:
+                continue
+            has_pending = any(a["status"] == "pending" for a in type_assignments)
+            if has_pending:
+                continue
+            # All completed — find next using cross-grade search
+            plan_lesson = plan["recognition_lesson"] if hw_type == "recognition" else plan["writing_lesson"]
+            next_grade, next_ln = find_next_lesson_across_grades(
+                plan["grade"], plan_lesson, content_key)
+            if not next_grade:
+                continue
+            # Avoid duplicate
+            dup = any(a["grade"] == next_grade and a["lesson_num"] == next_ln for a in type_assignments)
+            if dup:
+                continue
+            db.execute(
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+                (user_id, today, hw_type, next_grade, next_ln),
+            )
+            changed = True
+        if changed:
+            db.commit()
 
     rows = db.execute(
         "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
@@ -1181,7 +1217,47 @@ def homework_today():
             "writing_lesson": plan["writing_lesson"],
             "total_lessons": total,
         }
-    return jsonify({"assignments": assignments, "plan": plan_info})
+    # Check if there are wrong answers from previous days needing review
+    today = date.today().isoformat()
+    review_items = db.execute(
+        """SELECT character, pinyin, words, grade, mode, review_count
+           FROM wrong_answers
+           WHERE user_id = ? AND DATE(created_at) < ?
+           GROUP BY character, mode
+           ORDER BY review_count ASC, created_at DESC""",
+        (session["user_id"], today),
+    ).fetchall()
+    review_needed = [dict(r) for r in review_items]
+
+    return jsonify({
+        "assignments": assignments,
+        "plan": plan_info,
+        "review_needed": review_needed,
+    })
+
+
+@app.route("/api/homework/review_submit", methods=["POST"])
+def homework_review_submit():
+    """Mark review items as reviewed after completing review quiz."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json()
+    items = data.get("items", [])
+    db = get_db()
+    for item in items:
+        character = item.get("character", "")
+        mode = item.get("mode", "")
+        db.execute(
+            "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = ? AND character = ? AND mode = ?",
+            (session["user_id"], character, mode),
+        )
+        # Delete if reviewed enough (>= 3)
+        db.execute(
+            "DELETE FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+            (session["user_id"], character, mode),
+        )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/homework/start/<int:assignment_id>")
@@ -1292,29 +1368,18 @@ def homework_submit():
     ).fetchone()
     if plan and assignment["status"] == "pending":
         grade = plan["grade"]
-        lessons = HOMEWORK_LESSONS.get(grade, {})
-        total_lessons = len(lessons)
+        content_key = "识字" if assignment["type"] == "recognition" else "词语"
+        current_lesson = plan["recognition_lesson"] if assignment["type"] == "recognition" else plan["writing_lesson"]
 
-        def find_next_nonempty(start, content_key):
-            for ln in range(start, total_lessons + 1):
-                if lessons.get(ln, {}).get(content_key):
-                    return ln
-            return start
-
-        if assignment["type"] == "recognition":
-            new_lesson = find_next_nonempty(plan["recognition_lesson"] + 1, "识字")
-            new_lesson = min(new_lesson, total_lessons)
-            db.execute(
-                "UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?",
-                (new_lesson, plan["id"]),
-            )
-        elif assignment["type"] == "writing":
-            new_lesson = find_next_nonempty(plan["writing_lesson"] + 1, "词语")
-            new_lesson = min(new_lesson, total_lessons)
-            db.execute(
-                "UPDATE homework_plans SET writing_lesson = ? WHERE id = ?",
-                (new_lesson, plan["id"]),
-            )
+        next_grade, next_ln = find_next_lesson_across_grades(grade, current_lesson + 1, content_key)
+        if next_grade and next_grade != grade:
+            # Advance to next grade: update plan grade and lesson
+            db.execute("UPDATE homework_plans SET grade = ? WHERE id = ?", (next_grade, plan["id"]))
+        if next_grade and next_ln:
+            if assignment["type"] == "recognition":
+                db.execute("UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?", (next_ln, plan["id"]))
+            else:
+                db.execute("UPDATE homework_plans SET writing_lesson = ? WHERE id = ?", (next_ln, plan["id"]))
 
     # Also record wrong answers in the main wrong_answers table
     for item in data.get("wrong_items", []):
@@ -1332,6 +1397,43 @@ def homework_submit():
     if coins_earned > 0:
         db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
 
+    # Auto-create next lesson assignment if this was first completion
+    next_assignment = None
+    if plan and assignment["status"] == "pending":
+        today = date.today().isoformat()
+        # Re-read the updated plan to get the advanced grade/lesson
+        updated_plan = db.execute(
+            "SELECT * FROM homework_plans WHERE id = ?", (plan["id"],)
+        ).fetchone()
+        next_grade = updated_plan["grade"]
+        if assignment["type"] == "recognition":
+            next_lesson = updated_plan["recognition_lesson"]
+        else:
+            next_lesson = updated_plan["writing_lesson"]
+
+        # Check the next lesson actually has content
+        next_lessons = HOMEWORK_LESSONS.get(next_grade, {})
+        content_key = "识字" if assignment["type"] == "recognition" else "词语"
+        has_content = bool(next_lessons.get(next_lesson, {}).get(content_key))
+
+        if has_content and not (next_grade == assignment["grade"] and next_lesson == assignment["lesson_num"]):
+            # Check no duplicate for same type+grade+lesson today
+            dup = db.execute(
+                "SELECT id FROM daily_assignments WHERE user_id = ? AND date = ? AND type = ? AND grade = ? AND lesson_num = ?",
+                (session["user_id"], today, assignment["type"], next_grade, next_lesson),
+            ).fetchone()
+            if not dup:
+                cur = db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+                    (session["user_id"], today, assignment["type"], next_grade, next_lesson),
+                )
+                next_assignment = {
+                    "id": cur.lastrowid,
+                    "type": assignment["type"],
+                    "grade": next_grade,
+                    "lesson_num": next_lesson,
+                }
+
     db.commit()
 
     # Check if both assignments for today are completed
@@ -1346,7 +1448,7 @@ def homework_submit():
         # Send email summary in background
         _send_homework_email_async(db, session["user_id"], today)
 
-    return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done})
+    return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done, "next_assignment": next_assignment})
 
 
 @app.route("/api/homework/progress")
