@@ -1219,30 +1219,18 @@ def homework_start(assignment_id):
                     correct["words"] = c.get("words", [])
                     break
             others = [c for c in all_chars if c["char"] != correct["char"]]
-            # Randomly choose char_to_pinyin or pinyin_to_char
-            mode = random.choice(["char_to_pinyin", "pinyin_to_char"])
-            if mode == "char_to_pinyin":
-                distractors = _pick_distractors(correct, others, key="pinyin")
-                options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
-                random.shuffle(options)
-                questions.append({
-                    "mode": mode, "question": correct["char"],
-                    "options": options, "correct_index": options.index(correct["pinyin"]),
-                    "answer": correct["pinyin"],
-                    "word_hint": "、".join(correct["words"]),
-                    "display_char": correct["char"], "display_pinyin": correct["pinyin"],
-                })
-            else:
-                distractors = _pick_distractors(correct, others, key="char")
-                options = [correct["char"]] + [d["char"] for d in distractors]
-                random.shuffle(options)
-                questions.append({
-                    "mode": mode, "question": correct["pinyin"],
-                    "options": options, "correct_index": options.index(correct["char"]),
-                    "answer": correct["char"],
-                    "word_hint": "、".join(correct["words"]),
-                    "display_char": correct["char"], "display_pinyin": correct["pinyin"],
-                })
+            # Recognition homework uses char_to_pinyin mode (看字选拼音)
+            mode = "char_to_pinyin"
+            distractors = _pick_distractors(correct, others, key="pinyin")
+            options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
+            random.shuffle(options)
+            questions.append({
+                "mode": mode, "question": correct["char"],
+                "options": options, "correct_index": options.index(correct["pinyin"]),
+                "answer": correct["pinyin"],
+                "word_hint": "、".join(correct["words"]),
+                "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+            })
         random.shuffle(questions)
     elif hw_type == "writing":
         entries = lesson_data.get("词语", [])
