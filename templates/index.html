@@ -1625,8 +1625,10 @@ async function loadAdminHomework() {
     data.users.forEach(u => {
       const recPct = u.total_lessons > 0 ? Math.round((u.recognition_lesson - 1) / u.total_lessons * 100) : 0;
       const wrtPct = u.total_lessons > 0 ? Math.round((u.writing_lesson - 1) / u.total_lessons * 100) : 0;
+      const recGradeShort = u.recognition_grade ? (u.recognition_grade[0] + u.recognition_grade[u.recognition_grade.length-1]) : u.grade_short;
+      const wrtGradeShort = u.writing_grade ? (u.writing_grade[0] + u.writing_grade[u.writing_grade.length-1]) : u.grade_short;
       html += `<div class="admin-item-row" style="flex-wrap:wrap;gap:4px">
-        <span><strong>${u.username}</strong> — ${u.grade_short} (认${u.recognition_lesson}/${u.total_lessons} 写${u.writing_lesson}/${u.total_lessons})</span>
+        <span><strong>${u.username}</strong> — 认:${recGradeShort}第${u.recognition_lesson}/${u.rec_total_lessons||u.total_lessons}课 写:${wrtGradeShort}第${u.writing_lesson}/${u.wrt_total_lessons||u.total_lessons}课</span>
         <span style="font-size:12px;color:#718096">认${recPct}% 写${wrtPct}%</span>
       </div>`;
       // Today's assignments
@@ -1697,19 +1699,31 @@ async function saveHomeworkPlan() {
     return;
   }
 
-  const res = await fetch("/api/admin/homework/plan", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: parseInt(userId), grade, recognition_lesson: recLesson, writing_lesson: wrtLesson }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    msg.textContent = data.error;
+  try {
+    const res = await fetch("/api/admin/homework/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: parseInt(userId), grade, recognition_lesson: recLesson, writing_lesson: wrtLesson }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      try { const d = JSON.parse(text); msg.textContent = d.error || `错误: ${res.status}`; }
+      catch { msg.textContent = `请求失败 (${res.status})`; }
+      msg.style.color = "#e53e3e";
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      msg.textContent = data.error;
+      msg.style.color = "#e53e3e";
+    } else {
+      msg.textContent = "已保存";
+      msg.style.color = "#38a169";
+      await loadAdminHomework();
+    }
+  } catch (e) {
+    msg.textContent = "网络错误: " + e.message;
     msg.style.color = "#e53e3e";
-  } else {
-    msg.textContent = "已保存";
-    msg.style.color = "#38a169";
-    await loadAdminHomework();
   }
 }
 

@@ -249,6 +249,8 @@ def init_db():
             grade TEXT NOT NULL,
             recognition_lesson INTEGER NOT NULL DEFAULT 1,
             writing_lesson INTEGER NOT NULL DEFAULT 1,
+            recognition_grade TEXT NOT NULL DEFAULT '',
+            writing_grade TEXT NOT NULL DEFAULT '',
             active INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -286,6 +288,13 @@ def init_db():
     user_cols = [row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()]
     if "coins" not in user_cols:
         db.execute("ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
+    # Migrate homework_plans: add separate grade tracking per type
+    hp_cols = [row[1] for row in db.execute("PRAGMA table_info(homework_plans)").fetchall()]
+    if "recognition_grade" not in hp_cols:
+        db.execute("ALTER TABLE homework_plans ADD COLUMN recognition_grade TEXT NOT NULL DEFAULT ''")
+        db.execute("ALTER TABLE homework_plans ADD COLUMN writing_grade TEXT NOT NULL DEFAULT ''")
+        # Backfill: copy existing grade to both recognition_grade and writing_grade
+        db.execute("UPDATE homework_plans SET recognition_grade = grade, writing_grade = grade")
     db.commit()
     db.close()
 
@@ -1145,10 +1154,12 @@ def _get_or_create_today_assignments(db, user_id):
 
     if not existing:
         # First visit today: create initial assignments using cross-grade search
+        rec_base_grade = plan["recognition_grade"] or plan["grade"]
+        wrt_base_grade = plan["writing_grade"] or plan["grade"]
         rec_grade, rec_ln = find_next_lesson_across_grades(
-            plan["grade"], plan["recognition_lesson"], "识字")
+            rec_base_grade, plan["recognition_lesson"], "识字")
         wrt_grade, wrt_ln = find_next_lesson_across_grades(
-            plan["grade"], plan["writing_lesson"], "词语")
+            wrt_base_grade, plan["writing_lesson"], "词语")
         if rec_grade and rec_ln:
             db.execute(
                 "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'recognition', ?, ?)",
@@ -1172,8 +1183,9 @@ def _get_or_create_today_assignments(db, user_id):
                 continue
             # All completed — find next using cross-grade search
             plan_lesson = plan["recognition_lesson"] if hw_type == "recognition" else plan["writing_lesson"]
+            base_grade = (plan["recognition_grade"] if hw_type == "recognition" else plan["writing_grade"]) or plan["grade"]
             next_grade, next_ln = find_next_lesson_across_grades(
-                plan["grade"], plan_lesson, content_key)
+                base_grade, plan_lesson, content_key)
             if not next_grade:
                 continue
             # Avoid duplicate
@@ -1208,14 +1220,20 @@ def homework_today():
     ).fetchone()
     plan_info = None
     if plan:
-        grade = plan["grade"]
-        total = len(HOMEWORK_LESSONS.get(grade, {}))
+        rec_grade = plan["recognition_grade"] or plan["grade"]
+        wrt_grade = plan["writing_grade"] or plan["grade"]
+        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         plan_info = {
-            "grade": grade,
-            "grade_short": grade_short_name(grade),
+            "grade": plan["grade"],
+            "grade_short": grade_short_name(plan["grade"]),
+            "recognition_grade": rec_grade,
+            "writing_grade": wrt_grade,
             "recognition_lesson": plan["recognition_lesson"],
             "writing_lesson": plan["writing_lesson"],
-            "total_lessons": total,
+            "rec_total_lessons": rec_total,
+            "wrt_total_lessons": wrt_total,
+            "total_lessons": max(rec_total, wrt_total),
         }
     # Check if there are wrong answers from previous days needing review
     today = date.today().isoformat()
@@ -1367,19 +1385,22 @@ def homework_submit():
         (session["user_id"],),
     ).fetchone()
     if plan and assignment["status"] == "pending":
-        grade = plan["grade"]
         content_key = "识字" if assignment["type"] == "recognition" else "词语"
-        current_lesson = plan["recognition_lesson"] if assignment["type"] == "recognition" else plan["writing_lesson"]
+        if assignment["type"] == "recognition":
+            base_grade = plan["recognition_grade"] or plan["grade"]
+            current_lesson = plan["recognition_lesson"]
+        else:
+            base_grade = plan["writing_grade"] or plan["grade"]
+            current_lesson = plan["writing_lesson"]
 
-        next_grade, next_ln = find_next_lesson_across_grades(grade, current_lesson + 1, content_key)
-        if next_grade and next_grade != grade:
-            # Advance to next grade: update plan grade and lesson
-            db.execute("UPDATE homework_plans SET grade = ? WHERE id = ?", (next_grade, plan["id"]))
+        next_grade, next_ln = find_next_lesson_across_grades(base_grade, current_lesson + 1, content_key)
         if next_grade and next_ln:
             if assignment["type"] == "recognition":
-                db.execute("UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?", (next_ln, plan["id"]))
+                db.execute("UPDATE homework_plans SET recognition_lesson = ?, recognition_grade = ? WHERE id = ?",
+                           (next_ln, next_grade, plan["id"]))
             else:
-                db.execute("UPDATE homework_plans SET writing_lesson = ? WHERE id = ?", (next_ln, plan["id"]))
+                db.execute("UPDATE homework_plans SET writing_lesson = ?, writing_grade = ? WHERE id = ?",
+                           (next_ln, next_grade, plan["id"]))
 
     # Also record wrong answers in the main wrong_answers table
     for item in data.get("wrong_items", []):
@@ -1405,10 +1426,11 @@ def homework_submit():
         updated_plan = db.execute(
             "SELECT * FROM homework_plans WHERE id = ?", (plan["id"],)
         ).fetchone()
-        next_grade = updated_plan["grade"]
         if assignment["type"] == "recognition":
+            next_grade = updated_plan["recognition_grade"] or updated_plan["grade"]
             next_lesson = updated_plan["recognition_lesson"]
         else:
+            next_grade = updated_plan["writing_grade"] or updated_plan["grade"]
             next_lesson = updated_plan["writing_lesson"]
 
         # Check the next lesson actually has content
@@ -1465,17 +1487,23 @@ def homework_progress():
 
     progress = []
     for p in plans:
-        grade = p["grade"]
-        total = len(HOMEWORK_LESSONS.get(grade, {}))
-        rec_pct = round((p["recognition_lesson"] - 1) / total * 100) if total > 0 else 0
-        wrt_pct = round((p["writing_lesson"] - 1) / total * 100) if total > 0 else 0
+        rec_grade = p["recognition_grade"] or p["grade"]
+        wrt_grade = p["writing_grade"] or p["grade"]
+        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        rec_pct = round((p["recognition_lesson"] - 1) / rec_total * 100) if rec_total > 0 else 0
+        wrt_pct = round((p["writing_lesson"] - 1) / wrt_total * 100) if wrt_total > 0 else 0
         overall_pct = round((rec_pct + wrt_pct) / 2)
         progress.append({
-            "grade": grade,
-            "grade_short": grade_short_name(grade),
+            "grade": p["grade"],
+            "grade_short": grade_short_name(p["grade"]),
+            "recognition_grade": rec_grade,
+            "writing_grade": wrt_grade,
             "recognition_lesson": p["recognition_lesson"],
             "writing_lesson": p["writing_lesson"],
-            "total_lessons": total,
+            "rec_total_lessons": rec_total,
+            "wrt_total_lessons": wrt_total,
+            "total_lessons": max(rec_total, wrt_total),
             "recognition_pct": rec_pct,
             "writing_pct": wrt_pct,
             "overall_pct": overall_pct,
@@ -1555,7 +1583,9 @@ def admin_homework_plan():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
 
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "无效的请求数据"}), 400
     user_id = data.get("user_id")
     grade = data.get("grade", "")
     rec_lesson = data.get("recognition_lesson", 1)
@@ -1567,10 +1597,10 @@ def admin_homework_plan():
     db = get_db()
     # Deactivate existing plans for this user
     db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = ?", (user_id,))
-    # Create new plan
+    # Create new plan with separate grade tracking for each type
     db.execute(
-        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson) VALUES (?, ?, ?, ?)",
-        (user_id, grade, rec_lesson, wrt_lesson),
+        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, grade, rec_lesson, wrt_lesson, grade, grade),
     )
     db.commit()
     return jsonify({"ok": True})
@@ -1582,7 +1612,9 @@ def admin_homework_repeat():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
 
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "无效的请求数据"}), 400
     assignment_id = data.get("assignment_id")
 
     db = get_db()
@@ -1609,13 +1641,13 @@ def admin_homework_repeat():
     if plan:
         if assignment["type"] == "recognition":
             db.execute(
-                "UPDATE homework_plans SET recognition_lesson = ? WHERE id = ?",
-                (assignment["lesson_num"], plan["id"]),
+                "UPDATE homework_plans SET recognition_lesson = ?, recognition_grade = ? WHERE id = ?",
+                (assignment["lesson_num"], assignment["grade"], plan["id"]),
             )
         else:
             db.execute(
-                "UPDATE homework_plans SET writing_lesson = ? WHERE id = ?",
-                (assignment["lesson_num"], plan["id"]),
+                "UPDATE homework_plans SET writing_lesson = ?, writing_grade = ? WHERE id = ?",
+                (assignment["lesson_num"], assignment["grade"], plan["id"]),
             )
     db.commit()
     return jsonify({"ok": True})
@@ -1645,16 +1677,22 @@ def admin_homework_overview():
             (u["id"], today),
         ).fetchall()
 
-        grade = plan["grade"]
-        total_lessons = len(HOMEWORK_LESSONS.get(grade, {}))
+        rec_grade = plan["recognition_grade"] or plan["grade"]
+        wrt_grade = plan["writing_grade"] or plan["grade"]
+        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         result.append({
             "user_id": u["id"],
             "username": u["username"],
-            "grade": grade,
-            "grade_short": grade_short_name(grade),
+            "grade": plan["grade"],
+            "grade_short": grade_short_name(plan["grade"]),
+            "recognition_grade": rec_grade,
+            "writing_grade": wrt_grade,
             "recognition_lesson": plan["recognition_lesson"],
             "writing_lesson": plan["writing_lesson"],
-            "total_lessons": total_lessons,
+            "rec_total_lessons": rec_total,
+            "wrt_total_lessons": wrt_total,
+            "total_lessons": max(rec_total, wrt_total),
             "today_assignments": [dict(a) for a in assignments],
         })
 

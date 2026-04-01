@@ -296,7 +296,7 @@ async function loadToday() {
     html += `<div class="assignment-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
       <div class="card-icon">${icon}</div>
       <div class="card-type">${typeLabel}作业</div>
-      <div class="card-info">第${a.lesson_num}课 · ${plan.grade_short}</div>`;
+      <div class="card-info">第${a.lesson_num}课 · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : plan.grade_short}</div>`;
 
     if (isCompleted) {
       html += `<div class="card-status completed">✓ 已完成</div>
@@ -339,7 +339,7 @@ async function loadProgress() {
         <div class="progress-pct">${pct}%</div>
       </div>
       <div class="progress-label">${p.grade_short}</div>
-      <div class="progress-sub">认${p.recognition_lesson - 1}/${p.total_lessons} 写${p.writing_lesson - 1}/${p.total_lessons}</div>
+      <div class="progress-sub">认${p.recognition_lesson - 1}/${p.rec_total_lessons||p.total_lessons} 写${p.writing_lesson - 1}/${p.wrt_total_lessons||p.total_lessons}</div>
     </div>`;
   }).join("");
 
