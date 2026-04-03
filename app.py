@@ -133,6 +133,39 @@ def grade_short_name(grade):
     return grade[0] + grade[-1]
 
 
+def calc_streak_coins(streak, is_writing):
+    """Calculate coins earned from streak milestones.
+
+    Recognition (认字): streak 15→1 coin, 30→3 coins, 45→5 coins
+    Writing (写字): streak 5→2 coins, 10→10 coins, 20→25 coins
+    Coins are cumulative (each milestone adds independently).
+    """
+    coins = 0
+    if is_writing:
+        if streak >= 5:
+            coins += 2
+        if streak >= 10:
+            coins += 10
+        if streak >= 20:
+            coins += 25
+    else:
+        if streak >= 15:
+            coins += 1
+        if streak >= 30:
+            coins += 3
+        if streak >= 45:
+            coins += 5
+    return coins
+
+
+# Game time exchange packages: (price_coins, minutes)
+GAME_TIME_PACKAGES = [
+    {"id": 1, "name": "20分钟游戏时间", "price": 15, "minutes": 20},
+    {"id": 2, "name": "30分钟游戏时间", "price": 20, "minutes": 30},
+    {"id": 3, "name": "50分钟游戏时间", "price": 35, "minutes": 50},
+]
+
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
@@ -265,8 +298,6 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
-    # Default exchange rate: 100 points = 1 coin
-    db.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('exchange_rate', '100')")
     # Migrate: add columns if missing
     cols = [row[1] for row in db.execute("PRAGMA table_info(scores)").fetchall()]
     if "total_questions" not in cols:
@@ -279,6 +310,8 @@ def init_db():
     user_cols = [row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()]
     if "coins" not in user_cols:
         db.execute("ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
+    if "game_minutes" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN game_minutes INTEGER NOT NULL DEFAULT 0")
     # Migrate homework_plans: add separate grade tracking per type
     hp_cols = [row[1] for row in db.execute("PRAGMA table_info(homework_plans)").fetchall()]
     if "recognition_grade" not in hp_cols:
@@ -587,10 +620,9 @@ def scores_api():
             "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session["user_id"], grade, mode, score, combo_max, total_questions, correct_answers),
         )
-        # Award coins based on exchange rate
-        sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
-        rate = int(sr["value"]) if sr else 100
-        coins_earned = score // rate
+        # Award coins based on streak milestones
+        is_writing = mode == "dictation_handwrite"
+        coins_earned = calc_streak_coins(combo_max, is_writing)
         if coins_earned > 0:
             db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
         db.commit()
@@ -935,38 +967,11 @@ def admin_check():
     return jsonify({"is_admin": session.get("is_admin", False)})
 
 
-@app.route("/api/admin/items", methods=["GET", "POST"])
+@app.route("/api/admin/items", methods=["GET"])
 def admin_items():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
-
-    db = get_db()
-    if request.method == "POST":
-        data = request.get_json()
-        name = (data.get("name") or "").strip()
-        description = (data.get("description") or "").strip()
-        price = data.get("price", 0)
-        if not name or not isinstance(price, int) or price <= 0:
-            return jsonify({"error": "名称和价格（正整数）不能为空"}), 400
-        db.execute(
-            "INSERT INTO shop_items (name, description, price) VALUES (?, ?, ?)",
-            (name, description, price),
-        )
-        db.commit()
-        return jsonify({"ok": True})
-
-    rows = db.execute("SELECT * FROM shop_items ORDER BY created_at DESC").fetchall()
-    return jsonify({"items": [dict(r) for r in rows]})
-
-
-@app.route("/api/admin/items/<int:item_id>", methods=["DELETE"])
-def admin_delete_item(item_id):
-    if not session.get("is_admin"):
-        return jsonify({"error": "无管理员权限"}), 403
-    db = get_db()
-    db.execute("DELETE FROM shop_items WHERE id = ?", (item_id,))
-    db.commit()
-    return jsonify({"ok": True})
+    return jsonify({"items": GAME_TIME_PACKAGES})
 
 
 @app.route("/api/admin/users")
@@ -977,7 +982,7 @@ def admin_users():
 
     db = get_db()
     users = db.execute(
-        """SELECT u.id, u.username, u.coins, u.created_at,
+        """SELECT u.id, u.username, u.coins, u.game_minutes, u.created_at,
                   COALESCE(SUM(s.score), 0) as total_score,
                   COALESCE(SUM(s.total_questions), 0) as total_questions,
                   COALESCE(SUM(s.correct_answers), 0) as correct_answers
@@ -1009,7 +1014,7 @@ def admin_user_details(user_id):
         return jsonify({"error": "无管理员权限"}), 403
 
     db = get_db()
-    user = db.execute("SELECT id, username, coins, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = db.execute("SELECT id, username, coins, game_minutes, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
@@ -1049,24 +1054,11 @@ def admin_user_details(user_id):
     })
 
 
-@app.route("/api/admin/settings", methods=["GET", "POST"])
+@app.route("/api/admin/settings", methods=["GET"])
 def admin_settings():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
-
-    db = get_db()
-    if request.method == "POST":
-        data = request.get_json()
-        rate = data.get("exchange_rate")
-        if not isinstance(rate, int) or rate <= 0:
-            return jsonify({"error": "兑换比例必须为正整数"}), 400
-        db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('exchange_rate', ?)", (str(rate),))
-        db.commit()
-        return jsonify({"ok": True})
-
-    row = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
-    rate = int(row["value"]) if row else 100
-    return jsonify({"exchange_rate": rate})
+    return jsonify({"coin_rules": "认字:连击15→1币,30→3币,45→5币; 写字:连击5→2币,10→10币,20→25币"})
 
 
 # --- Shop & Coins routes ---
@@ -1076,18 +1068,13 @@ def coins_api():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     db = get_db()
-    row = db.execute("SELECT coins FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    # Get exchange rate
-    sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
-    rate = int(sr["value"]) if sr else 100
-    return jsonify({"coins": row["coins"] if row else 0, "exchange_rate": rate})
+    row = db.execute("SELECT coins, game_minutes FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    return jsonify({"coins": row["coins"] if row else 0, "game_minutes": row["game_minutes"] if row else 0})
 
 
 @app.route("/api/shop")
 def shop_api():
-    db = get_db()
-    rows = db.execute("SELECT id, name, description, price FROM shop_items ORDER BY created_at DESC").fetchall()
-    return jsonify({"items": [dict(r) for r in rows]})
+    return jsonify({"items": GAME_TIME_PACKAGES})
 
 
 @app.route("/api/shop/buy", methods=["POST"])
@@ -1095,22 +1082,23 @@ def shop_buy():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     data = request.get_json()
-    item_id = data.get("item_id")
+    package_id = data.get("item_id")
+
+    package = next((p for p in GAME_TIME_PACKAGES if p["id"] == package_id), None)
+    if not package:
+        return jsonify({"error": "套餐不存在"}), 404
 
     db = get_db()
-    item = db.execute("SELECT * FROM shop_items WHERE id = ?", (item_id,)).fetchone()
-    if not item:
-        return jsonify({"error": "商品不存在"}), 404
-
-    user = db.execute("SELECT coins FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    if user["coins"] < item["price"]:
+    user = db.execute("SELECT coins, game_minutes FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if user["coins"] < package["price"]:
         return jsonify({"error": "金币不足"}), 400
 
-    db.execute("UPDATE users SET coins = coins - ? WHERE id = ?", (item["price"], session["user_id"]))
-    db.execute("INSERT INTO purchases (user_id, item_id) VALUES (?, ?)", (session["user_id"], item_id))
+    db.execute("UPDATE users SET coins = coins - ?, game_minutes = game_minutes + ? WHERE id = ?",
+               (package["price"], package["minutes"], session["user_id"]))
     db.commit()
-    new_coins = user["coins"] - item["price"]
-    return jsonify({"ok": True, "coins": new_coins})
+    new_coins = user["coins"] - package["price"]
+    new_minutes = user["game_minutes"] + package["minutes"]
+    return jsonify({"ok": True, "coins": new_coins, "game_minutes": new_minutes})
 
 
 # === Homework System ===
@@ -1401,11 +1389,9 @@ def homework_submit():
              item.get("words", ""), assignment["grade"], item.get("mode", "")),
         )
 
-    # Award coins
-    sr = db.execute("SELECT value FROM settings WHERE key = 'exchange_rate'").fetchone()
-    rate = int(sr["value"]) if sr else 100
-    score = correct_answers * 10
-    coins_earned = score // rate
+    # Award coins based on streak (use correct_answers as streak for homework)
+    is_writing = assignment["type"] == "writing"
+    coins_earned = calc_streak_coins(correct_answers, is_writing)
     if coins_earned > 0:
         db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
 

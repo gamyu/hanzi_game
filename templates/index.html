@@ -642,6 +642,43 @@
     font-size: 15px;
   }
 
+  .game-minutes-bar {
+    text-align: center;
+    padding: 8px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #c6f6d5, #b2f5ea);
+    border-radius: 12px;
+    font-weight: 700;
+    color: #276749;
+    font-size: 15px;
+  }
+
+  /* Coin notification */
+  .coin-notification {
+    position: fixed;
+    top: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #fefcbf, #fbd38d);
+    color: #975a16;
+    font-size: 22px;
+    font-weight: 800;
+    padding: 16px 32px;
+    border-radius: 20px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    z-index: 10000;
+    animation: coinPop 2.5s ease-out forwards;
+    pointer-events: none;
+  }
+
+  @keyframes coinPop {
+    0% { opacity: 0; transform: translateX(-50%) scale(0.5) translateY(20px); }
+    15% { opacity: 1; transform: translateX(-50%) scale(1.1) translateY(0); }
+    25% { transform: translateX(-50%) scale(1) translateY(0); }
+    75% { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-50%) scale(0.8) translateY(-40px); }
+  }
+
   /* Admin panel */
   .admin-section {
     margin-bottom: 20px;
@@ -1033,9 +1070,15 @@
 <!-- Shop modal -->
 <div class="modal-overlay hidden" id="shopModal" onclick="if(event.target===this)this.classList.add('hidden')">
   <div class="modal" style="max-width:460px">
-    <h2>商店</h2>
+    <h2>商店 - 兑换游戏时间</h2>
     <div class="shop-coins-bar" id="shopCoinsBar">金币: 0</div>
+    <div class="game-minutes-bar" id="shopGameMinutes">剩余游戏时间: 0 分钟</div>
     <div class="shop-grid" id="shopGrid"></div>
+    <div style="margin-top:12px;padding:12px;background:#f7fafc;border-radius:10px;font-size:13px;color:#718096">
+      <strong>赚取金币规则:</strong><br>
+      认字模式: 连击15→1币, 连击30→3币, 连击45→5币<br>
+      写字模式: 连击5→2币, 连击10→10币, 连击20→25币
+    </div>
     <button class="modal-close" onclick="document.getElementById('shopModal').classList.add('hidden')">关闭</button>
   </div>
 </div>
@@ -1060,24 +1103,12 @@
       <div class="admin-item-list" id="adminUserList" style="max-height:300px"></div>
     </div>
     <div class="admin-section">
-      <h3>积分兑换比例</h3>
-      <div class="admin-row">
-        <input type="number" class="admin-input" id="adminRate" min="1" placeholder="多少积分=1金币" style="max-width:180px">
-        <span style="font-size:13px;color:#718096">积分 = 1 金币</span>
-        <button class="admin-btn" onclick="saveExchangeRate()">保存</button>
+      <h3>金币规则</h3>
+      <div style="font-size:14px;color:#4a5568;line-height:1.8">
+        <strong>认字模式:</strong> 连击15→1币, 连击30→3币, 连击45→5币<br>
+        <strong>写字模式:</strong> 连击5→2币, 连击10→10币, 连击20→25币<br>
+        <strong>兑换游戏时间:</strong> 15币→20分钟, 20币→30分钟, 35币→50分钟
       </div>
-      <div id="adminRateMsg" style="font-size:13px;color:#38a169;min-height:18px"></div>
-    </div>
-    <div class="admin-section">
-      <h3>商店商品</h3>
-      <div class="admin-row">
-        <input type="text" class="admin-input" id="adminItemName" placeholder="商品名称">
-        <input type="text" class="admin-input" id="adminItemDesc" placeholder="描述（可选）" style="max-width:120px">
-        <input type="number" class="admin-input" id="adminItemPrice" placeholder="价格" min="1" style="max-width:80px">
-        <button class="admin-btn" onclick="addShopItem()">添加</button>
-      </div>
-      <div id="adminItemMsg" style="font-size:13px;color:#e53e3e;min-height:18px"></div>
-      <div class="admin-item-list" id="adminItemList"></div>
     </div>
     <div class="admin-section">
       <h3>每日作业管理</h3>
@@ -1119,11 +1150,49 @@ let state = {
   user: null,
   authTab: "login",
   coins: 0,
+  gameMinutes: 0,
   isAdmin: false,
   seenQuestions: new Set(),  // track seen question keys to avoid repeats
   retryQueue: [],            // queue of questions to retry after wrong answer
   retryCount: 0,             // how many times current retry has been attempted
+  sessionCoins: 0,           // coins earned this session from streaks
+  lastCoinStreak: 0,         // last streak that triggered a coin award
 };
+
+// Streak milestone coin rules
+const COIN_MILESTONES = {
+  recognition: [
+    { streak: 15, coins: 1 },
+    { streak: 30, coins: 3 },
+    { streak: 45, coins: 5 },
+  ],
+  writing: [
+    { streak: 5, coins: 2 },
+    { streak: 10, coins: 10 },
+    { streak: 20, coins: 25 },
+  ],
+};
+
+function checkStreakCoins(combo) {
+  const isWriting = state.mode === "dictation_handwrite";
+  const milestones = isWriting ? COIN_MILESTONES.writing : COIN_MILESTONES.recognition;
+  for (const m of milestones) {
+    if (combo === m.streak && state.lastCoinStreak < m.streak) {
+      state.sessionCoins += m.coins;
+      state.lastCoinStreak = m.streak;
+      showCoinNotification(m.coins, m.streak);
+      return;
+    }
+  }
+}
+
+function showCoinNotification(coins, streak) {
+  const el = document.createElement("div");
+  el.className = "coin-notification";
+  el.innerHTML = `🪙 +${coins} 金币! (连击${streak})`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
 
 
 // --- Auth ---
@@ -1147,6 +1216,7 @@ async function loadCoins() {
   const data = await res.json();
   if (!data.error) {
     state.coins = data.coins;
+    state.gameMinutes = data.game_minutes || 0;
     const coinsBox = document.getElementById("coinsBox");
     coinsBox.textContent = `金币: ${state.coins}`;
     coinsBox.style.display = "";
@@ -1253,6 +1323,8 @@ async function saveScore() {
   state.comboMax = 0;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
+  state.sessionCoins = 0;
+  state.lastCoinStreak = 0;
   updateScoreboard();
   try {
     const res = await fetch("/api/scores", {
@@ -1286,6 +1358,8 @@ function saveScoreAsync() {
   state.comboMax = 0;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
+  state.sessionCoins = 0;
+  state.lastCoinStreak = 0;
   updateScoreboard();
   navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
 }
@@ -1356,42 +1430,39 @@ async function showShop() {
   const modal = document.getElementById("shopModal");
   modal.classList.remove("hidden");
 
-  // Show coins bar
   const coinsBar = document.getElementById("shopCoinsBar");
+  const minutesBar = document.getElementById("shopGameMinutes");
   if (state.user) {
     await loadCoins();
     coinsBar.textContent = `我的金币: ${state.coins}`;
+    minutesBar.textContent = `剩余游戏时间: ${state.gameMinutes} 分钟`;
     coinsBar.style.display = "";
+    minutesBar.style.display = "";
   } else {
     coinsBar.style.display = "none";
+    minutesBar.style.display = "none";
   }
 
-  // Load items
+  // Load packages
   const res = await fetch("/api/shop");
   const data = await res.json();
   const grid = document.getElementById("shopGrid");
-
-  if (!data.items || data.items.length === 0) {
-    grid.innerHTML = '<div class="shop-empty">商店暂无商品，敬请期待!</div>';
-    return;
-  }
 
   grid.innerHTML = data.items.map(item => {
     const canBuy = state.user && state.coins >= item.price;
     return `<div class="shop-item">
       <div class="shop-item-info">
         <div class="shop-item-name">${item.name}</div>
-        ${item.description ? `<div class="shop-item-desc">${item.description}</div>` : ""}
       </div>
       <div class="shop-item-price">${item.price} 金币</div>
-      <button class="shop-buy-btn" onclick="buyItem(${item.id}, '${item.name}', ${item.price})" ${canBuy ? "" : "disabled"}>${state.user ? "购买" : "登录后购买"}</button>
+      <button class="shop-buy-btn" onclick="buyItem(${item.id}, '${item.name}', ${item.price})" ${canBuy ? "" : "disabled"}>${state.user ? "兑换" : "登录后兑换"}</button>
     </div>`;
   }).join("");
 }
 
 async function buyItem(itemId, name, price) {
   if (!state.user) return;
-  if (!confirm(`确定花费 ${price} 金币购买「${name}」？`)) return;
+  if (!confirm(`确定花费 ${price} 金币兑换「${name}」？`)) return;
 
   const res = await fetch("/api/shop/buy", {
     method: "POST",
@@ -1404,8 +1475,9 @@ async function buyItem(itemId, name, price) {
     return;
   }
   state.coins = data.coins;
+  state.gameMinutes = data.game_minutes;
   document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
-  alert(`购买成功!`);
+  alert(`兑换成功!`);
   showShop(); // Refresh
 }
 
@@ -1440,17 +1512,8 @@ async function showAdminPanel() {
   const modal = document.getElementById("adminModal");
   modal.classList.remove("hidden");
 
-  // Load exchange rate
-  const setRes = await fetch("/api/admin/settings");
-  const setData = await setRes.json();
-  document.getElementById("adminRate").value = setData.exchange_rate;
-  document.getElementById("adminRateMsg").textContent = "";
-
   // Load users
   await refreshAdminUsers();
-
-  // Load items
-  await refreshAdminItems();
 
   // Load homework
   await loadAdminHomework();
@@ -1468,7 +1531,7 @@ async function refreshAdminUsers() {
     <div class="admin-item-row" style="cursor:pointer" onclick="showUserDetail(${u.id}, '${u.username}')">
       <span style="flex:1"><strong>${u.username}</strong></span>
       <span style="font-size:12px;color:#718096;margin-right:8px">总分${u.total_score} | 题${u.total_questions} | 正确率${u.accuracy}% | 错题${u.wrong_count} | 已掌握${u.mastered_count}</span>
-      <span style="font-size:12px;color:#d69e2e">${u.coins}币</span>
+      <span style="font-size:12px;color:#d69e2e">${u.coins}币 ${u.game_minutes}分钟</span>
     </div>
   `).join("");
 }
@@ -1527,78 +1590,6 @@ async function showUserDetail(userId, username) {
 
   content.innerHTML = html;
   document.getElementById("adminUserDetailModal").classList.remove("hidden");
-}
-
-async function saveExchangeRate() {
-  const rate = parseInt(document.getElementById("adminRate").value);
-  if (!rate || rate <= 0) {
-    document.getElementById("adminRateMsg").textContent = "请输入正整数";
-    document.getElementById("adminRateMsg").style.color = "#e53e3e";
-    return;
-  }
-  const res = await fetch("/api/admin/settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ exchange_rate: rate }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    document.getElementById("adminRateMsg").textContent = data.error;
-    document.getElementById("adminRateMsg").style.color = "#e53e3e";
-  } else {
-    document.getElementById("adminRateMsg").textContent = "已保存";
-    document.getElementById("adminRateMsg").style.color = "#38a169";
-  }
-}
-
-async function addShopItem() {
-  const name = document.getElementById("adminItemName").value.trim();
-  const description = document.getElementById("adminItemDesc").value.trim();
-  const price = parseInt(document.getElementById("adminItemPrice").value);
-  const msg = document.getElementById("adminItemMsg");
-
-  if (!name || !price || price <= 0) {
-    msg.textContent = "名称和价格（正整数）不能为空";
-    return;
-  }
-
-  const res = await fetch("/api/admin/items", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, description, price }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    msg.textContent = data.error;
-    return;
-  }
-  msg.textContent = "";
-  document.getElementById("adminItemName").value = "";
-  document.getElementById("adminItemDesc").value = "";
-  document.getElementById("adminItemPrice").value = "";
-  await refreshAdminItems();
-}
-
-async function refreshAdminItems() {
-  const res = await fetch("/api/admin/items");
-  const data = await res.json();
-  const list = document.getElementById("adminItemList");
-  if (!data.items || data.items.length === 0) {
-    list.innerHTML = '<div style="text-align:center;color:#a0aec0;padding:16px;font-size:13px">暂无商品</div>';
-    return;
-  }
-  list.innerHTML = data.items.map(item => `
-    <div class="admin-item-row">
-      <span><strong>${item.name}</strong> — ${item.price} 金币${item.description ? " (" + item.description + ")" : ""}</span>
-      <button class="admin-btn danger" onclick="deleteItem(${item.id})" style="padding:4px 12px;font-size:12px">删除</button>
-    </div>
-  `).join("");
-}
-
-async function deleteItem(id) {
-  if (!confirm("确定删除该商品？")) return;
-  await fetch(`/api/admin/items/${id}`, { method: "DELETE" });
-  await refreshAdminItems();
 }
 
 async function adminLogout() {
@@ -1984,6 +1975,7 @@ function handleAnswer(selected, q, btn) {
     if (state.combo > 0 && state.combo % 5 === 0) {
       spawnConfetti();
     }
+    checkStreakCoins(state.combo);
 
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot");
@@ -1993,6 +1985,7 @@ function handleAnswer(selected, q, btn) {
     btn.classList.add("wrong");
     allBtns[q.correct_index].classList.add("reveal");
     state.combo = 0;
+    state.lastCoinStreak = 0;
     hint.innerHTML = `<span class="wrong-text">答错了!</span><br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span><br><span style="color:#718096">组词: ${q.word_hint}</span>`;
     // Only record and queue retry for first attempt (not retries)
     if (state.retryQueue.length === 0) {
@@ -2048,12 +2041,14 @@ function handleDictationAnswer(userInput, q) {
     hint.innerHTML = `<span class="correct-text">正确! +${points}分</span>`;
 
     if (state.combo > 0 && state.combo % 5 === 0) spawnConfetti();
+    checkStreakCoins(state.combo);
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot");
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
   } else {
     state.combo = 0;
+    state.lastCoinStreak = 0;
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
     if (state.retryQueue.length === 0) {
       recordWrongAnswer(q);
