@@ -726,6 +726,66 @@
   .admin-btn:hover { transform: scale(1.03); }
   .admin-btn.danger { background: #e53e3e; }
 
+  .admin-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid #e2e8f0;
+  }
+  .admin-tab {
+    flex: 1;
+    padding: 10px 0;
+    border: none;
+    background: none;
+    font-size: 15px;
+    font-weight: 600;
+    color: #a0aec0;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .admin-tab.active {
+    color: #5a67d8;
+    border-bottom-color: #5a67d8;
+  }
+  .admin-tab:hover:not(.active) { color: #4a5568; }
+  .admin-tab-content.hidden { display: none; }
+
+  .rules-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .rules-table th {
+    background: #edf2f7;
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 13px;
+    color: #4a5568;
+  }
+  .rules-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid #edf2f7;
+  }
+  .rules-table input {
+    width: 80px;
+    padding: 5px 8px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+    text-align: center;
+  }
+  .rules-table input:focus { border-color: #5a67d8; outline: none; }
+  .rules-table .del-btn {
+    background: none;
+    border: none;
+    color: #e53e3e;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 6px;
+  }
+
   .admin-item-list {
     max-height: 200px;
     overflow-y: auto;
@@ -1074,11 +1134,7 @@
     <div class="shop-coins-bar" id="shopCoinsBar">金币: 0</div>
     <div class="game-minutes-bar" id="shopGameMinutes">剩余游戏时间: 0 分钟</div>
     <div class="shop-grid" id="shopGrid"></div>
-    <div style="margin-top:12px;padding:12px;background:#f7fafc;border-radius:10px;font-size:13px;color:#718096">
-      <strong>赚取金币规则:</strong><br>
-      认字模式: 连击15→1币, 连击30→3币, 连击45→5币<br>
-      写字模式: 连击5→2币, 连击10→10币, 连击20→25币
-    </div>
+    <div id="shopRulesInfo" style="margin-top:12px;padding:12px;background:#f7fafc;border-radius:10px;font-size:13px;color:#718096"></div>
     <button class="modal-close" onclick="document.getElementById('shopModal').classList.add('hidden')">关闭</button>
   </div>
 </div>
@@ -1096,26 +1152,66 @@
 
 <!-- Admin panel modal -->
 <div class="modal-overlay hidden" id="adminModal" onclick="if(event.target===this)this.classList.add('hidden')">
-  <div class="modal" style="max-width:600px">
-    <h2>管理员面板</h2>
-    <div class="admin-section">
-      <h3>用户记录查询</h3>
-      <div class="admin-item-list" id="adminUserList" style="max-height:300px"></div>
-    </div>
-    <div class="admin-section">
-      <h3>金币规则</h3>
-      <div style="font-size:14px;color:#4a5568;line-height:1.8">
-        <strong>认字模式:</strong> 连击15→1币, 连击30→3币, 连击45→5币<br>
-        <strong>写字模式:</strong> 连击5→2币, 连击10→10币, 连击20→25币<br>
-        <strong>兑换游戏时间:</strong> 15币→20分钟, 20币→30分钟, 35币→50分钟
+  <div class="modal" style="max-width:640px;max-height:90vh;display:flex;flex-direction:column;padding:0;overflow:hidden">
+    <div style="padding:18px 24px 0;flex-shrink:0">
+      <h2 style="margin-bottom:12px">管理员面板</h2>
+      <div class="admin-tabs" id="adminTabs">
+        <button class="admin-tab active" onclick="switchAdminTab('rules')">游戏规则</button>
+        <button class="admin-tab" onclick="switchAdminTab('homework')">布置作业</button>
+        <button class="admin-tab" onclick="switchAdminTab('users')">用户进度</button>
       </div>
     </div>
-    <div class="admin-section">
-      <h3>每日作业管理</h3>
-      <div id="adminHomeworkContent" style="max-height:400px;overflow-y:auto"></div>
+    <div style="flex:1;overflow-y:auto;padding:16px 24px 24px">
+      <!-- Tab: 游戏规则 -->
+      <div class="admin-tab-content" id="adminTabRules">
+        <div class="admin-section">
+          <h3>金币规则 (认字模式)</h3>
+          <table class="rules-table" id="adminRecRules">
+            <thead><tr><th>连击数</th><th>金币</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button class="admin-btn" onclick="addRuleRow('adminRecRules')" style="margin-top:4px">+ 添加</button>
+        </div>
+        <div class="admin-section">
+          <h3>金币规则 (写字模式)</h3>
+          <table class="rules-table" id="adminWrtRules">
+            <thead><tr><th>连击数</th><th>金币</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button class="admin-btn" onclick="addRuleRow('adminWrtRules')" style="margin-top:4px">+ 添加</button>
+        </div>
+        <div class="admin-section">
+          <h3>兑换游戏时间</h3>
+          <table class="rules-table" id="adminExchangeRules">
+            <thead><tr><th>金币</th><th>分钟</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <button class="admin-btn" onclick="addExchangeRow()" style="margin-top:4px">+ 添加</button>
+        </div>
+        <div style="text-align:right;margin-bottom:8px">
+          <button class="admin-btn" onclick="saveAllRules()" style="background:#38a169;padding:8px 24px;font-size:15px">保存所有规则</button>
+          <span id="adminRulesMsg" style="font-size:13px;margin-left:8px"></span>
+        </div>
+      </div>
+      <!-- Tab: 布置作业 -->
+      <div class="admin-tab-content hidden" id="adminTabHomework">
+        <div class="admin-section">
+          <h3>每日作业管理</h3>
+          <div id="adminHomeworkContent" style="max-height:none"></div>
+        </div>
+      </div>
+      <!-- Tab: 用户进度 -->
+      <div class="admin-tab-content hidden" id="adminTabUsers">
+        <div class="admin-section">
+          <h3>用户记录查询</h3>
+          <div class="admin-item-list" id="adminUserList" style="max-height:none"></div>
+        </div>
+      </div>
     </div>
-    <button class="modal-close" onclick="adminLogout()">退出管理员</button>
-    <button class="modal-close" onclick="document.getElementById('adminModal').classList.add('hidden')">关闭</button>
+    <div style="padding:0 24px 16px;flex-shrink:0;display:flex;gap:8px">
+      <button class="modal-close" onclick="adminLogout()">退出管理员</button>
+      <button class="modal-close" onclick="document.getElementById('adminModal').classList.add('hidden')">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -1159,8 +1255,8 @@ let state = {
   lastCoinStreak: 0,         // last streak that triggered a coin award
 };
 
-// Streak milestone coin rules
-const COIN_MILESTONES = {
+// Streak milestone coin rules (loaded from server, these are defaults)
+let COIN_MILESTONES = {
   recognition: [
     { streak: 15, coins: 1 },
     { streak: 30, coins: 3 },
@@ -1443,10 +1539,15 @@ async function showShop() {
     minutesBar.style.display = "none";
   }
 
-  // Load packages
+  // Load packages and rules
   const res = await fetch("/api/shop");
   const data = await res.json();
   const grid = document.getElementById("shopGrid");
+
+  // Update global coin milestones from server
+  if (data.coin_rules) {
+    COIN_MILESTONES = data.coin_rules;
+  }
 
   grid.innerHTML = data.items.map(item => {
     const canBuy = state.user && state.coins >= item.price;
@@ -1458,6 +1559,12 @@ async function showShop() {
       <button class="shop-buy-btn" onclick="buyItem(${item.id}, '${item.name}', ${item.price})" ${canBuy ? "" : "disabled"}>${state.user ? "兑换" : "登录后兑换"}</button>
     </div>`;
   }).join("");
+
+  // Show coin rules dynamically
+  const rulesDiv = document.getElementById("shopRulesInfo");
+  const recRules = (data.coin_rules?.recognition || []).map(r => `连击${r.streak}→${r.coins}币`).join(", ");
+  const wrtRules = (data.coin_rules?.writing || []).map(r => `连击${r.streak}→${r.coins}币`).join(", ");
+  rulesDiv.innerHTML = `<strong>赚取金币规则:</strong><br>认字模式: ${recRules || "无"}<br>写字模式: ${wrtRules || "无"}`;
 }
 
 async function buyItem(itemId, name, price) {
@@ -1507,16 +1614,145 @@ async function submitAdminLogin() {
   showAdminPanel();
 }
 
+function switchAdminTab(tab) {
+  // Update tab buttons
+  document.querySelectorAll(".admin-tab").forEach(btn => btn.classList.remove("active"));
+  document.querySelector(`.admin-tab[onclick*="${tab}"]`).classList.add("active");
+  // Show/hide content
+  document.querySelectorAll(".admin-tab-content").forEach(el => el.classList.add("hidden"));
+  const tabMap = { rules: "adminTabRules", homework: "adminTabHomework", users: "adminTabUsers" };
+  document.getElementById(tabMap[tab]).classList.remove("hidden");
+}
+
 async function showAdminPanel() {
   if (!state.isAdmin) return;
   const modal = document.getElementById("adminModal");
   modal.classList.remove("hidden");
+
+  // Reset to first tab
+  switchAdminTab("rules");
+
+  // Load rules
+  await loadAdminRules();
 
   // Load users
   await refreshAdminUsers();
 
   // Load homework
   await loadAdminHomework();
+}
+
+async function loadAdminRules() {
+  const res = await fetch("/api/admin/settings");
+  const data = await res.json();
+  const recRules = data.coin_rules?.recognition || [];
+  const wrtRules = data.coin_rules?.writing || [];
+  const pkgs = data.exchange_packages || [];
+
+  fillRulesTable("adminRecRules", recRules);
+  fillRulesTable("adminWrtRules", wrtRules);
+  fillExchangeTable(pkgs);
+}
+
+function fillRulesTable(tableId, rules) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  tbody.innerHTML = rules.map(r =>
+    `<tr>
+      <td><input type="number" class="rule-streak" value="${r.streak}" min="1"></td>
+      <td><input type="number" class="rule-coins" value="${r.coins}" min="1"></td>
+      <td><button class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+    </tr>`
+  ).join("");
+}
+
+function addRuleRow(tableId) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  tbody.insertAdjacentHTML("beforeend",
+    `<tr>
+      <td><input type="number" class="rule-streak" value="" min="1" placeholder="连击数"></td>
+      <td><input type="number" class="rule-coins" value="" min="1" placeholder="金币"></td>
+      <td><button class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+    </tr>`);
+}
+
+function fillExchangeTable(pkgs) {
+  const tbody = document.querySelector("#adminExchangeRules tbody");
+  tbody.innerHTML = pkgs.map(p =>
+    `<tr>
+      <td><input type="number" class="pkg-price" value="${p.price}" min="1"></td>
+      <td><input type="number" class="pkg-minutes" value="${p.minutes}" min="1"></td>
+      <td><button class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+    </tr>`
+  ).join("");
+}
+
+function addExchangeRow() {
+  const tbody = document.querySelector("#adminExchangeRules tbody");
+  tbody.insertAdjacentHTML("beforeend",
+    `<tr>
+      <td><input type="number" class="pkg-price" value="" min="1" placeholder="金币"></td>
+      <td><input type="number" class="pkg-minutes" value="" min="1" placeholder="分钟"></td>
+      <td><button class="del-btn" onclick="this.closest('tr').remove()">×</button></td>
+    </tr>`);
+}
+
+function readRulesFromTable(tableId) {
+  const rows = document.querySelectorAll(`#${tableId} tbody tr`);
+  const rules = [];
+  for (const row of rows) {
+    const streak = parseInt(row.querySelector(".rule-streak").value);
+    const coins = parseInt(row.querySelector(".rule-coins").value);
+    if (streak > 0 && coins > 0) rules.push({ streak, coins });
+  }
+  rules.sort((a, b) => a.streak - b.streak);
+  return rules;
+}
+
+function readExchangeFromTable() {
+  const rows = document.querySelectorAll("#adminExchangeRules tbody tr");
+  const pkgs = [];
+  for (const row of rows) {
+    const price = parseInt(row.querySelector(".pkg-price").value);
+    const minutes = parseInt(row.querySelector(".pkg-minutes").value);
+    if (price > 0 && minutes > 0) pkgs.push({ price, minutes });
+  }
+  pkgs.sort((a, b) => a.price - b.price);
+  return pkgs;
+}
+
+async function saveAllRules() {
+  const coinRules = {
+    recognition: readRulesFromTable("adminRecRules"),
+    writing: readRulesFromTable("adminWrtRules"),
+  };
+  const exchangePackages = readExchangeFromTable();
+  const msg = document.getElementById("adminRulesMsg");
+
+  if (coinRules.recognition.length === 0 && coinRules.writing.length === 0) {
+    msg.textContent = "至少需要一条金币规则";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  if (exchangePackages.length === 0) {
+    msg.textContent = "至少需要一个兑换套餐";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+
+  const res = await fetch("/api/admin/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coin_rules: coinRules, exchange_packages: exchangePackages }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    msg.textContent = data.error;
+    msg.style.color = "#e53e3e";
+  } else {
+    msg.textContent = "已保存!";
+    msg.style.color = "#38a169";
+    setTimeout(() => msg.textContent = "", 2000);
+  }
 }
 
 async function refreshAdminUsers() {

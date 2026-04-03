@@ -133,37 +133,64 @@ def grade_short_name(grade):
     return grade[0] + grade[-1]
 
 
-def calc_streak_coins(streak, is_writing):
-    """Calculate coins earned from streak milestones.
+DEFAULT_COIN_RULES = {
+    "recognition": [
+        {"streak": 15, "coins": 1},
+        {"streak": 30, "coins": 3},
+        {"streak": 45, "coins": 5},
+    ],
+    "writing": [
+        {"streak": 5, "coins": 2},
+        {"streak": 10, "coins": 10},
+        {"streak": 20, "coins": 25},
+    ],
+}
 
-    Recognition (认字): streak 15→1 coin, 30→3 coins, 45→5 coins
-    Writing (写字): streak 5→2 coins, 10→10 coins, 20→25 coins
-    Coins are cumulative (each milestone adds independently).
-    """
-    coins = 0
-    if is_writing:
-        if streak >= 5:
-            coins += 2
-        if streak >= 10:
-            coins += 10
-        if streak >= 20:
-            coins += 25
-    else:
-        if streak >= 15:
-            coins += 1
-        if streak >= 30:
-            coins += 3
-        if streak >= 45:
-            coins += 5
-    return coins
-
-
-# Game time exchange packages: (price_coins, minutes)
-GAME_TIME_PACKAGES = [
-    {"id": 1, "name": "20分钟游戏时间", "price": 15, "minutes": 20},
-    {"id": 2, "name": "30分钟游戏时间", "price": 20, "minutes": 30},
-    {"id": 3, "name": "50分钟游戏时间", "price": 35, "minutes": 50},
+DEFAULT_EXCHANGE_PACKAGES = [
+    {"price": 15, "minutes": 20},
+    {"price": 20, "minutes": 30},
+    {"price": 35, "minutes": 50},
 ]
+
+
+def _get_coin_rules(db):
+    row = db.execute("SELECT value FROM settings WHERE key = 'coin_rules'").fetchone()
+    if row:
+        try:
+            return json.loads(row["value"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return DEFAULT_COIN_RULES
+
+
+def _get_exchange_packages(db):
+    row = db.execute("SELECT value FROM settings WHERE key = 'exchange_packages'").fetchone()
+    if row:
+        try:
+            pkgs = json.loads(row["value"])
+            # Add id and name for API compatibility
+            for i, p in enumerate(pkgs):
+                p["id"] = i + 1
+                p["name"] = f"{p['minutes']}分钟游戏时间"
+            return pkgs
+        except (json.JSONDecodeError, TypeError):
+            pass
+    pkgs = [dict(p) for p in DEFAULT_EXCHANGE_PACKAGES]
+    for i, p in enumerate(pkgs):
+        p["id"] = i + 1
+        p["name"] = f"{p['minutes']}分钟游戏时间"
+    return pkgs
+
+
+def calc_streak_coins(streak, is_writing, db):
+    """Calculate coins earned from streak milestones (read rules from DB)."""
+    rules = _get_coin_rules(db)
+    milestones = rules.get("writing" if is_writing else "recognition", [])
+    coins = 0
+    for m in milestones:
+        if streak >= m["streak"]:
+            coins += m["coins"]
+    return coins
 
 
 app = Flask(__name__)
@@ -622,7 +649,7 @@ def scores_api():
         )
         # Award coins based on streak milestones
         is_writing = mode == "dictation_handwrite"
-        coins_earned = calc_streak_coins(combo_max, is_writing)
+        coins_earned = calc_streak_coins(combo_max, is_writing, db)
         if coins_earned > 0:
             db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
         db.commit()
@@ -971,7 +998,8 @@ def admin_check():
 def admin_items():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
-    return jsonify({"items": GAME_TIME_PACKAGES})
+    db = get_db()
+    return jsonify({"items": _get_exchange_packages(db)})
 
 
 @app.route("/api/admin/users")
@@ -1054,11 +1082,46 @@ def admin_user_details(user_id):
     })
 
 
-@app.route("/api/admin/settings", methods=["GET"])
+@app.route("/api/admin/settings", methods=["GET", "POST"])
 def admin_settings():
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
-    return jsonify({"coin_rules": "认字:连击15→1币,30→3币,45→5币; 写字:连击5→2币,10→10币,20→25币"})
+
+    db = get_db()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"error": "无效的请求数据"}), 400
+
+        if "coin_rules" in data:
+            rules = data["coin_rules"]
+            # Validate structure
+            for key in ("recognition", "writing"):
+                if key not in rules or not isinstance(rules[key], list):
+                    return jsonify({"error": f"缺少 {key} 规则"}), 400
+                for m in rules[key]:
+                    if not isinstance(m.get("streak"), int) or not isinstance(m.get("coins"), int):
+                        return jsonify({"error": "规则格式错误: 需要 streak 和 coins 为整数"}), 400
+            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('coin_rules', ?)",
+                       (json.dumps(rules, ensure_ascii=False),))
+
+        if "exchange_packages" in data:
+            pkgs = data["exchange_packages"]
+            if not isinstance(pkgs, list):
+                return jsonify({"error": "兑换套餐格式错误"}), 400
+            for p in pkgs:
+                if not isinstance(p.get("price"), int) or not isinstance(p.get("minutes"), int):
+                    return jsonify({"error": "套餐格式错误: 需要 price 和 minutes 为整数"}), 400
+            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('exchange_packages', ?)",
+                       (json.dumps(pkgs, ensure_ascii=False),))
+
+        db.commit()
+        return jsonify({"ok": True})
+
+    return jsonify({
+        "coin_rules": _get_coin_rules(db),
+        "exchange_packages": _get_exchange_packages(db),
+    })
 
 
 # --- Shop & Coins routes ---
@@ -1074,7 +1137,10 @@ def coins_api():
 
 @app.route("/api/shop")
 def shop_api():
-    return jsonify({"items": GAME_TIME_PACKAGES})
+    db = get_db()
+    packages = _get_exchange_packages(db)
+    rules = _get_coin_rules(db)
+    return jsonify({"items": packages, "coin_rules": rules})
 
 
 @app.route("/api/shop/buy", methods=["POST"])
@@ -1084,11 +1150,12 @@ def shop_buy():
     data = request.get_json()
     package_id = data.get("item_id")
 
-    package = next((p for p in GAME_TIME_PACKAGES if p["id"] == package_id), None)
+    db = get_db()
+    packages = _get_exchange_packages(db)
+    package = next((p for p in packages if p["id"] == package_id), None)
     if not package:
         return jsonify({"error": "套餐不存在"}), 404
 
-    db = get_db()
     user = db.execute("SELECT coins, game_minutes FROM users WHERE id = ?", (session["user_id"],)).fetchone()
     if user["coins"] < package["price"]:
         return jsonify({"error": "金币不足"}), 400
@@ -1391,7 +1458,7 @@ def homework_submit():
 
     # Award coins based on streak (use correct_answers as streak for homework)
     is_writing = assignment["type"] == "writing"
-    coins_earned = calc_streak_coins(correct_answers, is_writing)
+    coins_earned = calc_streak_coins(correct_answers, is_writing, db)
     if coins_earned > 0:
         db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
 
