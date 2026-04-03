@@ -4,13 +4,9 @@ import io
 import json
 import os
 import random
-import smtplib
 import sqlite3
-import threading
 import urllib.request
 from datetime import date, datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 import edge_tts
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
@@ -141,11 +137,6 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "jinhuanjoy@gmail.com")
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
 DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hanzi.db")
 
@@ -1466,9 +1457,6 @@ def homework_submit():
     ).fetchone()
 
     all_done = pending["cnt"] == 0
-    if all_done:
-        # Send email summary in background
-        _send_homework_email_async(db, session["user_id"], today)
 
     return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done, "next_assignment": next_assignment})
 
@@ -1522,59 +1510,6 @@ def homework_progress():
     return jsonify({"progress": progress, "history": [dict(r) for r in history]})
 
 
-def _send_homework_email_async(db, user_id, today):
-    """Send homework summary email in a background thread."""
-    if not SMTP_USER or not SMTP_PASSWORD:
-        return
-
-    user = db.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
-    assignments = db.execute(
-        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
-        (user_id, today),
-    ).fetchall()
-
-    username = user["username"] if user else "Unknown"
-    assignment_data = [dict(a) for a in assignments]
-
-    def send():
-        try:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"每日作业完成报告 - {username} ({today})"
-            msg["From"] = SMTP_USER
-            msg["To"] = ADMIN_EMAIL
-
-            type_labels = {"recognition": "认字", "writing": "写字"}
-            lines = [f"<h2>📚 {username} 的每日作业报告</h2>", f"<p>日期: {today}</p>"]
-            for a in assignment_data:
-                t = type_labels.get(a["type"], a["type"])
-                acc = round(a["correct_answers"] / a["total_questions"] * 100) if a["total_questions"] > 0 else 0
-                mins = a["time_spent"] // 60
-                secs = a["time_spent"] % 60
-                lines.append(f"<h3>{t}作业 - 第{a['lesson_num']}课 ({a['grade']})</h3>")
-                lines.append(f"<p>正确率: {a['correct_answers']}/{a['total_questions']} ({acc}%)</p>")
-                lines.append(f"<p>用时: {mins}分{secs}秒</p>")
-                wrong = json.loads(a["wrong_items"]) if a["wrong_items"] else []
-                if wrong:
-                    lines.append("<p>❌ 错题:</p><ul>")
-                    for w in wrong:
-                        lines.append(f"<li>{w.get('character', '')} ({w.get('pinyin', '')})</li>")
-                    lines.append("</ul>")
-                else:
-                    lines.append("<p>✅ 全部正确!</p>")
-
-            html = "\n".join(lines)
-            msg.attach(MIMEText(html, "html"))
-
-            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-                server.starttls()
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(SMTP_USER, ADMIN_EMAIL, msg.as_string())
-        except Exception as e:
-            print(f"[Email Error] {e}")
-
-    threading.Thread(target=send, daemon=True).start()
-
-
 # --- Admin Homework Routes ---
 
 @app.route("/api/admin/homework/plan", methods=["POST"])
@@ -1597,6 +1532,12 @@ def admin_homework_plan():
     db = get_db()
     # Deactivate existing plans for this user
     db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = ?", (user_id,))
+    # Delete today's pending assignments so new plan takes effect immediately
+    today = date.today().isoformat()
+    db.execute(
+        "DELETE FROM daily_assignments WHERE user_id = ? AND date = ? AND status = 'pending'",
+        (user_id, today),
+    )
     # Create new plan with separate grade tracking for each type
     db.execute(
         "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade) VALUES (?, ?, ?, ?, ?, ?)",
