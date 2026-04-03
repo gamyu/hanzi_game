@@ -1248,11 +1248,9 @@ let state = {
   coins: 0,
   gameMinutes: 0,
   isAdmin: false,
-  seenQuestions: new Set(),  // track seen question keys to avoid repeats
-  retryQueue: [],            // queue of questions to retry after wrong answer
-  retryCount: 0,             // how many times current retry has been attempted
-  sessionCoins: 0,           // coins earned this session from streaks
-  lastCoinStreak: 0,         // last streak that triggered a coin award
+  seenQuestions: new Set(),
+  retryQueue: [],
+  retryCount: 0,
 };
 
 // Streak milestone coin rules (loaded from server, these are defaults)
@@ -1269,17 +1267,19 @@ let COIN_MILESTONES = {
   ],
 };
 
-function checkStreakCoins(combo) {
-  const isWriting = state.mode === "dictation_handwrite";
-  const milestones = isWriting ? COIN_MILESTONES.writing : COIN_MILESTONES.recognition;
-  for (const m of milestones) {
-    if (combo === m.streak && state.lastCoinStreak < m.streak) {
-      state.sessionCoins += m.coins;
-      state.lastCoinStreak = m.streak;
-      showCoinNotification(m.coins, m.streak);
-      return;
+function reportStreak(correct) {
+  if (!state.user) return;
+  fetch("/api/streak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ correct, mode: state.mode }),
+  }).then(r => r.json()).then(data => {
+    if (data.coins_earned > 0) {
+      state.coins = data.coins;
+      document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
+      showCoinNotification(data.coins_earned, data.streak);
     }
-  }
+  }).catch(() => {});
 }
 
 function showCoinNotification(coins, streak) {
@@ -1313,9 +1313,14 @@ async function loadCoins() {
   if (!data.error) {
     state.coins = data.coins;
     state.gameMinutes = data.game_minutes || 0;
+    // Load persistent streak for current mode
+    const isWriting = state.mode === "dictation_handwrite";
+    state.combo = isWriting ? (data.writing_streak || 0) : (data.recognition_streak || 0);
+    state.comboMax = Math.max(state.comboMax, state.combo);
     const coinsBox = document.getElementById("coinsBox");
     coinsBox.textContent = `金币: ${state.coins}`;
     coinsBox.style.display = "";
+    updateScoreboard();
   }
 }
 
@@ -1413,27 +1418,19 @@ async function saveScore() {
     total_questions: state.totalQuestions,
     correct_answers: state.correctAnswers,
   };
-  // Reset counters immediately so we don't double-save
+  // Reset session counters but keep combo (persistent streak)
   state.score = 0;
-  state.combo = 0;
-  state.comboMax = 0;
+  state.comboMax = state.combo;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
-  state.sessionCoins = 0;
-  state.lastCoinStreak = 0;
   updateScoreboard();
   try {
-    const res = await fetch("/api/scores", {
+    await fetch("/api/scores", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
-    if (data.coins_earned > 0) {
-      await loadCoins();
-    }
   } catch (e) {
-    // If save fails, try sendBeacon as fallback
     navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
   }
 }
@@ -1450,12 +1447,9 @@ function saveScoreAsync() {
     correct_answers: state.correctAnswers,
   };
   state.score = 0;
-  state.combo = 0;
-  state.comboMax = 0;
+  state.comboMax = state.combo;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
-  state.sessionCoins = 0;
-  state.lastCoinStreak = 0;
   updateScoreboard();
   navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
 }
@@ -2015,13 +2009,15 @@ function renderModes() {
     const btn = document.createElement("button");
     btn.className = "mode-btn" + (m.id === state.mode ? " active" : "");
     btn.textContent = m.label;
-    btn.onclick = () => {
+    btn.onclick = async () => {
       saveScoreAsync();
       state.mode = m.id;
       localStorage.setItem("hanzi_mode", m.id);
       state.seenQuestions.clear();
       state.retryQueue = [];
       state.retryCount = 0;
+      // Load the correct persistent streak for the new mode type
+      if (state.user) await loadCoins();
       updateScoreboard();
       document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -2211,7 +2207,7 @@ function handleAnswer(selected, q, btn) {
     if (state.combo > 0 && state.combo % 5 === 0) {
       spawnConfetti();
     }
-    checkStreakCoins(state.combo);
+    reportStreak(true);
 
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot");
@@ -2221,7 +2217,7 @@ function handleAnswer(selected, q, btn) {
     btn.classList.add("wrong");
     allBtns[q.correct_index].classList.add("reveal");
     state.combo = 0;
-    state.lastCoinStreak = 0;
+    reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span><br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span><br><span style="color:#718096">组词: ${q.word_hint}</span>`;
     // Only record and queue retry for first attempt (not retries)
     if (state.retryQueue.length === 0) {
@@ -2277,14 +2273,14 @@ function handleDictationAnswer(userInput, q) {
     hint.innerHTML = `<span class="correct-text">正确! +${points}分</span>`;
 
     if (state.combo > 0 && state.combo % 5 === 0) spawnConfetti();
-    checkStreakCoins(state.combo);
+    reportStreak(true);
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot");
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
   } else {
     state.combo = 0;
-    state.lastCoinStreak = 0;
+    reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
     if (state.retryQueue.length === 0) {
       recordWrongAnswer(q);

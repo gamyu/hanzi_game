@@ -339,6 +339,14 @@ def init_db():
         db.execute("ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
     if "game_minutes" not in user_cols:
         db.execute("ALTER TABLE users ADD COLUMN game_minutes INTEGER NOT NULL DEFAULT 0")
+    if "recognition_streak" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN recognition_streak INTEGER NOT NULL DEFAULT 0")
+    if "writing_streak" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN writing_streak INTEGER NOT NULL DEFAULT 0")
+    if "recognition_coins_awarded" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN recognition_coins_awarded INTEGER NOT NULL DEFAULT 0")
+    if "writing_coins_awarded" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN writing_coins_awarded INTEGER NOT NULL DEFAULT 0")
     # Migrate homework_plans: add separate grade tracking per type
     hp_cols = [row[1] for row in db.execute("PRAGMA table_info(homework_plans)").fetchall()]
     if "recognition_grade" not in hp_cols:
@@ -647,13 +655,8 @@ def scores_api():
             "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session["user_id"], grade, mode, score, combo_max, total_questions, correct_answers),
         )
-        # Award coins based on streak milestones
-        is_writing = mode == "dictation_handwrite"
-        coins_earned = calc_streak_coins(combo_max, is_writing, db)
-        if coins_earned > 0:
-            db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
         db.commit()
-        return jsonify({"ok": True, "coins_earned": coins_earned})
+        return jsonify({"ok": True})
 
     db = get_db()
     rows = db.execute(
@@ -1131,8 +1134,60 @@ def coins_api():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     db = get_db()
-    row = db.execute("SELECT coins, game_minutes FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    return jsonify({"coins": row["coins"] if row else 0, "game_minutes": row["game_minutes"] if row else 0})
+    row = db.execute("SELECT coins, game_minutes, recognition_streak, writing_streak FROM users WHERE id = ?",
+                     (session["user_id"],)).fetchone()
+    return jsonify({
+        "coins": row["coins"] if row else 0,
+        "game_minutes": row["game_minutes"] if row else 0,
+        "recognition_streak": row["recognition_streak"] if row else 0,
+        "writing_streak": row["writing_streak"] if row else 0,
+    })
+
+
+@app.route("/api/streak", methods=["POST"])
+def streak_update():
+    """Update persistent streak on each answer. Awards coins at milestones."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "无效的请求数据"}), 400
+
+    correct = data.get("correct", False)
+    mode = data.get("mode", "")
+    is_writing = mode == "dictation_handwrite"
+    streak_col = "writing_streak" if is_writing else "recognition_streak"
+    awarded_col = "writing_coins_awarded" if is_writing else "recognition_coins_awarded"
+
+    db = get_db()
+    user = db.execute(f"SELECT {streak_col}, {awarded_col}, coins FROM users WHERE id = ?",
+                      (session["user_id"],)).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+
+    coins_earned = 0
+    if correct:
+        new_streak = user[streak_col] + 1
+        total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
+        coins_earned = total_coins_at_streak - user[awarded_col]
+        if coins_earned > 0:
+            db.execute(f"UPDATE users SET {streak_col} = ?, {awarded_col} = ?, coins = coins + ? WHERE id = ?",
+                       (new_streak, total_coins_at_streak, coins_earned, session["user_id"]))
+        else:
+            db.execute(f"UPDATE users SET {streak_col} = ? WHERE id = ?",
+                       (new_streak, session["user_id"]))
+    else:
+        new_streak = 0
+        db.execute(f"UPDATE users SET {streak_col} = 0, {awarded_col} = 0 WHERE id = ?",
+                   (session["user_id"],))
+
+    db.commit()
+    return jsonify({
+        "streak": new_streak,
+        "coins_earned": coins_earned,
+        "coins": user["coins"] + coins_earned,
+    })
 
 
 @app.route("/api/shop")
