@@ -45,6 +45,117 @@
     50% { transform: scale(1.3); }
   }
 
+  /* Streak progress bar */
+  .streak-bar {
+    width: 100%;
+    max-width: 560px;
+    padding: 0 20px;
+    margin-top: -4px;
+    margin-bottom: 4px;
+  }
+  .streak-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .streak-label {
+    font-size: 12px;
+    color: rgba(255,255,255,0.7);
+    font-weight: 600;
+  }
+  .streak-reward {
+    font-size: 12px;
+    color: #fbd38d;
+    font-weight: 700;
+  }
+  .streak-track {
+    position: relative;
+    height: 10px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 5px;
+    overflow: visible;
+  }
+  .streak-fill {
+    height: 100%;
+    border-radius: 5px;
+    background: linear-gradient(90deg, #68d391, #f6e05e, #fc8181);
+    transition: width 0.4s ease-out;
+    position: relative;
+    z-index: 1;
+  }
+  .streak-markers {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 100%;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .streak-marker {
+    position: absolute;
+    top: -6px;
+    width: 2px;
+    height: 22px;
+    background: rgba(255,255,255,0.5);
+    transform: translateX(-1px);
+  }
+  .streak-marker-label {
+    position: absolute;
+    top: 18px;
+    font-size: 9px;
+    color: rgba(255,255,255,0.5);
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .streak-marker.reached .streak-marker-label {
+    color: #fbd38d;
+  }
+  .streak-marker.reached {
+    background: #fbd38d;
+  }
+
+  /* Homework streak bar overrides (light background) */
+  .hw-streak-bar {
+    max-width: 100%;
+    padding: 0;
+    margin: 4px 0 8px;
+  }
+  .hw-streak-bar .streak-label {
+    color: #4a5568;
+  }
+  .hw-streak-bar .streak-track {
+    background: #e2e8f0;
+  }
+  .hw-streak-bar .streak-marker {
+    background: rgba(0,0,0,0.2);
+  }
+  .hw-streak-bar .streak-marker-label {
+    color: #718096;
+  }
+  .hw-streak-bar .streak-marker.reached {
+    background: #d69e2e;
+  }
+  .hw-streak-bar .streak-marker.reached .streak-marker-label {
+    color: #d69e2e;
+  }
+
+  /* Star burst celebration */
+  .star-burst {
+    position: fixed;
+    font-size: 28px;
+    pointer-events: none;
+    z-index: 10001;
+    animation: starFloat 1.5s ease-out forwards;
+  }
+  @keyframes starFloat {
+    0% { opacity: 1; transform: scale(0.3) translateY(0); }
+    30% { opacity: 1; transform: scale(1.2) translateY(-30px); }
+    100% { opacity: 0; transform: scale(0.6) translateY(-120px); }
+  }
+
   /* Main card */
   .card {
     background: #fff;
@@ -1045,6 +1156,16 @@
       <div class="hw-quiz-timer" id="hwQuizTimer">00:00</div>
     </div>
     <div class="hw-quiz-bar"><div class="hw-quiz-bar-fill" id="hwQuizBarFill" style="width:0%"></div></div>
+    <div class="streak-bar hw-streak-bar" id="hwStreakBar">
+      <div class="streak-info">
+        <span class="streak-label" id="hwStreakLabel">下一奖励: --</span>
+        <span class="streak-reward" id="hwStreakReward"></span>
+      </div>
+      <div class="streak-track">
+        <div class="streak-fill" id="hwStreakFill" style="width:0%"></div>
+        <div class="streak-markers" id="hwStreakMarkers"></div>
+      </div>
+    </div>
     <div class="hw-quiz-question-area" id="hwQuizQuestionArea"></div>
     <div class="hw-quiz-options" id="hwQuizOptionsArea"></div>
     <div class="hw-quiz-hint" id="hwQuizHint"></div>
@@ -1081,6 +1202,16 @@
     <div class="score-box" id="scoreBox">得分: 0</div>
     <div class="coins-box" id="coinsBox" style="display:none">金币: 0</div>
     <div class="combo-box" id="comboBox">连击: 0</div>
+  </div>
+  <div class="streak-bar" id="streakBar">
+    <div class="streak-info">
+      <span class="streak-label" id="streakLabel">下一奖励: --</span>
+      <span class="streak-reward" id="streakReward"></span>
+    </div>
+    <div class="streak-track">
+      <div class="streak-fill" id="streakFill" style="width:0%"></div>
+      <div class="streak-markers" id="streakMarkers"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -1278,6 +1409,8 @@ function reportStreak(correct) {
       state.coins = data.coins;
       document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
       showCoinNotification(data.coins_earned, data.streak);
+      spawnConfetti();
+      spawnStarBurst();
     }
   }).catch(() => {});
 }
@@ -1288,6 +1421,21 @@ function showCoinNotification(coins, streak) {
   el.innerHTML = `🪙 +${coins} 金币! (连击${streak})`;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2500);
+}
+
+function spawnStarBurst() {
+  const icons = ["⭐", "🌟", "✨", "💫", "🎉", "🏆"];
+  for (let i = 0; i < 12; i++) {
+    const el = document.createElement("div");
+    el.className = "star-burst";
+    el.textContent = icons[Math.floor(Math.random() * icons.length)];
+    el.style.left = (20 + Math.random() * 60) + "%";
+    el.style.top = (30 + Math.random() * 30) + "%";
+    el.style.animationDelay = (Math.random() * 0.6) + "s";
+    el.style.animationDuration = (1 + Math.random() * 0.8) + "s";
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2500);
+  }
 }
 
 
@@ -1308,8 +1456,13 @@ async function checkLogin() {
 
 async function loadCoins() {
   if (!state.user) return;
-  const res = await fetch("/api/coins");
-  const data = await res.json();
+  const [coinRes, shopRes] = await Promise.all([
+    fetch("/api/coins"),
+    fetch("/api/shop"),
+  ]);
+  const data = await coinRes.json();
+  const shopData = await shopRes.json();
+  if (shopData.coin_rules) COIN_MILESTONES = shopData.coin_rules;
   if (!data.error) {
     state.coins = data.coins;
     state.gameMinutes = data.game_minutes || 0;
@@ -2453,6 +2606,50 @@ function recordWrongAnswer(q) {
 function updateScoreboard() {
   document.getElementById("scoreBox").textContent = `得分: ${state.score}`;
   document.getElementById("comboBox").textContent = `连击: ${state.combo}`;
+  updateStreakBar();
+}
+
+function getStreakMilestones() {
+  const isWriting = state.mode === "dictation_handwrite";
+  const milestones = isWriting ? COIN_MILESTONES.writing : COIN_MILESTONES.recognition;
+  return (milestones || []).slice().sort((a, b) => a.streak - b.streak);
+}
+
+function updateStreakBar() {
+  const milestones = getStreakMilestones();
+  if (!milestones.length) return;
+
+  const combo = state.combo;
+  const maxStreak = milestones[milestones.length - 1].streak;
+  // Find next unreached milestone
+  const nextMilestone = milestones.find(m => m.streak > combo);
+  const prevMilestone = [...milestones].reverse().find(m => m.streak <= combo);
+
+  // Progress calculation: track extends a bit beyond last milestone
+  const trackMax = maxStreak * 1.1;
+  const fillPct = Math.min(combo / trackMax * 100, 100);
+  document.getElementById("streakFill").style.width = fillPct + "%";
+
+  // Label
+  const label = document.getElementById("streakLabel");
+  const reward = document.getElementById("streakReward");
+  if (nextMilestone) {
+    label.textContent = `连击 ${combo}/${nextMilestone.streak}`;
+    reward.textContent = `🪙 ${nextMilestone.coins} 币`;
+  } else {
+    label.textContent = `连击 ${combo} ✓ 全部达成!`;
+    reward.textContent = "";
+  }
+
+  // Milestone markers
+  const markers = document.getElementById("streakMarkers");
+  markers.innerHTML = milestones.map(m => {
+    const pos = m.streak / trackMax * 100;
+    const reached = combo >= m.streak;
+    return `<div class="streak-marker ${reached ? 'reached' : ''}" style="left:${pos}%">
+      <span class="streak-marker-label">${m.streak}<br>🪙${m.coins}</span>
+    </div>`;
+  }).join("");
 }
 
 // --- TTS (edge-tts via server) ---
@@ -2499,6 +2696,68 @@ document.addEventListener("visibilitychange", () => {
 // =============================================
 const HW_TYPE_LABELS = { recognition: "认字", writing: "写字" };
 function gradeShort(g) { return g ? g[0] + g[g.length - 1] : ""; }
+
+// Homework persistent streak (stored per-user on server, same as game)
+let hwStreak = 0;
+
+function getHwStreakMilestones() {
+  const isWriting = hwQuiz.type === "writing";
+  const milestones = isWriting ? COIN_MILESTONES.writing : COIN_MILESTONES.recognition;
+  return (milestones || []).slice().sort((a, b) => a.streak - b.streak);
+}
+
+function updateHwStreakBar() {
+  const milestones = getHwStreakMilestones();
+  if (!milestones.length) return;
+
+  const combo = hwStreak;
+  const maxStreak = milestones[milestones.length - 1].streak;
+  const trackMax = maxStreak * 1.1;
+  const fillPct = Math.min(combo / trackMax * 100, 100);
+  document.getElementById("hwStreakFill").style.width = fillPct + "%";
+
+  const label = document.getElementById("hwStreakLabel");
+  const reward = document.getElementById("hwStreakReward");
+  const nextMilestone = milestones.find(m => m.streak > combo);
+  if (nextMilestone) {
+    label.textContent = `连击 ${combo}/${nextMilestone.streak}`;
+    reward.textContent = `🪙 ${nextMilestone.coins} 币`;
+  } else {
+    label.textContent = `连击 ${combo} ✓ 全部达成!`;
+    reward.textContent = "";
+  }
+
+  const markers = document.getElementById("hwStreakMarkers");
+  markers.innerHTML = milestones.map(m => {
+    const pos = m.streak / trackMax * 100;
+    const reached = combo >= m.streak;
+    return `<div class="streak-marker ${reached ? 'reached' : ''}" style="left:${pos}%">
+      <span class="streak-marker-label">${m.streak}<br>🪙${m.coins}</span>
+    </div>`;
+  }).join("");
+}
+
+function reportHwStreak(correct) {
+  if (!state.user) return;
+  const mode = hwQuiz.type === "writing" ? "dictation_handwrite" : "char_to_pinyin";
+  if (correct) hwStreak++; else hwStreak = 0;
+  updateHwStreakBar();
+  fetch("/api/streak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ correct, mode }),
+  }).then(r => r.json()).then(data => {
+    hwStreak = data.streak;
+    updateHwStreakBar();
+    if (data.coins_earned > 0) {
+      state.coins = data.coins;
+      document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
+      showCoinNotification(data.coins_earned, data.streak);
+      spawnConfetti();
+      spawnStarBurst();
+    }
+  }).catch(() => {});
+}
 
 let hwQuiz = {
   assignmentId: null,
@@ -2709,6 +2968,15 @@ async function startHwQuiz(assignmentId) {
   clearInterval(hwQuiz.timerInterval);
   hwQuiz.timerInterval = setInterval(updateHwTimer, 1000);
 
+  // Load persistent streak for this homework type
+  try {
+    const coinRes = await fetch("/api/coins");
+    const coinData = await coinRes.json();
+    const isWriting = data.type === "writing";
+    hwStreak = isWriting ? (coinData.writing_streak || 0) : (coinData.recognition_streak || 0);
+  } catch (e) { hwStreak = 0; }
+  updateHwStreakBar();
+
   showHwQuizQuestion();
 }
 
@@ -2804,11 +3072,13 @@ function hwQuizAnswer(selected, correctIdx) {
       hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
     }
+    reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
     btns[selected].classList.add("wrong");
     btns[correctIdx].classList.add("reveal");
+    reportHwStreak(false);
     // Track retry count for this question
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
