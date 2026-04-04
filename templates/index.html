@@ -1038,6 +1038,69 @@
   .hw-quiz-canvas-btns button:hover { border-color: #667eea; }
   .hw-quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
 
+  /* Pinyin four-line grid (拼音四线格) */
+  .pinyin-grid-wrap {
+    display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;
+  }
+  .pinyin-grid-box {
+    position: relative; width: 100%; max-width: 400px; height: 80px;
+    border: 2px solid #e2e8f0; border-radius: 12px; overflow: hidden;
+    background: #fff;
+  }
+  .pinyin-grid-lines {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none;
+  }
+  .pinyin-grid-lines .line {
+    position: absolute; left: 0; right: 0; height: 1px;
+  }
+  .pinyin-grid-lines .line-1 { top: 20%; background: #e2e8f0; }
+  .pinyin-grid-lines .line-2 { top: 40%; background: #cbd5e0; }
+  .pinyin-grid-lines .line-3 { top: 60%; background: #e2e8f0; }
+  .pinyin-grid-lines .line-4 { top: 80%; background: #a0aec0; border-top: 2px solid #a0aec0; height: 0; }
+  .pinyin-input {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%; border: none; outline: none;
+    background: transparent; font-size: 36px; font-weight: 700;
+    text-align: center; color: #2d3748; padding: 0 12px;
+    font-family: "Times New Roman", "STSong", serif;
+    line-height: 80px;
+  }
+  .pinyin-input::placeholder { color: #cbd5e0; font-size: 20px; }
+  .pinyin-submit-btn {
+    padding: 10px 32px; border: none; border-radius: 10px;
+    background: #667eea; color: #fff; font-size: 16px; font-weight: 700;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .pinyin-submit-btn:hover { background: #5a67d8; }
+  .pinyin-submit-btn:disabled { background: #a0aec0; cursor: default; }
+  .pinyin-correct-show {
+    margin-top: 4px; font-size: 28px; font-weight: 700; color: #38a169;
+    font-family: "Times New Roman", "STSong", serif;
+  }
+
+  /* Preview button */
+  .hw-card-preview {
+    display: inline-block; margin-top: 8px; padding: 6px 16px;
+    border: 1px solid #667eea; border-radius: 8px;
+    background: #f7f8ff; color: #667eea; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .hw-card-preview:hover { background: #667eea; color: #fff; }
+
+  /* Coin ineligible hint */
+  .coin-ineligible-hint {
+    font-size: 12px; color: #a0aec0; text-align: center; margin-top: 4px;
+  }
+
+  /* Admin daily log */
+  .admin-daily-log { max-height: 400px; overflow-y: auto; font-size: 13px; }
+  .admin-daily-log .day-header {
+    font-weight: 700; color: #2d3748; padding: 8px 0 4px; border-bottom: 1px solid #e2e8f0;
+  }
+  .admin-daily-log .day-item {
+    padding: 2px 0 2px 12px; color: #4a5568; font-size: 12px;
+  }
+
   /* Homework result */
   .hw-result-section {
     width: 90%; max-width: 660px;
@@ -1290,6 +1353,7 @@
         <button class="admin-tab active" onclick="switchAdminTab('rules')">游戏规则</button>
         <button class="admin-tab" onclick="switchAdminTab('homework')">布置作业</button>
         <button class="admin-tab" onclick="switchAdminTab('users')">用户进度</button>
+        <button class="admin-tab" onclick="switchAdminTab('dailylog')">每日记录</button>
       </div>
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 24px 24px">
@@ -1336,6 +1400,23 @@
         <div class="admin-section">
           <h3>用户记录查询</h3>
           <div class="admin-item-list" id="adminUserList" style="max-height:none"></div>
+        </div>
+      </div>
+      <!-- Tab: 每日记录 -->
+      <div class="admin-tab-content hidden" id="adminTabDailylog">
+        <div class="admin-section">
+          <h3>用户每日活动记录</h3>
+          <div class="admin-row" style="margin-bottom:12px;gap:6px">
+            <select id="dailyLogUserId" class="admin-input" style="max-width:140px" onchange="loadDailyLog()">
+              <option value="">选择用户</option>
+            </select>
+            <select id="dailyLogDays" class="admin-input" style="max-width:100px" onchange="loadDailyLog()">
+              <option value="7">最近7天</option>
+              <option value="14" selected>最近14天</option>
+              <option value="30">最近30天</option>
+            </select>
+          </div>
+          <div id="adminDailyLogContent" class="admin-daily-log"></div>
         </div>
       </div>
     </div>
@@ -1403,7 +1484,7 @@ function reportStreak(correct) {
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ correct, mode: state.mode }),
+    body: JSON.stringify({ correct, mode: state.mode, grade: state.grade }),
   }).then(r => r.json()).then(data => {
     if (data.coins_earned > 0) {
       state.coins = data.coins;
@@ -1767,8 +1848,9 @@ function switchAdminTab(tab) {
   document.querySelector(`.admin-tab[onclick*="${tab}"]`).classList.add("active");
   // Show/hide content
   document.querySelectorAll(".admin-tab-content").forEach(el => el.classList.add("hidden"));
-  const tabMap = { rules: "adminTabRules", homework: "adminTabHomework", users: "adminTabUsers" };
+  const tabMap = { rules: "adminTabRules", homework: "adminTabHomework", users: "adminTabUsers", dailylog: "adminTabDailylog" };
   document.getElementById(tabMap[tab]).classList.remove("hidden");
+  if (tab === "dailylog") initDailyLogTab();
 }
 
 async function showAdminPanel() {
@@ -1946,17 +2028,22 @@ async function showUserDetail(userId, username) {
   }
 
   // Wrong answers
-  html += '<h3 style="font-size:15px;margin:16px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">错题记录 <span style="font-size:12px;color:#a0aec0">(' + data.wrong_answers.length + '题)</span></h3>';
-  if (data.wrong_answers.length === 0) {
+  const wrongTotal = data.wrong_answers.length;
+  const wrongShow = data.wrong_answers.slice(0, 10);
+  html += '<h3 style="font-size:15px;margin:16px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">错题记录 <span style="font-size:12px;color:#a0aec0">(' + wrongTotal + '题)</span></h3>';
+  if (wrongTotal === 0) {
     html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无错题</div>';
   } else {
     html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
     html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">字/词</th><th>拼音</th><th>组词</th><th>模式</th><th>复习次数</th><th>日期</th></tr>';
-    data.wrong_answers.forEach(w => {
+    wrongShow.forEach(w => {
       const rcColor = w.review_count === 0 ? '#e53e3e' : w.review_count >= 2 ? '#38a169' : '#d69e2e';
       html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px;font-size:18px;font-weight:700">${w.character}</td><td>${w.pinyin}</td><td style="font-size:12px">${w.words}</td><td style="text-align:center;font-size:12px">${modeLabels[w.mode] || w.mode}</td><td style="text-align:center;color:${rcColor};font-weight:700">${w.review_count}</td><td style="font-size:12px">${w.date}</td></tr>`;
     });
     html += '</table></div>';
+    if (wrongTotal > 10) {
+      html += `<div style="text-align:center;margin-top:8px"><a href="/admin/user/${userId}/wrong" target="_blank" style="color:#5a67d8;font-weight:600;font-size:14px">查看全部 ${wrongTotal} 条错题 →</a></div>`;
+    }
   }
 
   // Mastered
@@ -2112,6 +2199,67 @@ async function repeatAssignment(assignmentId) {
   if (data.error) { alert(data.error); return; }
   alert("已设置明天重复该作业");
   await loadAdminHomework();
+}
+
+// --- Admin Daily Log ---
+let dailyLogInited = false;
+async function initDailyLogTab() {
+  if (dailyLogInited) return;
+  dailyLogInited = true;
+  const userRes = await fetch("/api/admin/users");
+  const userData = await userRes.json();
+  const sel = document.getElementById("dailyLogUserId");
+  sel.innerHTML = '<option value="">选择用户</option>';
+  (userData.users || []).forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u.id;
+    opt.textContent = u.username;
+    sel.appendChild(opt);
+  });
+}
+
+async function loadDailyLog() {
+  const userId = document.getElementById("dailyLogUserId").value;
+  const days = document.getElementById("dailyLogDays").value;
+  const content = document.getElementById("adminDailyLogContent");
+  if (!userId) { content.innerHTML = '<div style="color:#a0aec0;padding:16px;text-align:center">请选择用户</div>'; return; }
+
+  const res = await fetch(`/api/admin/user/${userId}/daily_log?days=${days}`);
+  const data = await res.json();
+  const log = data.daily_log || [];
+  if (log.length === 0) { content.innerHTML = '<div style="color:#a0aec0;padding:16px;text-align:center">暂无记录</div>'; return; }
+
+  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", dictation_handwrite: "看拼音写词语", pinyin_typing: "给汉字注音" };
+  let html = '';
+  log.forEach(day => {
+    html += `<div class="day-header">${day.date}</div>`;
+    if (day.homework.length > 0) {
+      day.homework.forEach(h => {
+        const tl = h.type === "recognition" ? "认字" : "写字";
+        const gs = h.grade ? (h.grade[0] + h.grade[h.grade.length-1]) : "";
+        if (h.status === "completed") {
+          const acc = h.total_questions > 0 ? Math.round(h.correct_answers / h.total_questions * 100) : 0;
+          const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
+          const mins = Math.floor(h.time_spent / 60); const secs = h.time_spent % 60;
+          html += `<div class="day-item">作业 ${gs}${tl}第${h.lesson_num}课: <span style="color:${accColor};font-weight:700">${acc}%</span> (${h.correct_answers}/${h.total_questions}) ${mins}分${secs}秒</div>`;
+        } else {
+          html += `<div class="day-item" style="color:#d69e2e">作业 ${gs}${tl}第${h.lesson_num}课: 未完成</div>`;
+        }
+      });
+    }
+    if (day.games.length > 0) {
+      day.games.forEach(g => {
+        const gs = g.grade ? (g.grade[0] + g.grade[g.grade.length-1]) : "";
+        const ml = modeLabels[g.mode] || g.mode;
+        const acc = g.total_questions > 0 ? Math.round(g.correct_answers / g.total_questions * 100) : 0;
+        html += `<div class="day-item">游戏 ${gs} ${ml}: ${g.total_questions}题 正确率${acc}% 得分${g.score}</div>`;
+      });
+    }
+    if (day.homework.length === 0 && day.games.length === 0) {
+      html += `<div class="day-item" style="color:#a0aec0">无活动</div>`;
+    }
+  });
+  content.innerHTML = html;
 }
 
 // --- Init ---
@@ -2731,7 +2879,8 @@ function updateHwStreakBar() {
 
 function reportHwStreak(correct) {
   if (!state.user) return;
-  const mode = hwQuiz.type === "writing" ? "dictation_handwrite" : "char_to_pinyin";
+  if (hwQuiz.isPreview) return; // no streak for preview
+  const mode = hwQuiz.type === "writing" ? "dictation_handwrite" : "pinyin_typing";
   if (correct) hwStreak++; else hwStreak = 0;
   updateHwStreakBar();
   fetch("/api/streak", {
@@ -2856,7 +3005,7 @@ async function loadHomeworkToday() {
     const isCompleted = a.status === "completed";
     const icon = type === "recognition" ? "📖" : "✍️";
     const typeLabel = HW_TYPE_LABELS[type];
-    const modeLabel = type === "recognition" ? "看字选拼音" : "看拼音写字";
+    const modeLabel = type === "recognition" ? "给汉字注音" : "看拼音写字";
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
@@ -2872,6 +3021,10 @@ async function loadHomeworkToday() {
         <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
     } else {
       html += `<div class="hw-card-status pending">${completedCount > 0 ? '继续下一课' : '待完成'}</div>`;
+    }
+    // Preview button for recognition homework
+    if (type === "recognition") {
+      html += `<button class="hw-card-preview" onclick="event.stopPropagation();startHwPreview(${a.id})">预习</button>`;
     }
     html += `</div>`;
   }
@@ -2929,6 +3082,40 @@ async function loadHomeworkProgress() {
   }
 }
 
+// --- Preview Quiz (预习) ---
+async function startHwPreview(assignmentId) {
+  const res = await fetch(`/api/homework/preview/${assignmentId}`);
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  hwQuiz.assignmentId = null; // preview, not graded
+  hwQuiz.type = "preview";
+  hwQuiz.originalQuestions = data.questions;
+  hwQuiz.totalOriginal = data.questions.length;
+  hwQuiz.questions = data.questions.map((q, i) => ({ ...q, _origIndex: i }));
+  hwQuiz.currentIndex = 0;
+  hwQuiz.correctCount = 0;
+  hwQuiz.wrongItems = [];
+  hwQuiz.startTime = Date.now();
+  hwQuiz.answering = false;
+  hwQuiz.answeredCorrectly = new Set();
+  hwQuiz.retryMap = {};
+  hwQuiz.isPreview = true;
+
+  document.getElementById("hwTodaySection").style.display = "none";
+  document.getElementById("hwProgressSection").style.display = "none";
+  document.getElementById("hwHistorySection").style.display = "none";
+  document.getElementById("hwResultSection").style.display = "none";
+  document.getElementById("hwQuizSection").style.display = "";
+
+  clearInterval(hwQuiz.timerInterval);
+  hwQuiz.timerInterval = setInterval(updateHwTimer, 1000);
+
+  // No streak bar for preview
+  document.getElementById("hwStreakBar").style.display = "none";
+  showHwQuizQuestion();
+}
+
 // --- Homework Quiz ---
 async function startHwQuiz(assignmentId) {
   const res = await fetch(`/api/homework/start/${assignmentId}`);
@@ -2937,6 +3124,7 @@ async function startHwQuiz(assignmentId) {
 
   hwQuiz.assignmentId = assignmentId;
   hwQuiz.type = data.type;
+  hwQuiz.isPreview = false;
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
   // Build working queue: each question once, retries added dynamically
@@ -2955,6 +3143,7 @@ async function startHwQuiz(assignmentId) {
   document.getElementById("hwHistorySection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "";
+  document.getElementById("hwStreakBar").style.display = "";
 
   // Start timer
   clearInterval(hwQuiz.timerInterval);
@@ -2991,10 +3180,45 @@ function showHwQuizQuestion() {
   const area = document.getElementById("hwQuizQuestionArea");
   const opts = document.getElementById("hwQuizOptionsArea");
 
-  if (q.mode === "char_to_pinyin") {
+  if (q.mode === "pinyin_typing") {
+    // 给汉字注音 mode: show character, type pinyin in four-line grid
+    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char">${q.question}</div>`;
+    opts.style.display = "block";
+    opts.innerHTML = `<div class="pinyin-grid-wrap">
+      <div class="pinyin-grid-box">
+        <div class="pinyin-grid-lines">
+          <div class="line line-1"></div>
+          <div class="line line-2"></div>
+          <div class="line line-3"></div>
+          <div class="line line-4"></div>
+        </div>
+        <input type="text" class="pinyin-input" id="hwPinyinInput" placeholder="输入拼音" autocomplete="off" autocapitalize="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')hwPinyinSubmit()">
+      </div>
+      <button class="pinyin-submit-btn" id="hwPinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
+    </div>`;
+    setTimeout(() => {
+      const inp = document.getElementById("hwPinyinInput");
+      if (inp) inp.focus();
+    }, 100);
+  } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
     opts.style.display = "grid";
     // Re-shuffle options for retries
+    let options = [...q.options];
+    if (q._isRetry) {
+      for (let i = options.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [options[i], options[j]] = [options[j], options[i]];
+      }
+    }
+    const correctIdx = options.indexOf(q.answer);
+    opts.innerHTML = options.map((opt, i) =>
+      `<button class="hw-quiz-opt-btn" onclick="hwQuizAnswer(${i}, ${correctIdx})">${opt}</button>`
+    ).join("");
+  } else if (q.mode === "pinyin_to_char") {
+    area.innerHTML = `<div class="hw-quiz-label">请选择正确的汉字</div><div class="hw-quiz-pinyin">${q.question}</div>`;
+    opts.style.display = "grid";
     let options = [...q.options];
     if (q._isRetry) {
       for (let i = options.length - 1; i > 0; i--) {
@@ -3044,6 +3268,62 @@ function showHwQuizQuestion() {
   }
 
   hwQuiz.answering = true;
+}
+
+function normalizePinyin(s) {
+  // Normalize pinyin for comparison: lowercase, trim, normalize spaces
+  return s.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ü/g, 'v').replace(/\u00fc/g, 'v');
+}
+
+function hwPinyinSubmit() {
+  if (!hwQuiz.answering) return;
+  const input = document.getElementById("hwPinyinInput");
+  if (!input) return;
+  const userAnswer = input.value.trim();
+  if (!userAnswer) return;
+  hwQuiz.answering = false;
+
+  const q = hwQuiz.questions[hwQuiz.currentIndex];
+  const hint = document.getElementById("hwQuizHint");
+  const btn = document.getElementById("hwPinyinSubmitBtn");
+  btn.disabled = true;
+  input.disabled = true;
+
+  // Compare pinyin (case-insensitive, normalize spaces)
+  const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
+  const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
+
+  if (isCorrect) {
+    input.style.color = "#38a169";
+    if (!hwQuiz.answeredCorrectly.has(qKey)) {
+      hwQuiz.correctCount++;
+      hwQuiz.answeredCorrectly.add(qKey);
+    }
+    reportHwStreak(true);
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    setTimeout(nextHwQuestion, 800);
+  } else {
+    input.style.color = "#e53e3e";
+    reportHwStreak(false);
+    const retryCount = hwQuiz.retryMap[qKey] || 0;
+    if (retryCount === 0) {
+      hwQuiz.wrongItems.push({
+        character: q.display_char || q.question,
+        pinyin: q.display_pinyin || q.answer,
+        words: q.word_hint || "",
+        mode: q.mode,
+      });
+    }
+    hwQuiz.retryMap[qKey] = retryCount + 1;
+    if (retryCount + 1 <= 2) {
+      const retryQ = { ...q, _isRetry: true };
+      hwQuiz.questions.splice(hwQuiz.currentIndex + 1, 0, retryQ);
+    }
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你的答案: ${userAnswer}
+      <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
+      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
+  }
 }
 
 function hwQuizAnswer(selected, correctIdx) {
@@ -3147,6 +3427,31 @@ async function finishHwQuiz() {
   clearInterval(hwQuiz.timerInterval);
   const timeSpent = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
 
+  // Preview mode: no server submission
+  if (hwQuiz.isPreview) {
+    document.getElementById("hwQuizSection").style.display = "none";
+    document.getElementById("hwResultSection").style.display = "";
+    const total = hwQuiz.totalOriginal;
+    const correct = hwQuiz.correctCount;
+    const acc = Math.round(correct / total * 100);
+    const mins = Math.floor(timeSpent / 60);
+    const secs = timeSpent % 60;
+    document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : "📖";
+    document.getElementById("hwResultTitle").textContent = "预习完成!";
+    document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
+    const wrongDiv = document.getElementById("hwResultWrong");
+    if (hwQuiz.wrongItems.length > 0) {
+      wrongDiv.innerHTML = `<h4>需要复习 (${hwQuiz.wrongItems.length}个):</h4>
+        <div class="hw-result-wrong-list">
+          ${hwQuiz.wrongItems.map(w => `<div class="hw-result-wrong-item"><span class="char">${w.character}</span> ${w.pinyin}</div>`).join("")}
+        </div>`;
+    } else {
+      wrongDiv.innerHTML = `<div style="color:#38a169;font-weight:600;margin:12px 0">全部正确!</div>`;
+    }
+    document.getElementById("hwResultActions").innerHTML = `<button class="hw-result-btn" onclick="hwBackToToday()">返回</button>`;
+    return;
+  }
+
   const res = await fetch("/api/homework/submit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3222,7 +3527,7 @@ function startHwReview() {
   // Build review questions from hwReviewItems
   const questions = [];
   hwReviewItems.forEach(item => {
-    if (item.mode === "char_to_pinyin" || item.mode === "listen_to_char") {
+    if (item.mode === "char_to_pinyin" || item.mode === "listen_to_char" || item.mode === "pinyin_typing") {
       // Recognition review: show char, pick pinyin
       questions.push({
         mode: "char_to_pinyin",

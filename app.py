@@ -104,6 +104,20 @@ def _build_homework_lessons():
                 lessons[ln] = {"识字": shizi, "词语": ciyu}
             HOMEWORK_LESSONS[grade] = lessons
 
+    # Build combined recognition pool per lesson (识字表 + 写字表 all entries)
+    for grade, lessons in HOMEWORK_LESSONS.items():
+        for ln, data in lessons.items():
+            combined = list(data.get("识字", []))
+            for entry in data.get("词语", []):
+                # Add individual characters from 词语 that aren't already in 识字
+                existing_chars = {e["word"] for e in combined}
+                if len(entry["word"]) == 1 and entry["word"] not in existing_chars:
+                    combined.append(entry)
+                elif len(entry["word"]) >= 2:
+                    # Also add multi-char words for pinyin annotation practice
+                    combined.append(entry)
+            data["认字"] = combined
+
 
 _build_homework_lessons()
 
@@ -1126,6 +1140,18 @@ def admin_user_details(user_id):
     })
 
 
+@app.route("/admin/user/<int:user_id>/wrong")
+def admin_user_wrong_page(user_id):
+    """Full-page view of a user's wrong answers (admin only)."""
+    if not session.get("is_admin"):
+        return redirect(url_for("index"))
+    db = get_db()
+    user = db.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not user:
+        return redirect(url_for("index"))
+    return render_template("admin_wrong.html", user_id=user_id, username=user["username"])
+
+
 @app.route("/api/admin/settings", methods=["GET", "POST"])
 def admin_settings():
     if not session.get("is_admin"):
@@ -1185,6 +1211,44 @@ def coins_api():
     })
 
 
+def _check_coin_eligible(db, user_id, mode, game_grade):
+    """Check if a game at given grade is eligible for coin awards.
+
+    Anti-cheating: prevent farming easy levels.
+    - Recognition (认字): max 2 books back from current homework level
+    - Writing (写字): max 4 books back from current homework level
+    - Other modes (listen, speed tests): no coin awards from games
+    Returns True if coins should be awarded.
+    """
+    if not game_grade:
+        return True  # homework mode, no grade check needed
+
+    # Only recognition and writing modes earn coins
+    is_writing = mode == "dictation_handwrite"
+    is_recognition = mode in ("char_to_pinyin", "pinyin_to_char", "pinyin_typing")
+    if not is_writing and not is_recognition:
+        return False  # listen_to_char and other speed modes: no coins
+
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    if not plan:
+        return True  # no homework plan, allow freely
+
+    if is_recognition:
+        hw_grade = plan["recognition_grade"] or plan["grade"]
+        max_books_back = 2
+    else:
+        hw_grade = plan["writing_grade"] or plan["grade"]
+        max_books_back = 4
+
+    hw_idx = GRADE_ORDER.index(hw_grade) if hw_grade in GRADE_ORDER else 0
+    game_idx = GRADE_ORDER.index(game_grade) if game_grade in GRADE_ORDER else 0
+    # game_grade must be within max_books_back of hw_grade
+    return game_idx >= hw_idx - max_books_back
+
+
 @app.route("/api/streak", methods=["POST"])
 def streak_update():
     """Update persistent streak on each answer. Awards coins at milestones."""
@@ -1197,6 +1261,7 @@ def streak_update():
 
     correct = data.get("correct", False)
     mode = data.get("mode", "")
+    game_grade = data.get("grade", "")  # grade of the game being played
     is_writing = mode == "dictation_handwrite"
     streak_col = "writing_streak" if is_writing else "recognition_streak"
     awarded_col = "writing_coins_awarded" if is_writing else "recognition_coins_awarded"
@@ -1207,15 +1272,23 @@ def streak_update():
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
+    # Check if this game grade is eligible for coin awards
+    coin_eligible = _check_coin_eligible(db, session["user_id"], mode, game_grade)
+
     coins_earned = 0
     if correct:
         new_streak = user[streak_col] + 1
-        total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
-        coins_earned = total_coins_at_streak - user[awarded_col]
-        if coins_earned > 0:
-            db.execute(f"UPDATE users SET {streak_col} = ?, {awarded_col} = ?, coins = coins + ? WHERE id = ?",
-                       (new_streak, total_coins_at_streak, coins_earned, session["user_id"]))
+        if coin_eligible:
+            total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
+            coins_earned = total_coins_at_streak - user[awarded_col]
+            if coins_earned > 0:
+                db.execute(f"UPDATE users SET {streak_col} = ?, {awarded_col} = ?, coins = coins + ? WHERE id = ?",
+                           (new_streak, total_coins_at_streak, coins_earned, session["user_id"]))
+            else:
+                db.execute(f"UPDATE users SET {streak_col} = ? WHERE id = ?",
+                           (new_streak, session["user_id"]))
         else:
+            # Still update streak display but no coins
             db.execute(f"UPDATE users SET {streak_col} = ? WHERE id = ?",
                        (new_streak, session["user_id"]))
     else:
@@ -1228,6 +1301,7 @@ def streak_update():
         "streak": new_streak,
         "coins_earned": coins_earned,
         "coins": user["coins"] + coins_earned,
+        "coin_eligible": coin_eligible,
     })
 
 
@@ -1442,30 +1516,25 @@ def homework_start(assignment_id):
 
     questions = []
     if hw_type == "recognition":
-        entries = lesson_data.get("识字", [])
+        # Use combined 认字 pool (识字表 + 写字表)
+        entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
         if not entries:
             return jsonify({"error": "该课暂无识字数据"}), 400
-        # Build character list for distractors
         all_chars = CHARACTERS.get(grade, [])
         for entry in entries:
-            correct = {"char": entry["word"], "pinyin": entry["pinyin"], "words": []}
-            # Find words from CHARACTERS if available
+            word_hint_list = []
             for c in all_chars:
                 if c["char"] == entry["word"]:
-                    correct["words"] = c.get("words", [])
+                    word_hint_list = c.get("words", [])
                     break
-            others = [c for c in all_chars if c["char"] != correct["char"]]
-            # Recognition homework uses char_to_pinyin mode (看字选拼音)
-            mode = "char_to_pinyin"
-            distractors = _pick_distractors(correct, others, key="pinyin")
-            options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
-            random.shuffle(options)
+            # Recognition homework uses pinyin typing mode (给汉字注音)
             questions.append({
-                "mode": mode, "question": correct["char"],
-                "options": options, "correct_index": options.index(correct["pinyin"]),
-                "answer": correct["pinyin"],
-                "word_hint": "、".join(correct["words"]),
-                "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+                "mode": "pinyin_typing",
+                "question": entry["word"],
+                "answer": entry["pinyin"],
+                "word_hint": "、".join(word_hint_list),
+                "display_char": entry["word"],
+                "display_pinyin": entry["pinyin"],
             })
         random.shuffle(questions)
     elif hw_type == "writing":
@@ -1484,6 +1553,74 @@ def homework_start(assignment_id):
     return jsonify({
         "assignment_id": assignment_id,
         "type": hw_type,
+        "grade": grade,
+        "lesson_num": lesson_num,
+        "questions": questions,
+        "total": len(questions),
+    })
+
+
+@app.route("/api/homework/preview/<int:assignment_id>")
+def homework_preview(assignment_id):
+    """Generate preview (预习) questions for a homework assignment.
+    Uses game modes: char_to_pinyin and pinyin_to_char for recognition lessons."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    assignment = db.execute(
+        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        (assignment_id, session["user_id"]),
+    ).fetchone()
+    if not assignment:
+        return jsonify({"error": "作业不存在"}), 404
+
+    grade = assignment["grade"]
+    lesson_num = assignment["lesson_num"]
+    lessons = HOMEWORK_LESSONS.get(grade, {})
+    lesson_data = lessons.get(lesson_num, {})
+
+    # Build preview questions from 认字 pool using game modes
+    entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
+    if not entries:
+        return jsonify({"error": "该课暂无数据"}), 400
+
+    all_chars = CHARACTERS.get(grade, [])
+    questions = []
+    for entry in entries:
+        correct = {"char": entry["word"], "pinyin": entry["pinyin"], "words": []}
+        for c in all_chars:
+            if c["char"] == entry["word"]:
+                correct["words"] = c.get("words", [])
+                break
+        others = [c for c in all_chars if c["char"] != correct["char"]]
+
+        # Mode 1: 看字选拼音
+        distractors = _pick_distractors(correct, others, key="pinyin")
+        options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
+        random.shuffle(options)
+        questions.append({
+            "mode": "char_to_pinyin", "question": correct["char"],
+            "options": options, "correct_index": options.index(correct["pinyin"]),
+            "answer": correct["pinyin"],
+            "word_hint": "、".join(correct["words"]),
+            "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+        })
+
+        # Mode 2: 看拼音选字
+        distractors2 = _pick_distractors(correct, others, key="char")
+        options2 = [correct["char"]] + [d["char"] for d in distractors2]
+        random.shuffle(options2)
+        questions.append({
+            "mode": "pinyin_to_char", "question": correct["pinyin"],
+            "options": options2, "correct_index": options2.index(correct["char"]),
+            "answer": correct["char"],
+            "word_hint": "、".join(correct["words"]),
+            "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+        })
+
+    random.shuffle(questions)
+    return jsonify({
+        "assignment_id": assignment_id,
         "grade": grade,
         "lesson_num": lesson_num,
         "questions": questions,
@@ -1790,6 +1927,51 @@ def admin_homework_overview():
             grades_info.append({"grade": g, "short": grade_short_name(g), "total_lessons": len(HOMEWORK_LESSONS[g])})
 
     return jsonify({"users": result, "grades": grades_info})
+
+
+@app.route("/api/admin/user/<int:user_id>/daily_log")
+def admin_user_daily_log(user_id):
+    """Get daily activity log for a user (homework + game sessions)."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    days = int(request.args.get("days", 14))
+    start_date = (date.today() - timedelta(days=days)).isoformat()
+
+    # Homework records
+    hw_rows = db.execute(
+        """SELECT date, type, grade, lesson_num, status, total_questions, correct_answers, time_spent
+           FROM daily_assignments WHERE user_id = ? AND date >= ?
+           ORDER BY date DESC, type""",
+        (user_id, start_date),
+    ).fetchall()
+
+    # Game session records (scores)
+    game_rows = db.execute(
+        """SELECT DATE(created_at) as date, grade, mode, total_questions, correct_answers, score
+           FROM scores WHERE user_id = ? AND DATE(created_at) >= ?
+           ORDER BY created_at DESC""",
+        (user_id, start_date),
+    ).fetchall()
+
+    # Group by date
+    daily_log = {}
+    for row in hw_rows:
+        d = row["date"]
+        if d not in daily_log:
+            daily_log[d] = {"date": d, "homework": [], "games": []}
+        daily_log[d]["homework"].append(dict(row))
+
+    for row in game_rows:
+        d = row["date"]
+        if d not in daily_log:
+            daily_log[d] = {"date": d, "homework": [], "games": []}
+        daily_log[d]["games"].append(dict(row))
+
+    # Sort by date descending
+    result = sorted(daily_log.values(), key=lambda x: x["date"], reverse=True)
+    return jsonify({"daily_log": result})
 
 
 @app.route("/api/tts")

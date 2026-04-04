@@ -407,7 +407,24 @@ function showQuizQuestion() {
   const area = document.getElementById("quizQuestionArea");
   const opts = document.getElementById("quizOptionsArea");
 
-  if (q.mode === "char_to_pinyin") {
+  if (q.mode === "pinyin_typing") {
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="quiz-char">${q.question}</div>`;
+    opts.style.display = "block";
+    opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+      <div style="position:relative;width:100%;max-width:400px;height:80px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff">
+        <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">
+          <div style="position:absolute;left:0;right:0;height:1px;top:20%;background:#e2e8f0"></div>
+          <div style="position:absolute;left:0;right:0;height:1px;top:40%;background:#cbd5e0"></div>
+          <div style="position:absolute;left:0;right:0;height:1px;top:60%;background:#e2e8f0"></div>
+          <div style="position:absolute;left:0;right:0;height:0;top:80%;border-top:2px solid #a0aec0"></div>
+        </div>
+        <input type="text" id="pinyinInput" style="position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;border:none;outline:none;background:transparent;font-size:36px;font-weight:700;text-align:center;color:#2d3748;font-family:'Times New Roman','STSong',serif;line-height:80px;padding:0 12px" placeholder="输入拼音" autocomplete="off" autocapitalize="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')pinyinSubmit()">
+      </div>
+      <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" style="padding:10px 32px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:16px;font-weight:700;cursor:pointer">确认</button>
+    </div>`;
+    setTimeout(() => { const inp = document.getElementById("pinyinInput"); if (inp) inp.focus(); }, 100);
+  } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
     opts.style.display = "grid";
     opts.innerHTML = q.options.map((opt, i) =>
@@ -458,6 +475,43 @@ function showQuizQuestion() {
   }
 
   quiz.answering = true;
+}
+
+function normalizePinyin(s) {
+  return s.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ü/g, 'v').replace(/\u00fc/g, 'v');
+}
+
+function pinyinSubmit() {
+  if (!quiz.answering) return;
+  const input = document.getElementById("pinyinInput");
+  if (!input) return;
+  const userAnswer = input.value.trim();
+  if (!userAnswer) return;
+  quiz.answering = false;
+  const q = quiz.questions[quiz.currentIndex];
+  const hint = document.getElementById("quizHint");
+  input.disabled = true;
+  const btn = document.getElementById("pinyinSubmitBtn");
+  if (btn) btn.disabled = true;
+  const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
+  if (isCorrect) {
+    input.style.color = "#38a169";
+    quiz.correctCount++;
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    setTimeout(nextQuestion, 800);
+  } else {
+    input.style.color = "#e53e3e";
+    quiz.wrongItems.push({
+      character: q.display_char || q.question,
+      pinyin: q.display_pinyin || q.answer,
+      words: q.word_hint || "",
+      mode: q.mode,
+    });
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你的答案: ${userAnswer}
+      <br>正确答案: <strong style="font-size:28px;color:#38a169;font-family:'Times New Roman','STSong',serif">${q.answer}</strong>
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
+      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+  }
 }
 
 function quizAnswer(selected) {
