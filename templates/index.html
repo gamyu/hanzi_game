@@ -2615,39 +2615,51 @@ function getStreakMilestones() {
   return (milestones || []).slice().sort((a, b) => a.streak - b.streak);
 }
 
+function calcStreakBarState(combo, milestones) {
+  if (!milestones.length) return null;
+  const maxStreak = milestones[milestones.length - 1].streak;
+  // Cycle: after all milestones, reset bar and count towards next round
+  const cycle = Math.floor(combo / maxStreak);
+  const pos = combo % maxStreak;
+  // Shift milestones to absolute values for this cycle
+  const shifted = milestones.map(m => ({
+    streak: cycle * maxStreak + m.streak,
+    coins: m.coins,
+    local: m.streak,
+  }));
+  const nextMilestone = shifted.find(m => m.streak > combo);
+  const trackMax = maxStreak;
+  const fillPct = Math.min(pos / trackMax * 100, 100);
+  return { combo, pos, cycle, shifted, nextMilestone, trackMax, fillPct };
+}
+
 function updateStreakBar() {
   const milestones = getStreakMilestones();
-  if (!milestones.length) return;
+  const barState = calcStreakBarState(state.combo, milestones);
+  if (!barState) return;
+  renderStreakBarUI(barState, "streakFill", "streakLabel", "streakReward", "streakMarkers");
+}
 
-  const combo = state.combo;
-  const maxStreak = milestones[milestones.length - 1].streak;
-  // Find next unreached milestone
-  const nextMilestone = milestones.find(m => m.streak > combo);
-  const prevMilestone = [...milestones].reverse().find(m => m.streak <= combo);
+function renderStreakBarUI(s, fillId, labelId, rewardId, markersId) {
+  document.getElementById(fillId).style.width = s.fillPct + "%";
 
-  // Progress calculation: track extends a bit beyond last milestone
-  const trackMax = maxStreak * 1.1;
-  const fillPct = Math.min(combo / trackMax * 100, 100);
-  document.getElementById("streakFill").style.width = fillPct + "%";
-
-  // Label
-  const label = document.getElementById("streakLabel");
-  const reward = document.getElementById("streakReward");
-  if (nextMilestone) {
-    label.textContent = `连击 ${combo}/${nextMilestone.streak}`;
-    reward.textContent = `🪙 ${nextMilestone.coins} 币`;
+  const label = document.getElementById(labelId);
+  const reward = document.getElementById(rewardId);
+  if (s.nextMilestone) {
+    label.textContent = `连击 ${s.combo}/${s.nextMilestone.streak}`;
+    reward.textContent = `🪙 ${s.nextMilestone.coins} 币`;
   } else {
-    label.textContent = `连击 ${combo} ✓ 全部达成!`;
+    // Exactly at max — bar full, about to reset on next correct
+    label.textContent = `连击 ${s.combo} ✓ 达成!`;
     reward.textContent = "";
   }
 
-  // Milestone markers
-  const markers = document.getElementById("streakMarkers");
-  markers.innerHTML = milestones.map(m => {
-    const pos = m.streak / trackMax * 100;
-    const reached = combo >= m.streak;
+  const markers = document.getElementById(markersId);
+  markers.innerHTML = s.shifted.map(m => {
+    const pos = m.local / s.trackMax * 100;
+    const reached = s.combo >= m.streak;
     return `<div class="streak-marker ${reached ? 'reached' : ''}" style="left:${pos}%">
-      <span class="streak-marker-label">${m.streak}<br>🪙${m.coins}</span>
+      <span class="streak-marker-label">${m.local}<br>🪙${m.coins}</span>
     </div>`;
   }).join("");
 }
@@ -2708,33 +2720,9 @@ function getHwStreakMilestones() {
 
 function updateHwStreakBar() {
   const milestones = getHwStreakMilestones();
-  if (!milestones.length) return;
-
-  const combo = hwStreak;
-  const maxStreak = milestones[milestones.length - 1].streak;
-  const trackMax = maxStreak * 1.1;
-  const fillPct = Math.min(combo / trackMax * 100, 100);
-  document.getElementById("hwStreakFill").style.width = fillPct + "%";
-
-  const label = document.getElementById("hwStreakLabel");
-  const reward = document.getElementById("hwStreakReward");
-  const nextMilestone = milestones.find(m => m.streak > combo);
-  if (nextMilestone) {
-    label.textContent = `连击 ${combo}/${nextMilestone.streak}`;
-    reward.textContent = `🪙 ${nextMilestone.coins} 币`;
-  } else {
-    label.textContent = `连击 ${combo} ✓ 全部达成!`;
-    reward.textContent = "";
-  }
-
-  const markers = document.getElementById("hwStreakMarkers");
-  markers.innerHTML = milestones.map(m => {
-    const pos = m.streak / trackMax * 100;
-    const reached = combo >= m.streak;
-    return `<div class="streak-marker ${reached ? 'reached' : ''}" style="left:${pos}%">
-      <span class="streak-marker-label">${m.streak}<br>🪙${m.coins}</span>
-    </div>`;
-  }).join("");
+  const barState = calcStreakBarState(hwStreak, milestones);
+  if (!barState) return;
+  renderStreakBarUI(barState, "hwStreakFill", "hwStreakLabel", "hwStreakReward", "hwStreakMarkers");
 }
 
 function reportHwStreak(correct) {
@@ -3117,9 +3105,11 @@ function hwHandleHwAnswer(userInput) {
       hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
     }
+    reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
       hwQuiz.wrongItems.push({

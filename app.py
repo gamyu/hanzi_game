@@ -659,27 +659,52 @@ def scores_api():
         return jsonify({"ok": True})
 
     db = get_db()
-    rows = db.execute(
+    # Combine game scores and homework scores by date
+    game_rows = db.execute(
         """SELECT DATE(created_at) as date,
                   SUM(total_questions) as total_questions,
                   SUM(correct_answers) as correct_answers,
                   SUM(score) as score
            FROM scores WHERE user_id = ?
-           GROUP BY DATE(created_at)
-           ORDER BY date DESC LIMIT 60""",
+           GROUP BY DATE(created_at)""",
         (session["user_id"],),
     ).fetchall()
+    hw_rows = db.execute(
+        """SELECT date,
+                  SUM(total_questions) as total_questions,
+                  SUM(correct_answers) as correct_answers,
+                  0 as score
+           FROM daily_assignments WHERE user_id = ? AND status = 'completed'
+           GROUP BY date""",
+        (session["user_id"],),
+    ).fetchall()
+
+    # Merge by date
+    merged = {}
+    for r in game_rows:
+        d = r["date"]
+        merged[d] = {"date": d, "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": r["score"], "source": "游戏"}
+    for r in hw_rows:
+        d = r["date"]
+        if d in merged:
+            merged[d]["total_questions"] += r["total_questions"]
+            merged[d]["correct_answers"] += r["correct_answers"]
+            merged[d]["source"] = "游戏+作业"
+        else:
+            merged[d] = {"date": d, "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": 0, "source": "作业"}
+
     wrong_counts = {}
     for r in db.execute(
         "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = ? GROUP BY DATE(created_at)",
         (session["user_id"],),
     ).fetchall():
         wrong_counts[r["date"]] = r["cnt"]
+
     scores = []
-    for r in rows:
-        d = dict(r)
-        d["wrong_count"] = wrong_counts.get(d["date"], 0)
-        scores.append(d)
+    for d in sorted(merged.keys(), reverse=True)[:60]:
+        entry = merged[d]
+        entry["wrong_count"] = wrong_counts.get(d, 0)
+        scores.append(entry)
     return jsonify({"scores": scores})
 
 
@@ -1511,11 +1536,8 @@ def homework_submit():
              item.get("words", ""), assignment["grade"], item.get("mode", "")),
         )
 
-    # Award coins based on streak (use correct_answers as streak for homework)
-    is_writing = assignment["type"] == "writing"
-    coins_earned = calc_streak_coins(correct_answers, is_writing, db)
-    if coins_earned > 0:
-        db.execute("UPDATE users SET coins = coins + ? WHERE id = ?", (coins_earned, session["user_id"]))
+    # Coins are now awarded in real-time via /api/streak during the quiz
+    coins_earned = 0
 
     # Auto-create next lesson assignment if this was first completion
     next_assignment = None
