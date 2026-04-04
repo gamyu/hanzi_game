@@ -1233,7 +1233,7 @@
 </div>
 
 <!-- Auth modal -->
-<div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this)hideAuthModal()">
+<div class="modal-overlay hidden" id="authModal" onclick="if(event.target===this && state.user)hideAuthModal()">
   <div class="modal">
     <div class="modal-tabs">
       <button class="modal-tab active" onclick="switchTab('login')">登录</button>
@@ -1243,7 +1243,7 @@
     <input type="text" id="authUsername" placeholder="用户名" maxlength="20" onkeydown="if(event.key==='Enter')document.getElementById('authPassword').focus()">
     <input type="password" id="authPassword" placeholder="密码" onkeydown="if(event.key==='Enter')submitAuth()">
     <button class="modal-submit" id="authSubmit" onclick="submitAuth()">登录</button>
-    <button class="modal-close" onclick="hideAuthModal()">取消</button>
+    <button class="modal-close" id="authCancelBtn" onclick="hideAuthModal()">取消</button>
   </div>
 </div>
 
@@ -1493,10 +1493,7 @@ function renderUserBar() {
     `;
   } else {
     bar.innerHTML = `
-      <button class="user-btn" onclick="showShop()">商店</button>
-      <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
-      ${adminBtn}
     `;
   }
 }
@@ -1506,6 +1503,7 @@ function showAuthModal() {
   document.getElementById("authError").textContent = "";
   document.getElementById("authUsername").value = "";
   document.getElementById("authPassword").value = "";
+  document.getElementById("authCancelBtn").style.display = state.user ? "" : "none";
   switchTab("login");
   setTimeout(() => document.getElementById("authUsername").focus(), 50);
 }
@@ -1542,6 +1540,7 @@ async function submitAuth() {
 
   state.user = data.username;
   await loadCoins();
+  await loadAppData();
   renderUserBar();
   hideAuthModal();
   // Switch to homework view after login
@@ -1553,12 +1552,13 @@ async function doLogout() {
   await fetch("/api/logout", { method: "POST" });
   state.user = null;
   state.coins = 0;
+  state.combo = 0;
   document.getElementById("coinsBox").style.display = "none";
   renderUserBar();
-  // Switch back to game view after logout
+  // Must login to use — hide everything and show auth modal
   document.getElementById("homeworkView").style.display = "none";
-  document.getElementById("gameView").style.display = "";
-  loadQuestion();
+  document.getElementById("gameView").style.display = "none";
+  showAuthModal();
 }
 
 async function saveScore() {
@@ -2117,19 +2117,23 @@ async function repeatAssignment(assignmentId) {
 // --- Init ---
 async function init() {
   await checkLogin();
-  const res = await fetch("/api/grades");
-  const data = await res.json();
-  renderGrades(data.grades);
-  renderModes();
 
-  // If logged in, show homework view by default; otherwise show game
   if (state.user) {
+    await loadAppData();
     switchToHomeworkView();
   } else {
+    // Must login to use — hide everything and show auth modal
     document.getElementById("homeworkView").style.display = "none";
-    document.getElementById("gameView").style.display = "";
-    loadQuestion();
+    document.getElementById("gameView").style.display = "none";
+    showAuthModal();
   }
+}
+
+async function loadAppData() {
+  const res = await fetch("/api/grades");
+  const data = await res.json();
+  renderGrades(data.grades || []);
+  renderModes();
 }
 
 function renderGrades(grades) {
@@ -3292,9 +3296,9 @@ function startHwReview() {
 function showHwReviewQuestion() {
   const q = hwReview.questions[hwReview.currentIndex];
   const total = hwReview.totalOriginal;
-  const idx = hwReview.currentIndex + 1;
-  document.getElementById("hwQuizProgress").textContent = `复习 ${idx}/${total}`;
-  document.getElementById("hwQuizBarFill").style.width = `${(idx / total) * 100}%`;
+  const done = hwReview.answeredCorrectly.size;
+  document.getElementById("hwQuizProgress").textContent = `复习 ${done}/${total}`;
+  document.getElementById("hwQuizBarFill").style.width = `${(done / total) * 100}%`;
 
   const area = document.getElementById("hwQuizQuestionArea");
   const opts = document.getElementById("hwQuizOptionsArea");
@@ -3332,10 +3336,9 @@ function hwReviewAnswer(selected) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    const retryCount = hwReview.retryMap[qKey] || 0;
-    hwReview.retryMap[qKey] = retryCount + 1;
-    if (retryCount + 1 < 2) {
-      hwReview.questions.splice(hwReview.currentIndex + 1, 0, { ...q, _isRetry: true });
+    // Wrong: show answer, re-queue at end until answered correctly once
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
@@ -3378,10 +3381,9 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    const retryCount = hwReview.retryMap[qKey] || 0;
-    hwReview.retryMap[qKey] = retryCount + 1;
-    if (retryCount + 1 < 2) {
-      hwReview.questions.splice(hwReview.currentIndex + 1, 0, { ...q, _isRetry: true });
+    // Wrong: show answer, re-queue at end until answered correctly once
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
@@ -3408,20 +3410,9 @@ async function finishHwReview() {
     body: JSON.stringify({ items: hwReview.items }),
   });
 
-  const timeSpent = Math.floor((Date.now() - hwReview.startTime) / 1000);
-  const total = hwReview.totalOriginal;
-  const correct = hwReview.correctCount;
-  const acc = Math.round(correct / total * 100);
-  const mins = Math.floor(timeSpent / 60);
-  const secs = timeSpent % 60;
-
+  // All review items answered correctly — go directly to today's homework
   document.getElementById("hwQuizSection").style.display = "none";
-  document.getElementById("hwResultSection").style.display = "";
-  document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : "💪";
-  document.getElementById("hwResultTitle").textContent = "复习完成!";
-  document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
-  document.getElementById("hwResultWrong").innerHTML = "";
-  document.getElementById("hwResultActions").innerHTML = `<button class="hw-result-btn" onclick="hwBackToToday()">开始今日作业</button>`;
+  hwBackToToday();
 }
 
 // --- Homework Quiz Canvas ---

@@ -183,12 +183,22 @@ def _get_exchange_packages(db):
 
 
 def calc_streak_coins(streak, is_writing, db):
-    """Calculate coins earned from streak milestones (read rules from DB)."""
+    """Calculate cumulative coins earned from streak milestones, cycling after max.
+
+    E.g. recognition milestones [15→1, 30→3, 45→5]: one full cycle = 9 coins.
+    Streak 60 = 1 full cycle (45) + partial (15) = 9 + 1 = 10 coins total.
+    """
     rules = _get_coin_rules(db)
     milestones = rules.get("writing" if is_writing else "recognition", [])
-    coins = 0
+    if not milestones:
+        return 0
+    max_streak = max(m["streak"] for m in milestones)
+    coins_per_cycle = sum(m["coins"] for m in milestones)
+    full_cycles = streak // max_streak if max_streak > 0 else 0
+    remainder = streak % max_streak if max_streak > 0 else streak
+    coins = full_cycles * coins_per_cycle
     for m in milestones:
-        if streak >= m["streak"]:
+        if remainder >= m["streak"]:
             coins += m["coins"]
     return coins
 
@@ -938,6 +948,8 @@ def leaderboard():
 
 @app.route("/api/grades")
 def grades():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
     grade_list = list(CHARACTERS.keys())
     return jsonify({"grades": grade_list})
 
@@ -945,6 +957,8 @@ def grades():
 @app.route("/api/lessons")
 def lessons_api():
     """Return lesson/unit structure for a grade (if available)."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
     grade = request.args.get("grade", "")
     grade_lessons = LESSON_DATA.get(grade)
     if not grade_lessons:
@@ -973,6 +987,8 @@ def lessons_api():
 
 @app.route("/api/question")
 def question():
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
     grade = request.args.get("grade", "一年级上")
     mode = request.args.get("mode", "char_to_pinyin")
     lesson = request.args.get("lesson", "")  # e.g. "5" or "1,2,3,4" for unit
