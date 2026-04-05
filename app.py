@@ -21,6 +21,9 @@ import io
 import json
 import os
 import random
+import atexit
+import socket
+import subprocess
 import psycopg
 from psycopg.rows import dict_row
 import urllib.request
@@ -332,6 +335,52 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/hanzi_db")
+
+# --- SSH Tunnel ---
+SSH_TUNNEL_HOST = os.environ.get("SSH_TUNNEL_HOST")
+SSH_TUNNEL_USER = os.environ.get("SSH_TUNNEL_USER", "ubuntu")
+SSH_TUNNEL_PORT = int(os.environ.get("SSH_TUNNEL_PORT", "22"))
+SSH_KEY_PATH = os.environ.get("SSH_KEY_PATH")
+ssh_tunnel_proc = None
+
+if SSH_TUNNEL_HOST:
+    # Pick a free local port
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        local_port = s.getsockname()[1]
+    ssh_cmd = [
+        "ssh", "-N", "-L",
+        f"{local_port}:127.0.0.1:5432",
+        "-p", str(SSH_TUNNEL_PORT),
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ExitOnForwardFailure=yes",
+    ]
+    if SSH_KEY_PATH:
+        ssh_cmd += ["-i", os.path.expanduser(SSH_KEY_PATH)]
+    ssh_cmd.append(f"{SSH_TUNNEL_USER}@{SSH_TUNNEL_HOST}")
+    ssh_tunnel_proc = subprocess.Popen(
+        ssh_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    atexit.register(ssh_tunnel_proc.terminate)
+    # Wait for tunnel to be ready
+    import time
+    for _ in range(30):
+        if ssh_tunnel_proc.poll() is not None:
+            err = ssh_tunnel_proc.stderr.read().decode()
+            raise RuntimeError(f"SSH tunnel failed: {err}")
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        ssh_tunnel_proc.terminate()
+        raise RuntimeError("SSH tunnel timed out waiting for connection")
+    DATABASE_URL = DATABASE_URL.replace(
+        "localhost:5432", f"localhost:{local_port}"
+    )
 
 
 def get_db():
