@@ -18,7 +18,8 @@ import io
 import json
 import os
 import random
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import urllib.request
 from datetime import date, datetime, timedelta
 
@@ -327,13 +328,12 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
-DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hanzi.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/hanzi_game")
 
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
+        g.db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return g.db
 
 
@@ -345,10 +345,10 @@ def close_db(exc):
 
 
 def init_db():
-    db = sqlite3.connect(DATABASE)
+    db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     db.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -356,7 +356,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS scores (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             grade TEXT NOT NULL,
             mode TEXT NOT NULL,
@@ -370,7 +370,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS wrong_answers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             character TEXT NOT NULL,
             pinyin TEXT NOT NULL,
@@ -384,7 +384,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS mastered_words (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             character TEXT NOT NULL,
             pinyin TEXT NOT NULL,
@@ -399,7 +399,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS shop_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             description TEXT DEFAULT '',
             price INTEGER NOT NULL,
@@ -408,7 +408,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS purchases (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             item_id INTEGER NOT NULL,
             purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -424,7 +424,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS homework_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             grade TEXT NOT NULL,
             recognition_lesson INTEGER NOT NULL DEFAULT 1,
@@ -438,7 +438,7 @@ def init_db():
     """)
     db.execute("""
         CREATE TABLE IF NOT EXISTS daily_assignments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             date TEXT NOT NULL,
             type TEXT NOT NULL,
@@ -455,30 +455,33 @@ def init_db():
         )
     """)
     # Migrate: add columns if missing
-    cols = [row[1] for row in db.execute("PRAGMA table_info(scores)").fetchall()]
-    if "total_questions" not in cols:
+    def _col_exists(table, column):
+        row = db.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+            (table, column),
+        ).fetchone()
+        return row is not None
+
+    if not _col_exists("scores", "total_questions"):
         db.execute("ALTER TABLE scores ADD COLUMN total_questions INTEGER NOT NULL DEFAULT 0")
-    if "correct_answers" not in cols:
+    if not _col_exists("scores", "correct_answers"):
         db.execute("ALTER TABLE scores ADD COLUMN correct_answers INTEGER NOT NULL DEFAULT 0")
-    wa_cols = [row[1] for row in db.execute("PRAGMA table_info(wrong_answers)").fetchall()]
-    if "review_count" not in wa_cols:
+    if not _col_exists("wrong_answers", "review_count"):
         db.execute("ALTER TABLE wrong_answers ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0")
-    user_cols = [row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()]
-    if "coins" not in user_cols:
+    if not _col_exists("users", "coins"):
         db.execute("ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0")
-    if "game_minutes" not in user_cols:
+    if not _col_exists("users", "game_minutes"):
         db.execute("ALTER TABLE users ADD COLUMN game_minutes INTEGER NOT NULL DEFAULT 0")
-    if "recognition_streak" not in user_cols:
+    if not _col_exists("users", "recognition_streak"):
         db.execute("ALTER TABLE users ADD COLUMN recognition_streak INTEGER NOT NULL DEFAULT 0")
-    if "writing_streak" not in user_cols:
+    if not _col_exists("users", "writing_streak"):
         db.execute("ALTER TABLE users ADD COLUMN writing_streak INTEGER NOT NULL DEFAULT 0")
-    if "recognition_coins_awarded" not in user_cols:
+    if not _col_exists("users", "recognition_coins_awarded"):
         db.execute("ALTER TABLE users ADD COLUMN recognition_coins_awarded INTEGER NOT NULL DEFAULT 0")
-    if "writing_coins_awarded" not in user_cols:
+    if not _col_exists("users", "writing_coins_awarded"):
         db.execute("ALTER TABLE users ADD COLUMN writing_coins_awarded INTEGER NOT NULL DEFAULT 0")
     # Migrate homework_plans: add separate grade tracking per type
-    hp_cols = [row[1] for row in db.execute("PRAGMA table_info(homework_plans)").fetchall()]
-    if "recognition_grade" not in hp_cols:
+    if not _col_exists("homework_plans", "recognition_grade"):
         db.execute("ALTER TABLE homework_plans ADD COLUMN recognition_grade TEXT NOT NULL DEFAULT ''")
         db.execute("ALTER TABLE homework_plans ADD COLUMN writing_grade TEXT NOT NULL DEFAULT ''")
         # Backfill: copy existing grade to both recognition_grade and writing_grade
@@ -743,15 +746,14 @@ def register():
         return jsonify({"error": "密码至少需要4个字符"}), 400
 
     db = get_db()
-    existing = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    existing = db.execute("SELECT id FROM users WHERE username = %s", (username,)).fetchone()
     if existing:
         return jsonify({"error": "用户名已存在"}), 409
 
     pw_hash = hash_password(password)
-    cursor = db.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, pw_hash))
+    cursor = db.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id", (username, pw_hash))
+    session["user_id"] = cursor.fetchone()["id"]
     db.commit()
-
-    session["user_id"] = cursor.lastrowid
     session["username"] = username
     return jsonify({"username": username})
 
@@ -766,7 +768,7 @@ def login():
         return jsonify({"error": "用户名和密码不能为空"}), 400
 
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE username = %s", (username,)).fetchone()
     if not user or not verify_password(password, user["password_hash"]):
         return jsonify({"error": "用户名或密码错误"}), 401
 
@@ -809,7 +811,7 @@ def scores_api():
 
         db = get_db()
         db.execute(
-            "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (session["user_id"], grade, mode, score, combo_max, total_questions, correct_answers),
         )
         db.commit()
@@ -822,7 +824,7 @@ def scores_api():
                   SUM(total_questions) as total_questions,
                   SUM(correct_answers) as correct_answers,
                   SUM(score) as score
-           FROM scores WHERE user_id = ?
+           FROM scores WHERE user_id = %s
            GROUP BY DATE(created_at)""",
         (session["user_id"],),
     ).fetchall()
@@ -831,7 +833,7 @@ def scores_api():
                   SUM(total_questions) as total_questions,
                   SUM(correct_answers) as correct_answers,
                   0 as score
-           FROM daily_assignments WHERE user_id = ? AND status = 'completed'
+           FROM daily_assignments WHERE user_id = %s AND status = 'completed'
            GROUP BY date""",
         (session["user_id"],),
     ).fetchall()
@@ -852,7 +854,7 @@ def scores_api():
 
     wrong_counts = {}
     for r in db.execute(
-        "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = ? GROUP BY DATE(created_at)",
+        "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = %s GROUP BY DATE(created_at)",
         (session["user_id"],),
     ).fetchall():
         wrong_counts[r["date"]] = r["cnt"]
@@ -905,7 +907,7 @@ def wrong_answers_api():
         data = request.get_json()
         db = get_db()
         db.execute(
-            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",
             (session["user_id"], data["character"], data["pinyin"], data["words"], data["grade"], data["mode"]),
         )
         db.commit()
@@ -915,12 +917,12 @@ def wrong_answers_api():
     db = get_db()
     if date:
         rows = db.execute(
-            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? AND DATE(created_at) = ? GROUP BY character, mode ORDER BY review_count ASC, created_at",
+            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s AND DATE(created_at) = %s GROUP BY character, mode ORDER BY review_count ASC, created_at",
             (session["user_id"], date),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = ? GROUP BY character, mode ORDER BY review_count ASC, created_at DESC",
+            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s GROUP BY character, mode ORDER BY review_count ASC, created_at DESC",
             (session["user_id"],),
         ).fetchall()
     return jsonify({"wrong_answers": [dict(r) for r in rows]})
@@ -997,28 +999,28 @@ def review_done():
     db = get_db()
 
     db.execute(
-        "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = ? AND character = ? AND mode = ?",
+        "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = %s AND character = %s AND mode = %s",
         (session["user_id"], character, mode),
     )
     db.commit()
 
     # Check if any rows now have review_count >= 3 — move to mastered
     rows = db.execute(
-        "SELECT * FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+        "SELECT * FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
         (session["user_id"], character, mode),
     ).fetchall()
 
     mastered = False
     for r in rows:
         db.execute(
-            "INSERT INTO mastered_words (user_id, character, pinyin, words, grade, mode, review_count, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO mastered_words (user_id, character, pinyin, words, grade, mode, review_count, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (r["user_id"], r["character"], r["pinyin"], r["words"], r["grade"], r["mode"], r["review_count"], r["created_at"]),
         )
         mastered = True
 
     if mastered:
         db.execute(
-            "DELETE FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
             (session["user_id"], character, mode),
         )
         db.commit()
@@ -1032,7 +1034,7 @@ def mastered_words_api():
         return jsonify({"error": "未登录"}), 401
     db = get_db()
     rows = db.execute(
-        "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date, DATE(mastered_at) as mastered_date FROM mastered_words WHERE user_id = ? ORDER BY mastered_at DESC",
+        "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date, DATE(mastered_at) as mastered_date FROM mastered_words WHERE user_id = %s ORDER BY mastered_at DESC",
         (session["user_id"],),
     ).fetchall()
     return jsonify({"mastered_words": [dict(r) for r in rows]})
@@ -1057,7 +1059,7 @@ def leaderboard():
                       SUM(s.total_questions) as total_questions
                FROM scores s
                JOIN users u ON s.user_id = u.id
-               WHERE s.mode = ?
+               WHERE s.mode = %s
                GROUP BY s.user_id
                ORDER BY total_score DESC
                LIMIT 50""",
@@ -1216,10 +1218,10 @@ def admin_users():
         d = dict(u)
         d["accuracy"] = round(d["correct_answers"] / d["total_questions"] * 100) if d["total_questions"] > 0 else 0
         # Count wrong answers
-        wa = db.execute("SELECT COUNT(*) as cnt FROM wrong_answers WHERE user_id = ?", (u["id"],)).fetchone()
+        wa = db.execute("SELECT COUNT(*) as cnt FROM wrong_answers WHERE user_id = %s", (u["id"],)).fetchone()
         d["wrong_count"] = wa["cnt"]
         # Count mastered
-        ma = db.execute("SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = ?", (u["id"],)).fetchone()
+        ma = db.execute("SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = %s", (u["id"],)).fetchone()
         d["mastered_count"] = ma["cnt"]
         result.append(d)
 
@@ -1233,7 +1235,7 @@ def admin_user_details(user_id):
         return jsonify({"error": "无管理员权限"}), 403
 
     db = get_db()
-    user = db.execute("SELECT id, username, coins, game_minutes, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = db.execute("SELECT id, username, coins, game_minutes, created_at FROM users WHERE id = %s", (user_id,)).fetchone()
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
@@ -1243,7 +1245,7 @@ def admin_user_details(user_id):
                   SUM(total_questions) as total_questions,
                   SUM(correct_answers) as correct_answers,
                   SUM(score) as score
-           FROM scores WHERE user_id = ?
+           FROM scores WHERE user_id = %s
            GROUP BY DATE(created_at), grade, mode
            ORDER BY date DESC LIMIT 200""",
         (user_id,),
@@ -1252,7 +1254,7 @@ def admin_user_details(user_id):
     # Wrong answers
     wrong_answers = db.execute(
         """SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date
-           FROM wrong_answers WHERE user_id = ?
+           FROM wrong_answers WHERE user_id = %s
            ORDER BY created_at DESC""",
         (user_id,),
     ).fetchall()
@@ -1260,7 +1262,7 @@ def admin_user_details(user_id):
     # Mastered words
     mastered = db.execute(
         """SELECT character, pinyin, words, grade, mode, DATE(mastered_at) as mastered_date
-           FROM mastered_words WHERE user_id = ?
+           FROM mastered_words WHERE user_id = %s
            ORDER BY mastered_at DESC""",
         (user_id,),
     ).fetchall()
@@ -1279,7 +1281,7 @@ def admin_user_wrong_page(user_id):
     if not session.get("is_admin"):
         return redirect(url_for("index"))
     db = get_db()
-    user = db.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = db.execute("SELECT username FROM users WHERE id = %s", (user_id,)).fetchone()
     if not user:
         return redirect(url_for("index"))
     return render_template("admin_wrong.html", user_id=user_id, username=user["username"])
@@ -1305,7 +1307,7 @@ def admin_settings():
                 for m in rules[key]:
                     if not isinstance(m.get("streak"), int) or not isinstance(m.get("coins"), int):
                         return jsonify({"error": "规则格式错误: 需要 streak 和 coins 为整数"}), 400
-            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('coin_rules', ?)",
+            db.execute("INSERT INTO settings (key, value) VALUES ('coin_rules', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                        (json.dumps(rules, ensure_ascii=False),))
 
         if "exchange_packages" in data:
@@ -1315,7 +1317,7 @@ def admin_settings():
             for p in pkgs:
                 if not isinstance(p.get("price"), int) or not isinstance(p.get("minutes"), int):
                     return jsonify({"error": "套餐格式错误: 需要 price 和 minutes 为整数"}), 400
-            db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('exchange_packages', ?)",
+            db.execute("INSERT INTO settings (key, value) VALUES ('exchange_packages', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                        (json.dumps(pkgs, ensure_ascii=False),))
 
         db.commit()
@@ -1334,7 +1336,7 @@ def coins_api():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     db = get_db()
-    row = db.execute("SELECT coins, game_minutes, recognition_streak, writing_streak FROM users WHERE id = ?",
+    row = db.execute("SELECT coins, game_minutes, recognition_streak, writing_streak FROM users WHERE id = %s",
                      (session["user_id"],)).fetchone()
     return jsonify({
         "coins": row["coins"] if row else 0,
@@ -1358,7 +1360,7 @@ def _check_coin_eligible(db, user_id, mode, game_grade):
     is_writing = mode == "dictation_handwrite"
 
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (user_id,),
     ).fetchone()
     if not plan:
@@ -1407,7 +1409,7 @@ def streak_update():
     awarded_col = "writing_coins_awarded" if is_writing else "recognition_coins_awarded"
 
     db = get_db()
-    user = db.execute(f"SELECT {streak_col}, {awarded_col}, coins FROM users WHERE id = ?",
+    user = db.execute(f"SELECT {streak_col}, {awarded_col}, coins FROM users WHERE id = %s",
                       (session["user_id"],)).fetchone()
     if not user:
         return jsonify({"error": "用户不存在"}), 404
@@ -1422,18 +1424,18 @@ def streak_update():
             total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
             coins_earned = total_coins_at_streak - user[awarded_col]
             if coins_earned > 0:
-                db.execute(f"UPDATE users SET {streak_col} = ?, {awarded_col} = ?, coins = coins + ? WHERE id = ?",
+                db.execute(f"UPDATE users SET {streak_col} = %s, {awarded_col} = %s, coins = coins + %s WHERE id = %s",
                            (new_streak, total_coins_at_streak, coins_earned, session["user_id"]))
             else:
-                db.execute(f"UPDATE users SET {streak_col} = ? WHERE id = ?",
+                db.execute(f"UPDATE users SET {streak_col} = %s WHERE id = %s",
                            (new_streak, session["user_id"]))
         else:
             # Still update streak display but no coins
-            db.execute(f"UPDATE users SET {streak_col} = ? WHERE id = ?",
+            db.execute(f"UPDATE users SET {streak_col} = %s WHERE id = %s",
                        (new_streak, session["user_id"]))
     else:
         new_streak = 0
-        db.execute(f"UPDATE users SET {streak_col} = 0, {awarded_col} = 0 WHERE id = ?",
+        db.execute(f"UPDATE users SET {streak_col} = 0, {awarded_col} = 0 WHERE id = %s",
                    (session["user_id"],))
 
     db.commit()
@@ -1466,11 +1468,11 @@ def shop_buy():
     if not package:
         return jsonify({"error": "套餐不存在"}), 404
 
-    user = db.execute("SELECT coins, game_minutes FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    user = db.execute("SELECT coins, game_minutes FROM users WHERE id = %s", (session["user_id"],)).fetchone()
     if user["coins"] < package["price"]:
         return jsonify({"error": "金币不足"}), 400
 
-    db.execute("UPDATE users SET coins = coins - ?, game_minutes = game_minutes + ? WHERE id = ?",
+    db.execute("UPDATE users SET coins = coins - %s, game_minutes = game_minutes + %s WHERE id = %s",
                (package["price"], package["minutes"], session["user_id"]))
     db.commit()
     new_coins = user["coins"] - package["price"]
@@ -1493,18 +1495,18 @@ def _get_or_create_today_assignments(db, user_id):
 
     # Find active homework plan
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (user_id,),
     ).fetchone()
     if not plan:
         existing = db.execute(
-            "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+            "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
             (user_id, today),
         ).fetchall()
         return [dict(r) for r in existing]
 
     existing = db.execute(
-        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
         (user_id, today),
     ).fetchall()
 
@@ -1518,12 +1520,12 @@ def _get_or_create_today_assignments(db, user_id):
             wrt_base_grade, plan["writing_lesson"], "词语")
         if rec_grade and rec_ln:
             db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'recognition', ?, ?)",
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'recognition', %s, %s)",
                 (user_id, today, rec_grade, rec_ln),
             )
         if wrt_grade and wrt_ln:
             db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, 'writing', ?, ?)",
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'writing', %s, %s)",
                 (user_id, today, wrt_grade, wrt_ln),
             )
         db.commit()
@@ -1549,7 +1551,7 @@ def _get_or_create_today_assignments(db, user_id):
             if dup:
                 continue
             db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s)",
                 (user_id, today, hw_type, next_grade, next_ln),
             )
             changed = True
@@ -1557,7 +1559,7 @@ def _get_or_create_today_assignments(db, user_id):
             db.commit()
 
     rows = db.execute(
-        "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ?",
+        "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
         (user_id, today),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -1571,7 +1573,7 @@ def homework_today():
     assignments = _get_or_create_today_assignments(db, session["user_id"])
     # Also get plan info
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (session["user_id"],),
     ).fetchone()
     plan_info = None
@@ -1596,7 +1598,7 @@ def homework_today():
     review_items = db.execute(
         """SELECT character, pinyin, words, grade, mode, review_count
            FROM wrong_answers
-           WHERE user_id = ? AND DATE(created_at) < ?
+           WHERE user_id = %s AND DATE(created_at) < %s
            GROUP BY character, mode
            ORDER BY review_count ASC, created_at DESC""",
         (session["user_id"], today),
@@ -1622,12 +1624,12 @@ def homework_review_submit():
         character = item.get("character", "")
         mode = item.get("mode", "")
         db.execute(
-            "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = ? AND character = ? AND mode = ?",
+            "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = %s AND character = %s AND mode = %s",
             (session["user_id"], character, mode),
         )
         # Delete if reviewed enough (>= 3)
         db.execute(
-            "DELETE FROM wrong_answers WHERE user_id = ? AND character = ? AND mode = ? AND review_count >= 3",
+            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
             (session["user_id"], character, mode),
         )
     db.commit()
@@ -1641,7 +1643,7 @@ def homework_start(assignment_id):
         return jsonify({"error": "未登录"}), 401
     db = get_db()
     assignment = db.execute(
-        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        "SELECT * FROM daily_assignments WHERE id = %s AND user_id = %s",
         (assignment_id, session["user_id"]),
     ).fetchone()
     if not assignment:
@@ -1717,7 +1719,7 @@ def homework_preview(assignment_id):
         return jsonify({"error": "未登录"}), 401
     db = get_db()
     assignment = db.execute(
-        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        "SELECT * FROM daily_assignments WHERE id = %s AND user_id = %s",
         (assignment_id, session["user_id"]),
     ).fetchone()
     if not assignment:
@@ -1811,7 +1813,7 @@ def homework_submit():
 
     db = get_db()
     assignment = db.execute(
-        "SELECT * FROM daily_assignments WHERE id = ? AND user_id = ?",
+        "SELECT * FROM daily_assignments WHERE id = %s AND user_id = %s",
         (assignment_id, session["user_id"]),
     ).fetchone()
     if not assignment:
@@ -1820,15 +1822,15 @@ def homework_submit():
     # Update assignment
     db.execute(
         """UPDATE daily_assignments
-           SET status = 'completed', total_questions = ?, correct_answers = ?,
-               time_spent = ?, wrong_items = ?, completed_at = CURRENT_TIMESTAMP
-           WHERE id = ?""",
+           SET status = 'completed', total_questions = %s, correct_answers = %s,
+               time_spent = %s, wrong_items = %s, completed_at = CURRENT_TIMESTAMP
+           WHERE id = %s""",
         (total_questions, correct_answers, time_spent, wrong_items, assignment_id),
     )
 
     # Advance lesson if this assignment was completed (not a repeat)
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (session["user_id"],),
     ).fetchone()
     if plan and assignment["status"] == "pending":
@@ -1843,16 +1845,16 @@ def homework_submit():
         next_grade, next_ln = find_next_lesson_across_grades(base_grade, current_lesson + 1, content_key)
         if next_grade and next_ln:
             if assignment["type"] == "recognition":
-                db.execute("UPDATE homework_plans SET recognition_lesson = ?, recognition_grade = ? WHERE id = ?",
+                db.execute("UPDATE homework_plans SET recognition_lesson = %s, recognition_grade = %s WHERE id = %s",
                            (next_ln, next_grade, plan["id"]))
             else:
-                db.execute("UPDATE homework_plans SET writing_lesson = ?, writing_grade = ? WHERE id = ?",
+                db.execute("UPDATE homework_plans SET writing_lesson = %s, writing_grade = %s WHERE id = %s",
                            (next_ln, next_grade, plan["id"]))
 
     # Also record wrong answers in the main wrong_answers table
     for item in data.get("wrong_items", []):
         db.execute(
-            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",
             (session["user_id"], item.get("character", ""), item.get("pinyin", ""),
              item.get("words", ""), assignment["grade"], item.get("mode", "")),
         )
@@ -1866,7 +1868,7 @@ def homework_submit():
         today = date.today().isoformat()
         # Re-read the updated plan to get the advanced grade/lesson
         updated_plan = db.execute(
-            "SELECT * FROM homework_plans WHERE id = ?", (plan["id"],)
+            "SELECT * FROM homework_plans WHERE id = %s", (plan["id"],)
         ).fetchone()
         if assignment["type"] == "recognition":
             next_grade = updated_plan["recognition_grade"] or updated_plan["grade"]
@@ -1883,16 +1885,16 @@ def homework_submit():
         if has_content and not (next_grade == assignment["grade"] and next_lesson == assignment["lesson_num"]):
             # Check no duplicate for same type+grade+lesson today
             dup = db.execute(
-                "SELECT id FROM daily_assignments WHERE user_id = ? AND date = ? AND type = ? AND grade = ? AND lesson_num = ?",
+                "SELECT id FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s AND grade = %s AND lesson_num = %s",
                 (session["user_id"], today, assignment["type"], next_grade, next_lesson),
             ).fetchone()
             if not dup:
                 cur = db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s) RETURNING id",
                     (session["user_id"], today, assignment["type"], next_grade, next_lesson),
                 )
                 next_assignment = {
-                    "id": cur.lastrowid,
+                    "id": cur.fetchone()["id"],
                     "type": assignment["type"],
                     "grade": next_grade,
                     "lesson_num": next_lesson,
@@ -1903,7 +1905,7 @@ def homework_submit():
     # Check if both assignments for today are completed
     today = date.today().isoformat()
     pending = db.execute(
-        "SELECT COUNT(*) as cnt FROM daily_assignments WHERE user_id = ? AND date = ? AND status != 'completed'",
+        "SELECT COUNT(*) as cnt FROM daily_assignments WHERE user_id = %s AND date = %s AND status != 'completed'",
         (session["user_id"], today),
     ).fetchone()
 
@@ -1920,7 +1922,7 @@ def homework_progress():
 
     db = get_db()
     plans = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? ORDER BY id",
+        "SELECT * FROM homework_plans WHERE user_id = %s ORDER BY id",
         (session["user_id"],),
     ).fetchall()
 
@@ -1953,7 +1955,7 @@ def homework_progress():
     week_ago = (date.today() - timedelta(days=7)).isoformat()
     history = db.execute(
         """SELECT date, type, grade, lesson_num, status, total_questions, correct_answers, time_spent
-           FROM daily_assignments WHERE user_id = ? AND date >= ?
+           FROM daily_assignments WHERE user_id = %s AND date >= %s
            ORDER BY date DESC, type""",
         (session["user_id"], week_ago),
     ).fetchall()
@@ -1982,16 +1984,16 @@ def admin_homework_plan():
 
     db = get_db()
     # Deactivate existing plans for this user
-    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = ?", (user_id,))
+    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s", (user_id,))
     # Delete today's pending assignments so new plan takes effect immediately
     today = date.today().isoformat()
     db.execute(
-        "DELETE FROM daily_assignments WHERE user_id = ? AND date = ? AND status = 'pending'",
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending'",
         (user_id, today),
     )
     # Create new plan with separate grade tracking for each type
     db.execute(
-        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade) VALUES (%s, %s, %s, %s, %s, %s)",
         (user_id, grade, rec_lesson, wrt_lesson, grade, grade),
     )
     db.commit()
@@ -2010,7 +2012,7 @@ def admin_homework_repeat():
     assignment_id = data.get("assignment_id")
 
     db = get_db()
-    assignment = db.execute("SELECT * FROM daily_assignments WHERE id = ?", (assignment_id,)).fetchone()
+    assignment = db.execute("SELECT * FROM daily_assignments WHERE id = %s", (assignment_id,)).fetchone()
     if not assignment:
         return jsonify({"error": "作业不存在"}), 404
 
@@ -2018,27 +2020,27 @@ def admin_homework_repeat():
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     # Remove any existing assignment of same type for tomorrow
     db.execute(
-        "DELETE FROM daily_assignments WHERE user_id = ? AND date = ? AND type = ?",
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s",
         (assignment["user_id"], tomorrow, assignment["type"]),
     )
     db.execute(
-        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s)",
         (assignment["user_id"], tomorrow, assignment["type"], assignment["grade"], assignment["lesson_num"]),
     )
     # Roll back the lesson advancement
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (assignment["user_id"],),
     ).fetchone()
     if plan:
         if assignment["type"] == "recognition":
             db.execute(
-                "UPDATE homework_plans SET recognition_lesson = ?, recognition_grade = ? WHERE id = ?",
+                "UPDATE homework_plans SET recognition_lesson = %s, recognition_grade = %s WHERE id = %s",
                 (assignment["lesson_num"], assignment["grade"], plan["id"]),
             )
         else:
             db.execute(
-                "UPDATE homework_plans SET writing_lesson = ?, writing_grade = ? WHERE id = ?",
+                "UPDATE homework_plans SET writing_lesson = %s, writing_grade = %s WHERE id = %s",
                 (assignment["lesson_num"], assignment["grade"], plan["id"]),
             )
     db.commit()
@@ -2058,14 +2060,14 @@ def admin_homework_overview():
     result = []
     for u in users:
         plan = db.execute(
-            "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
             (u["id"],),
         ).fetchone()
         if not plan:
             continue
 
         assignments = db.execute(
-            "SELECT * FROM daily_assignments WHERE user_id = ? AND date = ? ORDER BY type",
+            "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s ORDER BY type",
             (u["id"], today),
         ).fetchall()
 
@@ -2110,7 +2112,7 @@ def admin_user_daily_log(user_id):
     # Homework records
     hw_rows = db.execute(
         """SELECT date, type, grade, lesson_num, status, total_questions, correct_answers, time_spent
-           FROM daily_assignments WHERE user_id = ? AND date >= ?
+           FROM daily_assignments WHERE user_id = %s AND date >= %s
            ORDER BY date DESC, type""",
         (user_id, start_date),
     ).fetchall()
@@ -2118,7 +2120,7 @@ def admin_user_daily_log(user_id):
     # Game session records (scores)
     game_rows = db.execute(
         """SELECT DATE(created_at) as date, grade, mode, total_questions, correct_answers, score
-           FROM scores WHERE user_id = ? AND DATE(created_at) >= ?
+           FROM scores WHERE user_id = %s AND DATE(created_at) >= %s
            ORDER BY created_at DESC""",
         (user_id, start_date),
     ).fetchall()
