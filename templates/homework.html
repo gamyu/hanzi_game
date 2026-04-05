@@ -214,6 +214,9 @@
 
 <!-- Quiz Section (hidden until started) -->
 <div class="quiz-section" id="quizSection">
+  <div style="text-align:left;margin-bottom:8px">
+    <button onclick="confirmBackToList()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回作业列表</button>
+  </div>
   <div class="quiz-header">
     <div class="quiz-progress" id="quizProgress">1/10</div>
     <div class="quiz-timer" id="quizTimer">00:00</div>
@@ -408,10 +411,11 @@ function showQuizQuestion() {
   const opts = document.getElementById("quizOptionsArea");
 
   if (q.mode === "pinyin_typing") {
+    const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="quiz-label">请给汉字注音 (手写拼音)</div><div class="quiz-char">${charDisplay}</div>`;
+    area.innerHTML = `<div class="quiz-label">请给汉字注音 (手写拼音)</div><div class="quiz-char">${charDisplay}</div>${contextHint}`;
     opts.style.display = "block";
     opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
       <div id="pinyinBox" style="position:relative;width:100%;max-width:420px;height:120px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fafafa">
@@ -428,7 +432,7 @@ function showQuizQuestion() {
         <button onclick="recognizePinyin2()" style="padding:8px 20px;border:2px solid #e2e8f0;border-radius:8px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">识别</button>
         <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" style="padding:8px 20px;border:2px solid #667eea;border-radius:8px;background:#667eea;color:#fff;font-size:14px;font-weight:600;cursor:pointer">确认</button>
       </div>
-      <div style="font-size:12px;color:#a0aec0">写完拼音后点识别，再点确认提交</div>
+      <div style="font-size:12px;color:#a0aec0">写完拼音后可直接点确认，或先点识别查看结果</div>
     </div>`;
     initPinyinCanvas2();
     pinyinRecognized2 = '';
@@ -542,12 +546,16 @@ function normalizePinyin(s) {
   return s.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
-function pinyinSubmit() {
+async function pinyinSubmit() {
   if (!quiz.answering) return;
+  // Auto-recognize if not yet recognized
+  if (!pinyinRecognized2 && pinyinCanvasStrokes2.length > 0) {
+    await recognizePinyin2();
+  }
   const userAnswer = pinyinRecognized2;
   if (!userAnswer) {
     const el = document.getElementById("pinyinRecognized2");
-    if (el) el.textContent = "请先写拼音并点击识别";
+    if (el) el.textContent = "请先写拼音";
     return;
   }
   quiz.answering = false;
@@ -688,6 +696,16 @@ async function finishQuiz() {
 
   if (data.all_done) {
     document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
+  }
+}
+
+function confirmBackToList() {
+  if (confirm("确定要退出当前作业吗？进度不会保存。")) {
+    clearInterval(quiz.timerInterval);
+    document.getElementById("quizSection").style.display = "none";
+    document.getElementById("todaySection").style.display = "";
+    loadToday();
+    loadProgress();
   }
 }
 

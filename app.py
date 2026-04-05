@@ -122,6 +122,97 @@ def _build_homework_lessons():
 _build_homework_lessons()
 
 
+# --- Multi-pronunciation character detection (多音字) ---
+MULTI_PINYIN = {}  # char -> set of pinyins (only true multi-pronunciation chars)
+
+
+def _build_multi_pinyin():
+    """Detect characters that have genuinely different pronunciations across the data."""
+    tone_map = {
+        "ā": "a", "á": "a", "ǎ": "a", "à": "a",
+        "ē": "e", "é": "e", "ě": "e", "è": "e",
+        "ī": "i", "í": "i", "ǐ": "i", "ì": "i",
+        "ō": "o", "ó": "o", "ǒ": "o", "ò": "o",
+        "ū": "u", "ú": "u", "ǔ": "u", "ù": "u",
+        "ǖ": "ü", "ǘ": "ü", "ǚ": "ü", "ǜ": "ü",
+    }
+
+    def strip_tones(p):
+        return "".join(tone_map.get(c, c) for c in p.lower())
+
+    def has_tone_mark(p):
+        return any(c in tone_map for c in p)
+
+    # Collect all pinyins per character
+    char_pinyins: dict[str, set[str]] = {}
+    for grade, chars in CHARACTERS.items():
+        for c in chars:
+            char_pinyins.setdefault(c["char"], set()).add(c["pinyin"])
+    for grade, words in WORDS.items():
+        for w in words:
+            syllables = w["pinyin"].split()
+            if len(w["word"]) == len(syllables):
+                for ch, py in zip(w["word"], syllables):
+                    char_pinyins.setdefault(ch, set()).add(py)
+
+    # Filter to true multi-pronunciation (different base syllables or multiple toned variants)
+    for ch, pys in char_pinyins.items():
+        if len(pys) < 2:
+            continue
+        bases = {strip_tones(p) for p in pys}
+        if len(bases) > 1:
+            MULTI_PINYIN[ch] = pys
+            continue
+        toned = [p for p in pys if has_tone_mark(p)]
+        if len(toned) > 1:
+            MULTI_PINYIN[ch] = pys
+
+
+_build_multi_pinyin()
+
+
+def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> str:
+    """Find a context word for a multi-pronunciation character.
+    Searches: 1) lesson vocabulary, 2) lesson text entries, 3) grade WORDS."""
+    lesson_data = HOMEWORK_LESSONS.get(grade, {}).get(lesson_num, {})
+
+    # 1. Search lesson 词语 entries
+    for entry in lesson_data.get("词语", []):
+        word = entry["word"]
+        syllables = entry["pinyin"].split()
+        if len(word) == len(syllables):
+            for i, (ch, py) in enumerate(zip(word, syllables)):
+                if ch == char and py == pinyin:
+                    return word
+
+    # 2. Search lesson 识字 entries (multi-char words)
+    for entry in lesson_data.get("识字", []):
+        if len(entry["word"]) >= 2:
+            word = entry["word"]
+            syllables = entry["pinyin"].split()
+            if len(word) == len(syllables):
+                for ch, py in zip(word, syllables):
+                    if ch == char and py == pinyin:
+                        return word
+
+    # 3. Search CHARACTERS words hints for this grade
+    for c in CHARACTERS.get(grade, []):
+        if c["char"] == char and c["pinyin"] == pinyin:
+            if c.get("words"):
+                return c["words"][0]
+
+    # 4. Search all WORDS in this grade
+    for w in WORDS.get(grade, []):
+        word = w["word"]
+        syllables = w["pinyin"].split()
+        if len(word) == len(syllables):
+            for ch, py in zip(word, syllables):
+                if ch == char and py == pinyin:
+                    return word
+
+    return ""
+
+
 def find_next_lesson_across_grades(current_grade, current_lesson, content_key):
     """Find the next lesson with content, advancing to next grade if needed.
     Returns (grade, lesson_num) or (None, None) if all exhausted."""
@@ -463,6 +554,34 @@ def _generate_question(grade: str, mode: str) -> dict:
             "answer": correct["char"],
             "word_hint": "、".join(correct["words"]),
         }
+
+    if mode == "pinyin_typing":
+        # Show character, handwrite pinyin
+        q = {
+            "mode": mode,
+            "question": correct["char"],
+            "answer": correct["pinyin"],
+            "word_hint": "、".join(correct["words"]),
+            "display_char": correct["char"],
+            "display_pinyin": correct["pinyin"],
+        }
+        if correct["char"] in MULTI_PINYIN:
+            cw = ""
+            # Search grade WORDS for a context word
+            for w in WORDS.get(grade, []):
+                syllables = w["pinyin"].split()
+                if len(w["word"]) == len(syllables):
+                    for ch, py in zip(w["word"], syllables):
+                        if ch == correct["char"] and py == correct["pinyin"]:
+                            cw = w["word"]
+                            break
+                if cw:
+                    break
+            if not cw and correct["words"]:
+                cw = correct["words"][0]
+            if cw:
+                q["context_word"] = cw
+        return q
 
     if mode == "dictation_handwrite":
         word_list = WORDS.get(grade, [])
@@ -1527,15 +1646,24 @@ def homework_start(assignment_id):
                 if c["char"] == entry["word"]:
                     word_hint_list = c.get("words", [])
                     break
+            # For single multi-pronunciation characters, add context word
+            context_word = ""
+            char_text = entry["word"]
+            if len(char_text) == 1 and char_text in MULTI_PINYIN:
+                context_word = _find_context_word(
+                    char_text, entry["pinyin"], grade, lesson_num)
             # Recognition homework uses pinyin typing mode (给汉字注音)
-            questions.append({
+            q = {
                 "mode": "pinyin_typing",
                 "question": entry["word"],
                 "answer": entry["pinyin"],
                 "word_hint": "、".join(word_hint_list),
                 "display_char": entry["word"],
                 "display_pinyin": entry["pinyin"],
-            })
+            }
+            if context_word:
+                q["context_word"] = context_word
+            questions.append(q)
         random.shuffle(questions)
     elif hw_type == "writing":
         entries = lesson_data.get("词语", [])
