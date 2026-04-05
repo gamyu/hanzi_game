@@ -23,6 +23,7 @@ env/
 
 # Database
 *.db
+*.sql
 
 # OS files
 .DS_Store
