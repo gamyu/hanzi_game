@@ -29,6 +29,7 @@ import psycopg.sql
 from psycopg.rows import dict_row
 import urllib.request
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 import bcrypt
 import edge_tts
@@ -333,6 +334,21 @@ def calc_streak_coins(streak, is_writing, db):
 
 
 app = Flask(__name__)
+
+# Custom JSON provider to handle PostgreSQL types (date, Decimal, etc.)
+from flask.json.provider import DefaultJSONProvider
+
+class CustomJSONProvider(DefaultJSONProvider):
+    def default(self, o):
+        if isinstance(o, (date, datetime)):
+            return o.isoformat()
+        if isinstance(o, Decimal):
+            return int(o) if o == int(o) else float(o)
+        return super().default(o)
+
+app.json_provider_class = CustomJSONProvider
+app.json = CustomJSONProvider(app)
+
 _secret = os.environ.get("SECRET_KEY")
 if not _secret:
     raise RuntimeError("SECRET_KEY environment variable must be set")
@@ -983,23 +999,23 @@ def scores_api():
     # Merge by date
     merged = {}
     for r in game_rows:
-        d = r["date"]
-        merged[d] = {"date": d, "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": r["score"], "source": "游戏"}
+        d = str(r["date"])
+        merged[d] = {"date": r["date"], "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": r["score"], "source": "游戏"}
     for r in hw_rows:
-        d = r["date"]
+        d = str(r["date"])
         if d in merged:
             merged[d]["total_questions"] += r["total_questions"]
             merged[d]["correct_answers"] += r["correct_answers"]
             merged[d]["source"] = "游戏+作业"
         else:
-            merged[d] = {"date": d, "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": 0, "source": "作业"}
+            merged[d] = {"date": r["date"], "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": 0, "source": "作业"}
 
     wrong_counts = {}
     for r in db.execute(
         "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = %s GROUP BY DATE(created_at)",
         (session["user_id"],),
     ).fetchall():
-        wrong_counts[r["date"]] = r["cnt"]
+        wrong_counts[str(r["date"])] = r["cnt"]
 
     scores = []
     for d in sorted(merged.keys(), reverse=True)[:60]:
@@ -1059,12 +1075,12 @@ def wrong_answers_api():
     db = get_db()
     if date:
         rows = db.execute(
-            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s AND DATE(created_at) = %s GROUP BY character, mode ORDER BY review_count ASC, created_at",
+            "SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s AND DATE(created_at) = %s ORDER BY character, mode, created_at DESC",
             (session["user_id"], date),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s GROUP BY character, mode ORDER BY review_count ASC, created_at DESC",
+            "SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s ORDER BY character, mode, created_at DESC",
             (session["user_id"],),
         ).fetchall()
     return jsonify({"wrong_answers": [dict(r) for r in rows]})
@@ -1202,7 +1218,7 @@ def leaderboard():
                FROM scores s
                JOIN users u ON s.user_id = u.id
                WHERE s.mode = %s
-               GROUP BY s.user_id
+               GROUP BY s.user_id, u.username
                ORDER BY total_score DESC
                LIMIT 50""",
             (mode,),
@@ -1215,7 +1231,7 @@ def leaderboard():
                       SUM(s.total_questions) as total_questions
                FROM scores s
                JOIN users u ON s.user_id = u.id
-               GROUP BY s.user_id
+               GROUP BY s.user_id, u.username
                ORDER BY total_score DESC
                LIMIT 50""",
         ).fetchall()
@@ -1773,11 +1789,10 @@ def homework_today():
     # Check if there are wrong answers from previous days needing review
     today = date.today().isoformat()
     review_items = db.execute(
-        """SELECT character, pinyin, words, grade, mode, review_count
+        """SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count
            FROM wrong_answers
            WHERE user_id = %s AND DATE(created_at) < %s
-           GROUP BY character, mode
-           ORDER BY review_count ASC, created_at DESC""",
+           ORDER BY character, mode, review_count ASC, created_at DESC""",
         (session["user_id"], today),
     ).fetchall()
     review_needed = [dict(r) for r in review_items]
@@ -2302,16 +2317,16 @@ def admin_user_daily_log(user_id):
         (user_id, start_date),
     ).fetchall()
 
-    # Group by date
+    # Group by date (normalize keys to strings for consistent merging)
     daily_log = {}
     for row in hw_rows:
-        d = row["date"]
+        d = str(row["date"])
         if d not in daily_log:
             daily_log[d] = {"date": d, "homework": [], "games": []}
         daily_log[d]["homework"].append(dict(row))
 
     for row in game_rows:
-        d = row["date"]
+        d = str(row["date"])
         if d not in daily_log:
             daily_log[d] = {"date": d, "homework": [], "games": []}
         daily_log[d]["games"].append(dict(row))
