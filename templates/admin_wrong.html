@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>错题记录 - {{ username }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #333;
+    padding: 24px 16px;
+  }
+  h1 { color: #fff; font-size: 24px; font-weight: 900; text-shadow: 0 2px 8px rgba(0,0,0,0.2); margin-bottom: 4px; }
+  .subtitle { color: rgba(255,255,255,0.8); font-size: 14px; margin-bottom: 16px; }
+  .card {
+    background: #fff;
+    border-radius: 20px;
+    width: 100%;
+    max-width: 700px;
+    padding: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 8px; text-align: center; font-size: 14px; }
+  th { background: #f7fafc; color: #5a67d8; font-weight: 700; font-size: 13px; border-bottom: 2px solid #e2e8f0; }
+  tr:not(:last-child) td { border-bottom: 1px solid #edf2f7; }
+  tr:hover td { background: #f0f4ff; }
+  td.char { font-size: 20px; font-weight: 700; text-align: left; }
+  .empty { text-align: center; padding: 40px 20px; color: #a0aec0; font-size: 16px; }
+  .back-btn {
+    margin-top: 16px;
+    padding: 10px 32px;
+    border: 2px solid rgba(255,255,255,0.5);
+    border-radius: 20px;
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    backdrop-filter: blur(4px);
+  }
+  .back-btn:hover { background: rgba(255,255,255,0.3); }
+  .rc0 { color: #e53e3e; font-weight: 700; }
+  .rc1 { color: #d69e2e; font-weight: 700; }
+  .rc2 { color: #38a169; font-weight: 700; }
+  @media (max-width: 420px) {
+    th, td { padding: 8px 4px; font-size: 12px; }
+    td.char { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+<h1>错题记录</h1>
+<p class="subtitle">{{ username }}</p>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th style="text-align:left">字/词</th><th>拼音</th><th>组词</th><th>模式</th><th>复习</th><th>日期</th></tr>
+    </thead>
+    <tbody id="tbody">
+      <tr><td colspan="6" class="empty">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+<button class="back-btn" onclick="window.close()">关闭</button>
+<script>
+const modeLabels = { char_to_pinyin: "选拼音", pinyin_to_char: "选字", listen_to_char: "听音选字", dictation_handwrite: "写词语", pinyin_typing: "注音" };
+async function load() {
+  const res = await fetch("/api/admin/user/{{ user_id }}/details");
+  const data = await res.json();
+  const tbody = document.getElementById("tbody");
+  if (!data.wrong_answers || data.wrong_answers.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无错题</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.wrong_answers.map(w => {
+    const cls = w.review_count === 0 ? 'rc0' : w.review_count >= 2 ? 'rc2' : 'rc1';
+    return `<tr>
+      <td class="char">${w.character}</td>
+      <td>${w.pinyin}</td>
+      <td style="font-size:12px">${w.words || ''}</td>
+      <td style="font-size:12px">${modeLabels[w.mode] || w.mode}</td>
+      <td class="${cls}">${w.review_count}</td>
+      <td style="font-size:12px">${w.date || ''}</td>
+    </tr>`;
+  }).join("");
+}
+load();
+</script>
+</body>
+</html>

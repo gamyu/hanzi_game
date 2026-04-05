@@ -408,22 +408,30 @@ function showQuizQuestion() {
   const opts = document.getElementById("quizOptionsArea");
 
   if (q.mode === "pinyin_typing") {
-    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="quiz-char">${q.question}</div>`;
+    const charDisplay = q.question.length > 1
+      ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
+      : q.question;
+    area.innerHTML = `<div class="quiz-label">请给汉字注音 (手写拼音)</div><div class="quiz-char">${charDisplay}</div>`;
     opts.style.display = "block";
     opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
-      <div style="position:relative;width:100%;max-width:400px;height:80px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff">
-        <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">
-          <div style="position:absolute;left:0;right:0;height:1px;top:20%;background:#e2e8f0"></div>
-          <div style="position:absolute;left:0;right:0;height:1px;top:40%;background:#cbd5e0"></div>
-          <div style="position:absolute;left:0;right:0;height:1px;top:60%;background:#e2e8f0"></div>
-          <div style="position:absolute;left:0;right:0;height:0;top:80%;border-top:2px solid #a0aec0"></div>
+      <div id="pinyinBox" style="position:relative;width:100%;max-width:420px;height:120px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fafafa">
+        <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:1">
+          <div style="position:absolute;left:0;right:0;top:25%;border-top:1px dashed #cbd5e0"></div>
+          <div style="position:absolute;left:0;right:0;top:50%;border-top:1px dashed #a0aec0"></div>
+          <div style="position:absolute;left:0;right:0;top:75%;border-top:2px solid #718096"></div>
         </div>
-        <input type="text" id="pinyinInput" style="position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;border:none;outline:none;background:transparent;font-size:36px;font-weight:700;text-align:center;color:#2d3748;font-family:'Times New Roman','STSong',serif;line-height:80px;padding:0 12px" placeholder="输入拼音" autocomplete="off" autocapitalize="off" spellcheck="false"
-          onkeydown="if(event.key==='Enter')pinyinSubmit()">
+        <canvas id="pinyinCanvas2" style="position:absolute;top:0;left:0;width:100%;height:100%;touch-action:none;z-index:2"></canvas>
       </div>
-      <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" style="padding:10px 32px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:16px;font-weight:700;cursor:pointer">确认</button>
+      <div id="pinyinRecognized2" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
+        <button onclick="clearPinyinCanvas2()" style="padding:8px 20px;border:2px solid #e2e8f0;border-radius:8px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">清除</button>
+        <button onclick="recognizePinyin2()" style="padding:8px 20px;border:2px solid #e2e8f0;border-radius:8px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">识别</button>
+        <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" style="padding:8px 20px;border:2px solid #667eea;border-radius:8px;background:#667eea;color:#fff;font-size:14px;font-weight:600;cursor:pointer">确认</button>
+      </div>
+      <div style="font-size:12px;color:#a0aec0">写完拼音后点识别，再点确认提交</div>
     </div>`;
-    setTimeout(() => { const inp = document.getElementById("pinyinInput"); if (inp) inp.focus(); }, 100);
+    initPinyinCanvas2();
+    pinyinRecognized2 = '';
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
     opts.style.display = "grid";
@@ -477,37 +485,89 @@ function showQuizQuestion() {
   quiz.answering = true;
 }
 
+// --- Pinyin handwriting for homework.html ---
+let pinyinCanvasStrokes2 = [];
+let pinyinCurrentStroke2 = null;
+let pinyinIsDrawing2 = false;
+let pinyinRecognized2 = '';
+
+function initPinyinCanvas2() {
+  pinyinCanvasStrokes2 = [];
+  const box = document.getElementById("pinyinBox");
+  const canvas = document.getElementById("pinyinCanvas2");
+  if (!canvas || !box) return;
+  canvas.width = box.clientWidth;
+  canvas.height = box.clientHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [t.clientX - rect.left, t.clientY - rect.top];
+  }
+  function startStroke(e) { e.preventDefault(); pinyinIsDrawing2 = true; const [x,y] = getPos(e); pinyinCurrentStroke2 = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
+  function moveStroke(e) { if (!pinyinIsDrawing2) return; e.preventDefault(); const [x,y] = getPos(e); pinyinCurrentStroke2[0].push(x); pinyinCurrentStroke2[1].push(y); pinyinCurrentStroke2[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
+  function endStroke(e) { if (!pinyinIsDrawing2) return; e.preventDefault(); pinyinIsDrawing2 = false; if (pinyinCurrentStroke2 && pinyinCurrentStroke2[0].length > 0) pinyinCanvasStrokes2.push(pinyinCurrentStroke2); pinyinCurrentStroke2 = null; }
+  canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
+  canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
+  canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+}
+
+function clearPinyinCanvas2() {
+  pinyinCanvasStrokes2 = []; pinyinRecognized2 = '';
+  const el = document.getElementById("pinyinRecognized2"); if (el) el.textContent = '';
+  const canvas = document.getElementById("pinyinCanvas2");
+  if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+}
+
+async function recognizePinyin2() {
+  if (pinyinCanvasStrokes2.length === 0) return;
+  const canvas = document.getElementById("pinyinCanvas2");
+  const el = document.getElementById("pinyinRecognized2");
+  el.textContent = "识别中...";
+  try {
+    const res = await fetch("/api/handwriting", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes: pinyinCanvasStrokes2, width: canvas.width, height: canvas.height }),
+    });
+    const data = await res.json();
+    let topResult = null;
+    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+    if (topResult) { pinyinRecognized2 = topResult; el.textContent = `识别结果: ${topResult}`; }
+    else { el.textContent = "未能识别，请清除后重写"; }
+  } catch(e) { el.textContent = "识别失败，请重试"; }
+}
+
 function normalizePinyin(s) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ').replace(/ü/g, 'v').replace(/\u00fc/g, 'v');
+  return s.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
 function pinyinSubmit() {
   if (!quiz.answering) return;
-  const input = document.getElementById("pinyinInput");
-  if (!input) return;
-  const userAnswer = input.value.trim();
-  if (!userAnswer) return;
+  const userAnswer = pinyinRecognized2;
+  if (!userAnswer) {
+    const el = document.getElementById("pinyinRecognized2");
+    if (el) el.textContent = "请先写拼音并点击识别";
+    return;
+  }
   quiz.answering = false;
   const q = quiz.questions[quiz.currentIndex];
   const hint = document.getElementById("quizHint");
-  input.disabled = true;
   const btn = document.getElementById("pinyinSubmitBtn");
   if (btn) btn.disabled = true;
   const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
   if (isCorrect) {
-    input.style.color = "#38a169";
     quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextQuestion, 800);
   } else {
-    input.style.color = "#e53e3e";
     quiz.wrongItems.push({
       character: q.display_char || q.question,
       pinyin: q.display_pinyin || q.answer,
       words: q.word_hint || "",
       mode: q.mode,
     });
-    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你的答案: ${userAnswer}
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <strong style="font-size:28px;color:#38a169;font-family:'Times New Roman','STSong',serif">${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
       <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;

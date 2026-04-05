@@ -1563,7 +1563,7 @@ def homework_start(assignment_id):
 @app.route("/api/homework/preview/<int:assignment_id>")
 def homework_preview(assignment_id):
     """Generate preview (预习) questions for a homework assignment.
-    Uses game modes: char_to_pinyin and pinyin_to_char for recognition lessons."""
+    Supports modes: char_to_pinyin, pinyin_to_char, listen_to_char."""
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     db = get_db()
@@ -1576,10 +1576,14 @@ def homework_preview(assignment_id):
 
     grade = assignment["grade"]
     lesson_num = assignment["lesson_num"]
+    mode = request.args.get("mode", "char_to_pinyin")
+    if mode not in ("char_to_pinyin", "pinyin_to_char", "listen_to_char"):
+        mode = "char_to_pinyin"
+
     lessons = HOMEWORK_LESSONS.get(grade, {})
     lesson_data = lessons.get(lesson_num, {})
 
-    # Build preview questions from 认字 pool using game modes
+    # Build preview questions from 认字 pool
     entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
     if not entries:
         return jsonify({"error": "该课暂无数据"}), 400
@@ -1587,6 +1591,9 @@ def homework_preview(assignment_id):
     all_chars = CHARACTERS.get(grade, [])
     questions = []
     for entry in entries:
+        # Only single characters for game modes (multi-char words don't work well for selection)
+        if len(entry["word"]) > 1:
+            continue
         correct = {"char": entry["word"], "pinyin": entry["pinyin"], "words": []}
         for c in all_chars:
             if c["char"] == entry["word"]:
@@ -1594,29 +1601,41 @@ def homework_preview(assignment_id):
                 break
         others = [c for c in all_chars if c["char"] != correct["char"]]
 
-        # Mode 1: 看字选拼音
-        distractors = _pick_distractors(correct, others, key="pinyin")
-        options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
-        random.shuffle(options)
-        questions.append({
-            "mode": "char_to_pinyin", "question": correct["char"],
-            "options": options, "correct_index": options.index(correct["pinyin"]),
-            "answer": correct["pinyin"],
-            "word_hint": "、".join(correct["words"]),
-            "display_char": correct["char"], "display_pinyin": correct["pinyin"],
-        })
-
-        # Mode 2: 看拼音选字
-        distractors2 = _pick_distractors(correct, others, key="char")
-        options2 = [correct["char"]] + [d["char"] for d in distractors2]
-        random.shuffle(options2)
-        questions.append({
-            "mode": "pinyin_to_char", "question": correct["pinyin"],
-            "options": options2, "correct_index": options2.index(correct["char"]),
-            "answer": correct["char"],
-            "word_hint": "、".join(correct["words"]),
-            "display_char": correct["char"], "display_pinyin": correct["pinyin"],
-        })
+        if mode == "char_to_pinyin":
+            distractors = _pick_distractors(correct, others, key="pinyin")
+            options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
+            random.shuffle(options)
+            questions.append({
+                "mode": mode, "question": correct["char"],
+                "options": options, "correct_index": options.index(correct["pinyin"]),
+                "answer": correct["pinyin"],
+                "word_hint": "、".join(correct["words"]),
+                "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+            })
+        elif mode == "pinyin_to_char":
+            distractors = _pick_distractors(correct, others, key="char")
+            options = [correct["char"]] + [d["char"] for d in distractors]
+            random.shuffle(options)
+            questions.append({
+                "mode": mode, "question": correct["pinyin"],
+                "options": options, "correct_index": options.index(correct["char"]),
+                "answer": correct["char"],
+                "word_hint": "、".join(correct["words"]),
+                "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+            })
+        elif mode == "listen_to_char":
+            distractors = _pick_distractors(correct, others, key="char",
+                                            exclude_homophones=True)
+            options = [correct["char"]] + [d["char"] for d in distractors]
+            random.shuffle(options)
+            questions.append({
+                "mode": mode, "question": correct["char"],
+                "question_pinyin": correct["pinyin"],
+                "options": options, "correct_index": options.index(correct["char"]),
+                "answer": correct["char"],
+                "word_hint": "、".join(correct["words"]),
+                "display_char": correct["char"], "display_pinyin": correct["pinyin"],
+            })
 
     random.shuffle(questions)
     return jsonify({
