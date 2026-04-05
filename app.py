@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import asyncio
+from dotenv import load_dotenv
+
+load_dotenv()
 import hashlib
 import io
 import json
@@ -328,7 +331,7 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
 
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/hanzi_game")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/hanzi_db")
 
 
 def get_db():
