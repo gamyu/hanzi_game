@@ -1215,6 +1215,43 @@
   }
 
 </style>
+  /* Stroke order toggle */
+  .stroke-toggle-wrap {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; color: #4a5568;
+  }
+  .stroke-toggle-wrap label { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+  .stroke-toggle { position: relative; width: 40px; height: 22px; display: inline-block; }
+  .stroke-toggle input { opacity: 0; width: 0; height: 0; }
+  .stroke-toggle .slider {
+    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background: #cbd5e0; border-radius: 22px; transition: 0.3s;
+  }
+  .stroke-toggle .slider:before {
+    content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+    background: #fff; border-radius: 50%; transition: 0.3s;
+  }
+  .stroke-toggle input:checked + .slider { background: #5a67d8; }
+  .stroke-toggle input:checked + .slider:before { transform: translateX(18px); }
+
+  /* Hanzi Writer containers */
+  .hz-writer-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .hz-writer-cell {
+    width: 168px; height: 168px; border: 2px solid #e2e8f0; border-radius: 12px;
+    background: #fafafa; position: relative; overflow: hidden;
+  }
+  .hz-writer-cell.active { border-color: #5a67d8; box-shadow: 0 0 0 2px rgba(90,103,216,0.2); }
+  .hz-writer-cell.done { border-color: #38a169; background: #f0fff4; }
+  .hz-writer-cell.error { border-color: #e53e3e; }
+  .hz-char-label {
+    position: absolute; top: 4px; left: 8px; font-size: 12px; color: #a0aec0; z-index: 1;
+  }
+  #hwStrokeStatus {
+    font-size: 14px; min-height: 20px; text-align: center; color: #999; margin-top: 4px;
+  }
+  #hwStrokeStatus .stroke-error { color: #e53e3e; font-weight: 600; }
+  #hwStrokeStatus .stroke-ok { color: #38a169; font-weight: 600; }
+
+<script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.7/dist/hanzi-writer.min.js"></script>
 </head>
 <body>
 
@@ -1226,7 +1263,7 @@
 
 <!-- Homework View (shown by default when logged in) -->
 <div id="homeworkView" style="display:none; width:100%; flex-direction:column; align-items:center;">
-  <button class="view-toggle-btn" onclick="switchToGameView()">进入游戏</button>
+  <button class="view-toggle-btn" onclick="switchToGameView()">自由学习</button>
 
   <!-- Review Section (blocks new homework until completed) -->
   <div class="hw-section" id="hwReviewSection" style="display:none">
@@ -1240,6 +1277,12 @@
     <div id="hwTodayContent">
       <div style="text-align:center;color:#a0aec0;padding:20px">加载中...</div>
     </div>
+  </div>
+
+  <!-- Wrong Answer Review (always accessible) -->
+  <div class="hw-section" id="hwWrongReviewSection" style="display:none">
+    <div class="hw-section-title">错题本</div>
+    <div id="hwWrongReviewContent"></div>
   </div>
 
   <!-- Homework Quiz Section -->
@@ -2400,9 +2443,15 @@ function renderModes() {
 }
 
 // --- Load question ---
-async function loadQuestion() {
+async function loadQuestion(reuseCurrentQ) {
   state.answering = false;
   document.getElementById("hintArea").innerHTML = "";
+
+  // When toggling stroke order, reuse the current question
+  if (reuseCurrentQ && state.currentQ) {
+    renderQuestion(state.currentQ);
+    return;
+  }
 
   // Check retry queue first (wrong answer to repeat immediately)
   if (state.retryQueue.length > 0) {
@@ -2535,8 +2584,37 @@ function renderQuestion(q) {
     opts.style.alignItems = "center";
     opts.style.gap = "12px";
 
+    if (strokeOrderEnabled) {
+      // Stroke order mode: one HanziWriter per character
+      const chars = q.answer.split("");
+      const cellsHTML = chars.map((ch, i) =>
+        `<div class="hz-writer-cell" id="hzCell${i}">
+          <span class="hz-char-label">${i + 1}</span>
+          <div id="hzTarget${i}"></div>
+        </div>`
+      ).join("");
+      opts.innerHTML = `
+        <div class="canvas-wrap">
+          ${getStrokeToggleHTML()}
+          <div class="hz-writer-row">${cellsHTML}</div>
+          <div id="hwStrokeStatus"></div>
+        </div>
+      `;
+      state.currentQ = q;
+      state.answering = true;
+      initStrokeOrderUI(chars, function() {
+        // All characters completed — count total mistakes
+        const totalMistakes = hzWriters.reduce((sum, hw) => sum + (hw.mistakeCount || 0), 0);
+        const statusEl = document.getElementById("hwStrokeStatus");
+        if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">全部完成!</span>`;
+        handleDictationAnswer(q.answer, q);
+      });
+      return;
+    }
+
     opts.innerHTML = `
       <div class="canvas-wrap">
+        ${getStrokeToggleHTML()}
         <div class="hw-canvas-box" style="position:relative;width:${canvasW}px;height:${canvasH}px">
           <canvas id="writeCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
           <div class="hw-grid-lines" id="hwGrid"></div>
@@ -2740,6 +2818,123 @@ function checkStrokeQuality(strokes, canvas) {
   const avgPointsPerStroke = totalPoints / strokes.length;
   if (strokes.length > 3 && avgPointsPerStroke < 3) return "笔画太潦草，请清除后写工整一些";
   return null; // OK
+}
+
+// --- Stroke order mode (Hanzi Writer) ---
+let strokeOrderEnabled = localStorage.getItem("hanzi_stroke_order") === "true";
+let hzWriters = [];  // HanziWriter instances for current question
+let hzCharIndex = 0; // current character index being written
+let hzChars = [];     // characters to write
+
+function getStrokeToggleHTML() {
+  return `<div class="stroke-toggle-wrap">
+    <label>
+      <span class="stroke-toggle">
+        <input type="checkbox" id="strokeOrderToggle" ${strokeOrderEnabled ? 'checked' : ''} onchange="toggleStrokeOrder(this.checked)">
+        <span class="slider"></span>
+      </span>
+      笔顺检查
+    </label>
+  </div>`;
+}
+
+function toggleStrokeOrder(on) {
+  strokeOrderEnabled = on;
+  localStorage.setItem("hanzi_stroke_order", on);
+  // Reload the current question to switch mode
+  if (hwQuiz.questions && hwQuiz.questions.length > 0 && hwQuiz.questions[hwQuiz.currentIndex]?.mode === "dictation_handwrite") {
+    // In homework quiz mode
+    showHwQuizQuestion();
+  } else if (state.currentQ && state.currentQ.mode === "dictation_handwrite") {
+    loadQuestion(true); // reload current game question
+  }
+}
+
+function initStrokeOrderUI(chars, onAllComplete) {
+  hzWriters = [];
+  hzCharIndex = 0;
+  hzChars = chars;
+
+  chars.forEach((ch, i) => {
+    const cellId = `hzCell${i}`;
+    const targetId = `hzTarget${i}`;
+    const cell = document.getElementById(cellId);
+    if (!cell) return;
+
+    const writer = HanziWriter.create(targetId, ch, {
+      width: 160, height: 160, padding: 8,
+      showCharacter: false,
+      showOutline: true,
+      strokeColor: '#2d3748',
+      outlineColor: '#e2e8f0',
+      highlightColor: '#5a67d8',
+      drawingWidth: 6,
+      showHintAfterMisses: 3,
+      highlightOnComplete: true,
+    });
+
+    hzWriters.push({ writer, char: ch, cellId, done: false });
+
+    if (i === 0) {
+      cell.classList.add("active");
+      startCharQuiz(0, onAllComplete);
+    }
+  });
+}
+
+function startCharQuiz(index, onAllComplete) {
+  if (index >= hzWriters.length) {
+    onAllComplete();
+    return;
+  }
+  hzCharIndex = index;
+  // Mark current cell active
+  hzWriters.forEach((hw, i) => {
+    const cell = document.getElementById(hw.cellId);
+    if (!cell) return;
+    cell.classList.remove("active");
+    if (i === index) cell.classList.add("active");
+  });
+
+  const statusEl = document.getElementById("hwStrokeStatus");
+  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hzWriters.length} 个字: <strong>${hzChars[index]}</strong>`;
+
+  hzWriters[index].writer.quiz({
+    onMistake: function(strokeData) {
+      if (statusEl) {
+        statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写「${hzChars[index]}」</span>`;
+      }
+      const cell = document.getElementById(hzWriters[index].cellId);
+      if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 600); }
+    },
+    onCorrectStroke: function(strokeData) {
+      if (statusEl) {
+        statusEl.innerHTML = `<span class="stroke-ok">✓</span> 第 ${index + 1}/${hzWriters.length} 个字`;
+      }
+    },
+    onComplete: function(summaryData) {
+      hzWriters[index].done = true;
+      const cell = document.getElementById(hzWriters[index].cellId);
+      if (cell) { cell.classList.remove("active"); cell.classList.add("done"); }
+
+      if (summaryData.totalMistakes > 0 && statusEl) {
+        // Show animation of correct stroke order before proceeding
+        statusEl.innerHTML = `<span class="stroke-error">本字有 ${summaryData.totalMistakes} 次笔顺错误，演示正确笔顺...</span>`;
+        hzWriters[index].writer.animateCharacter({
+          onComplete: function() {
+            setTimeout(() => startCharQuiz(index + 1, onAllComplete), 400);
+          }
+        });
+      } else {
+        setTimeout(() => startCharQuiz(index + 1, onAllComplete), 200);
+      }
+    }
+  });
+}
+
+function showStrokeOrderAnimation(charIndex) {
+  if (charIndex < 0 || charIndex >= hzWriters.length) return;
+  hzWriters[charIndex].writer.animateCharacter();
 }
 
 // --- Canvas handwriting ---
@@ -3194,8 +3389,10 @@ function switchToHomeworkView() {
   document.getElementById("hwQuizSection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwReviewSection").style.display = "none";
+  document.getElementById("hwWrongReviewSection").style.display = "none";
   loadHomeworkToday();
   loadHomeworkProgress();
+  loadWrongReviewSection();
 }
 
 async function switchToGameView() {
@@ -3555,7 +3752,31 @@ function showHwQuizQuestion() {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+
+    if (strokeOrderEnabled) {
+      const chars = q.answer.split("");
+      const cellsHTML = chars.map((ch, i) =>
+        `<div class="hz-writer-cell" id="hzCell${i}">
+          <span class="hz-char-label">${i + 1}</span>
+          <div id="hzTarget${i}"></div>
+        </div>`
+      ).join("");
+      opts.innerHTML = `<div class="hw-quiz-canvas-wrap">
+        ${getStrokeToggleHTML()}
+        <div class="hz-writer-row">${cellsHTML}</div>
+        <div id="hwStrokeStatus"></div>
+      </div>`;
+      hwQuiz.answering = true;
+      initStrokeOrderUI(chars, function() {
+        const statusEl = document.getElementById("hwStrokeStatus");
+        if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">全部完成!</span>`;
+        hwHandleHwAnswer(q.answer);
+      });
+      return;
+    }
+
     opts.innerHTML = `<div class="hw-quiz-canvas-wrap">
+      ${getStrokeToggleHTML()}
       <div class="hw-quiz-hw-box" style="width:${canvasW}px;height:${canvasH}px">
         <canvas id="hwQuizCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
         <div class="hw-grid-lines" id="hwQuizGridLines"></div>
@@ -3948,13 +4169,51 @@ function hwBackToToday() {
 }
 
 // --- Review Quiz ---
+// --- Wrong answer review section (always accessible from home) ---
+async function loadWrongReviewSection() {
+  const section = document.getElementById("hwWrongReviewSection");
+  const content = document.getElementById("hwWrongReviewContent");
+  try {
+    const res = await fetch("/api/wrong_answers");
+    const data = await res.json();
+    const items = data.wrong_answers || [];
+    if (items.length === 0) {
+      section.style.display = "none";
+      return;
+    }
+    section.style.display = "";
+    content.innerHTML = `
+      <div class="hw-review-card" onclick="startVoluntaryReview()">
+        <div class="icon">📝</div>
+        <div class="label">复习错题</div>
+        <div class="info">共 ${items.length} 道错题</div>
+      </div>`;
+  } catch (e) {
+    section.style.display = "none";
+  }
+}
+
+async function startVoluntaryReview() {
+  // Fetch all wrong answers and use them as review items
+  try {
+    const res = await fetch("/api/wrong_answers");
+    const data = await res.json();
+    const items = data.wrong_answers || [];
+    if (items.length === 0) { alert("没有错题可复习"); return; }
+    hwReviewItems = items;
+    startHwReview();
+  } catch (e) {
+    alert("加载错题失败");
+  }
+}
+
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0 };
 
 function startHwReview() {
   // Build review questions from hwReviewItems
   const questions = [];
   hwReviewItems.forEach(item => {
-    if (item.mode === "char_to_pinyin" || item.mode === "listen_to_char" || item.mode === "pinyin_typing") {
+    if (item.mode === "char_to_pinyin" || item.mode === "pinyin_to_char" || item.mode === "listen_to_char" || item.mode === "pinyin_typing") {
       // Recognition review: show char, pick pinyin
       questions.push({
         mode: "char_to_pinyin",
@@ -4087,17 +4346,16 @@ async function submitHwReviewHandwrite() {
   if (!canvas) return;
 
   // Use handwriting recognition
-  const strokes = hwCanvasStrokes.map(s => [s.map(p => p.x), s.map(p => p.y)]);
-  if (strokes.length === 0) {
+  if (hwCanvasStrokes.length === 0) {
     hint.innerHTML = `<span style="color:#e53e3e">请先写字</span>`;
     hwReview.answering = true;
     return;
   }
   let userInput = "";
   try {
-    const res = await fetch("/api/handwrite", {
+    const res = await fetch("/api/handwriting", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes, width: canvas.width, height: canvas.height }),
+      body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
     });
     const result = await res.json();
     if (result[0] === "SUCCESS" && result[1]?.[0]?.[1]?.length > 0)

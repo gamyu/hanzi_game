@@ -202,7 +202,43 @@
     .quiz-char { font-size: 72px; }
     .quiz-pinyin { font-size: 32px; }
   }
+
+  /* Stroke order toggle */
+  .stroke-toggle-wrap {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; color: #4a5568;
+  }
+  .stroke-toggle-wrap label { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+  .stroke-toggle { position: relative; width: 40px; height: 22px; display: inline-block; }
+  .stroke-toggle input { opacity: 0; width: 0; height: 0; }
+  .stroke-toggle .slider {
+    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background: #cbd5e0; border-radius: 22px; transition: 0.3s;
+  }
+  .stroke-toggle .slider:before {
+    content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+    background: #fff; border-radius: 50%; transition: 0.3s;
+  }
+  .stroke-toggle input:checked + .slider { background: #5a67d8; }
+  .stroke-toggle input:checked + .slider:before { transform: translateX(18px); }
+
+  .hz-writer-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .hz-writer-cell {
+    width: 168px; height: 168px; border: 2px solid #e2e8f0; border-radius: 12px;
+    background: #fafafa; position: relative; overflow: hidden;
+  }
+  .hz-writer-cell.active { border-color: #5a67d8; box-shadow: 0 0 0 2px rgba(90,103,216,0.2); }
+  .hz-writer-cell.done { border-color: #38a169; background: #f0fff4; }
+  .hz-writer-cell.error { border-color: #e53e3e; }
+  .hz-char-label {
+    position: absolute; top: 4px; left: 8px; font-size: 12px; color: #a0aec0; z-index: 1;
+  }
+  #hwStrokeStatus {
+    font-size: 14px; min-height: 20px; text-align: center; color: #999; margin-top: 4px;
+  }
+  #hwStrokeStatus .stroke-error { color: #e53e3e; font-weight: 600; }
+  #hwStrokeStatus .stroke-ok { color: #38a169; font-weight: 600; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.7/dist/hanzi-writer.min.js"></script>
 </head>
 <body>
 
@@ -473,7 +509,31 @@ function showQuizQuestion() {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+
+    if (hwStrokeOrderEnabled) {
+      const chars = q.answer.split("");
+      const cellsHTML = chars.map((ch, i) =>
+        `<div class="hz-writer-cell" id="hwHzCell${i}">
+          <span class="hz-char-label">${i + 1}</span>
+          <div id="hwHzTarget${i}"></div>
+        </div>`
+      ).join("");
+      opts.innerHTML = `<div class="quiz-canvas-wrap">
+        ${getHwStrokeToggleHTML()}
+        <div class="hz-writer-row">${cellsHTML}</div>
+        <div id="hwStrokeStatus"></div>
+      </div>`;
+      quiz.answering = true;
+      initHwStrokeOrderUI(chars, function() {
+        const statusEl = document.getElementById("hwStrokeStatus");
+        if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">全部完成!</span>`;
+        handleHwAnswer(q.answer);
+      });
+      return;
+    }
+
     opts.innerHTML = `<div class="quiz-canvas-wrap">
+      ${getHwStrokeToggleHTML()}
       <div class="quiz-hw-box" style="width:${canvasW}px;height:${canvasH}px">
         <canvas id="hwCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
         <div class="hw-grid-lines" id="hwGridLines"></div>
@@ -519,6 +579,108 @@ function checkStrokeQuality(strokes, canvas) {
   const avgPointsPerStroke = totalPoints / strokes.length;
   if (strokes.length > 3 && avgPointsPerStroke < 3) return "笔画太潦草，请清除后写工整一些";
   return null;
+}
+
+// --- Stroke order mode (Hanzi Writer) for homework ---
+let hwStrokeOrderEnabled = localStorage.getItem("hanzi_stroke_order") === "true";
+let hwHzWriters = [];
+let hwHzCharIndex = 0;
+let hwHzChars = [];
+
+function getHwStrokeToggleHTML() {
+  return `<div class="stroke-toggle-wrap">
+    <label>
+      <span class="stroke-toggle">
+        <input type="checkbox" id="hwStrokeOrderToggle" ${hwStrokeOrderEnabled ? 'checked' : ''} onchange="toggleHwStrokeOrder(this.checked)">
+        <span class="slider"></span>
+      </span>
+      笔顺检查
+    </label>
+  </div>`;
+}
+
+function toggleHwStrokeOrder(on) {
+  hwStrokeOrderEnabled = on;
+  localStorage.setItem("hanzi_stroke_order", on);
+  if (quiz.questions[quiz.currentIndex] && quiz.questions[quiz.currentIndex].mode === "dictation_handwrite") {
+    showQuizQuestion();
+  }
+}
+
+function initHwStrokeOrderUI(chars, onAllComplete) {
+  hwHzWriters = [];
+  hwHzCharIndex = 0;
+  hwHzChars = chars;
+
+  chars.forEach((ch, i) => {
+    const cellId = `hwHzCell${i}`;
+    const targetId = `hwHzTarget${i}`;
+    const cell = document.getElementById(cellId);
+    if (!cell) return;
+
+    const writer = HanziWriter.create(targetId, ch, {
+      width: 160, height: 160, padding: 8,
+      showCharacter: false,
+      showOutline: true,
+      strokeColor: '#2d3748',
+      outlineColor: '#e2e8f0',
+      highlightColor: '#5a67d8',
+      drawingWidth: 6,
+      showHintAfterMisses: 3,
+      highlightOnComplete: true,
+    });
+
+    hwHzWriters.push({ writer, char: ch, cellId, done: false });
+
+    if (i === 0) {
+      cell.classList.add("active");
+      startHwCharQuiz(0, onAllComplete);
+    }
+  });
+}
+
+function startHwCharQuiz(index, onAllComplete) {
+  if (index >= hwHzWriters.length) {
+    onAllComplete();
+    return;
+  }
+  hwHzCharIndex = index;
+  hwHzWriters.forEach((hw, i) => {
+    const cell = document.getElementById(hw.cellId);
+    if (!cell) return;
+    cell.classList.remove("active");
+    if (i === index) cell.classList.add("active");
+  });
+
+  const statusEl = document.getElementById("hwStrokeStatus");
+  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hwHzWriters.length} 个字: <strong>${hwHzChars[index]}</strong>`;
+
+  hwHzWriters[index].writer.quiz({
+    onMistake: function(strokeData) {
+      if (statusEl) statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写「${hwHzChars[index]}」</span>`;
+      const cell = document.getElementById(hwHzWriters[index].cellId);
+      if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 600); }
+    },
+    onCorrectStroke: function(strokeData) {
+      if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">✓</span> 第 ${index + 1}/${hwHzWriters.length} 个字`;
+    },
+    onComplete: function(summaryData) {
+      hwHzWriters[index].done = true;
+      const cell = document.getElementById(hwHzWriters[index].cellId);
+      if (cell) { cell.classList.remove("active"); cell.classList.add("done"); }
+
+      if (summaryData.totalMistakes > 0 && statusEl) {
+        statusEl.innerHTML = `<span class="stroke-error">本字有 ${summaryData.totalMistakes} 次笔顺错误，演示正确笔顺...</span>`;
+        hwHzWriters[index].writer.animateCharacter({
+          onComplete: function() {
+            setTimeout(() => startHwCharQuiz(index + 1, onAllComplete), 400);
+          }
+        });
+      } else {
+        setTimeout(() => startHwCharQuiz(index + 1, onAllComplete), 200);
+      }
+    }
+  });
 }
 
 // --- Pinyin handwriting for homework.html ---

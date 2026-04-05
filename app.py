@@ -1348,19 +1348,14 @@ def _check_coin_eligible(db, user_id, mode, game_grade):
     """Check if a game at given grade is eligible for coin awards.
 
     Anti-cheating: prevent farming easy levels.
-    - Recognition (认字): max 2 books back from current homework level
     - Writing (写字): max 4 books back from current homework level
-    - Other modes (listen, speed tests): no coin awards from games
+    - All other modes (认字/听音等): max 2 books back from current homework level
     Returns True if coins should be awarded.
     """
     if not game_grade:
         return True  # homework mode, no grade check needed
 
-    # Only recognition and writing modes earn coins
     is_writing = mode == "dictation_handwrite"
-    is_recognition = mode in ("char_to_pinyin", "pinyin_to_char", "pinyin_typing")
-    if not is_writing and not is_recognition:
-        return False  # listen_to_char and other speed modes: no coins
 
     plan = db.execute(
         "SELECT * FROM homework_plans WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
@@ -1369,12 +1364,12 @@ def _check_coin_eligible(db, user_id, mode, game_grade):
     if not plan:
         return True  # no homework plan, allow freely
 
-    if is_recognition:
-        hw_grade = plan["recognition_grade"] or plan["grade"]
-        max_books_back = 2
-    else:
+    if is_writing:
         hw_grade = plan["writing_grade"] or plan["grade"]
         max_books_back = 4
+    else:
+        hw_grade = plan["recognition_grade"] or plan["grade"]
+        max_books_back = 2
 
     hw_idx = GRADE_ORDER.index(hw_grade) if hw_grade in GRADE_ORDER else 0
     game_idx = GRADE_ORDER.index(game_grade) if game_grade in GRADE_ORDER else 0
