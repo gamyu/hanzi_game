@@ -85,6 +85,7 @@
 </div>
 <button class="back-btn" onclick="window.close()">关闭</button>
 <script>
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 const modeLabels = { char_to_pinyin: "选拼音", pinyin_to_char: "选字", listen_to_char: "听音选字", dictation_handwrite: "写词语", pinyin_typing: "注音" };
 async function load() {
   const res = await fetch("/api/admin/user/{{ user_id }}/details");
@@ -97,12 +98,12 @@ async function load() {
   tbody.innerHTML = data.wrong_answers.map(w => {
     const cls = w.review_count === 0 ? 'rc0' : w.review_count >= 2 ? 'rc2' : 'rc1';
     return `<tr>
-      <td class="char">${w.character}</td>
-      <td>${w.pinyin}</td>
-      <td style="font-size:12px">${w.words || ''}</td>
-      <td style="font-size:12px">${modeLabels[w.mode] || w.mode}</td>
-      <td class="${cls}">${w.review_count}</td>
-      <td style="font-size:12px">${w.date || ''}</td>
+      <td class="char">${esc(w.character)}</td>
+      <td>${esc(w.pinyin)}</td>
+      <td style="font-size:12px">${esc(w.words || '')}</td>
+      <td style="font-size:12px">${esc(modeLabels[w.mode] || w.mode)}</td>
+      <td class="${cls}">${esc(String(w.review_count))}</td>
+      <td style="font-size:12px">${esc(w.date || '')}</td>
     </tr>`;
   }).join("");
 }

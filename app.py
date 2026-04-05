@@ -25,11 +25,14 @@ import atexit
 import socket
 import subprocess
 import psycopg
+import psycopg.sql
 from psycopg.rows import dict_row
 import urllib.request
 from datetime import date, datetime, timedelta
 
+import bcrypt
 import edge_tts
+import hmac as _hmac
 from flask import Flask, Response, g, jsonify, redirect, render_template, request, session, url_for
 from characters import CHARACTERS
 from words import WORDS
@@ -330,9 +333,15 @@ def calc_streak_coins(streak, is_writing, db):
 
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", os.urandom(32))
+_secret = os.environ.get("SECRET_KEY")
+if not _secret:
+    raise RuntimeError("SECRET_KEY environment variable must be set")
+app.secret_key = _secret
 
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "")
+_legacy_admin_pw = os.environ.get("ADMIN_PASSWORD", "")
+if not ADMIN_PASSWORD_HASH and not _legacy_admin_pw:
+    raise RuntimeError("ADMIN_PASSWORD_HASH environment variable must be set")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/hanzi_db")
 
@@ -394,6 +403,63 @@ def close_db(exc):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+# --- Security headers ---
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if request.is_secure:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# --- CSRF protection ---
+CSRF_SAFE_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
+
+def _generate_csrf_token():
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = os.urandom(32).hex()
+    return session["_csrf_token"]
+
+# Make csrf_token available in all templates
+app.jinja_env.globals["csrf_token"] = _generate_csrf_token
+
+@app.before_request
+def csrf_protect():
+    if request.method in CSRF_SAFE_METHODS:
+        return
+    # Skip CSRF for endpoints that don't act on an existing session
+    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting")
+    if request.path in CSRF_EXEMPT:
+        return
+    token = (
+        request.headers.get("X-CSRF-Token")
+        or (request.get_json(silent=True) or {}).get("_csrf_token")
+        or request.form.get("_csrf_token")
+    )
+    if not token or not _hmac.compare_digest(token, session.get("_csrf_token", "")):
+        return jsonify({"error": "CSRF token missing or invalid"}), 403
+
+
+# --- Rate limiting ---
+_rate_limit_store: dict = {}  # key -> (count, window_start)
+
+def _rate_limited(key: str, max_requests: int, window_seconds: int) -> bool:
+    """Simple in-process rate limiter. Returns True if over limit."""
+    now = datetime.now().timestamp()
+    entry = _rate_limit_store.get(key)
+    if entry is None or now - entry[1] > window_seconds:
+        _rate_limit_store[key] = (1, now)
+        return False
+    count, start = entry
+    if count >= max_requests:
+        return True
+    _rate_limit_store[key] = (count + 1, start)
+    return False
 
 
 def init_db():
@@ -543,15 +609,27 @@ def init_db():
 
 
 def hash_password(password, salt=None):
-    if salt is None:
-        salt = os.urandom(16).hex()
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}:{hashed}"
+    """Hash a password using bcrypt. The salt parameter is ignored (bcrypt manages its own)."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(password, stored):
-    salt, _ = stored.split(":")
-    return hash_password(password, salt) == stored
+    """Verify a password against a stored hash. Supports both bcrypt and legacy SHA-256 hashes."""
+    if stored.startswith("$2b$") or stored.startswith("$2a$"):
+        return bcrypt.checkpw(password.encode(), stored.encode())
+    # Legacy SHA-256 format: salt:hash
+    if ":" in stored:
+        salt, hashed = stored.split(":", 1)
+        return hashlib.sha256((salt + password).encode()).hexdigest() == hashed
+    return False
+
+
+def _migrate_password_if_needed(db, user_id, password, stored):
+    """Re-hash a legacy SHA-256 password to bcrypt after successful verification."""
+    if stored.startswith("$2b$") or stored.startswith("$2a$"):
+        return
+    new_hash = hash_password(password)
+    db.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_hash, user_id))
 
 
 init_db()
@@ -786,6 +864,9 @@ def index():
 
 @app.route("/api/register", methods=["POST"])
 def register():
+    if _rate_limited(f"register:{request.remote_addr}", 5, 60):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
     data = request.get_json()
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -804,14 +885,19 @@ def register():
 
     pw_hash = hash_password(password)
     cursor = db.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id", (username, pw_hash))
-    session["user_id"] = cursor.fetchone()["id"]
+    user_id = cursor.fetchone()["id"]
     db.commit()
+    session.clear()
+    session["user_id"] = user_id
     session["username"] = username
-    return jsonify({"username": username})
+    return jsonify({"username": username, "csrf_token": _generate_csrf_token()})
 
 
 @app.route("/api/login", methods=["POST"])
 def login():
+    if _rate_limited(f"login:{request.remote_addr}", 10, 60):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
     data = request.get_json()
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
@@ -824,9 +910,13 @@ def login():
     if not user or not verify_password(password, user["password_hash"]):
         return jsonify({"error": "用户名或密码错误"}), 401
 
+    _migrate_password_if_needed(db, user["id"], password, user["password_hash"])
+    db.commit()
+
+    session.clear()
     session["user_id"] = user["id"]
     session["username"] = username
-    return jsonify({"username": username})
+    return jsonify({"username": username, "csrf_token": _generate_csrf_token()})
 
 
 @app.route("/api/logout", methods=["POST"])
@@ -1220,10 +1310,19 @@ def question():
 
 @app.route("/api/admin/login", methods=["POST"])
 def admin_login():
+    if _rate_limited(f"admin_login:{request.remote_addr}", 5, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
     data = request.get_json()
     password = data.get("password", "")
-    if password != ADMIN_PASSWORD:
-        return jsonify({"error": "管理员密码错误"}), 401
+    if ADMIN_PASSWORD_HASH:
+        if not bcrypt.checkpw(password.encode(), ADMIN_PASSWORD_HASH.encode()):
+            return jsonify({"error": "管理员密码错误"}), 401
+    elif _legacy_admin_pw:
+        if not _hmac.compare_digest(password, _legacy_admin_pw):
+            return jsonify({"error": "管理员密码错误"}), 401
+    else:
+        return jsonify({"error": "管理员认证未配置"}), 500
     session["is_admin"] = True
     return jsonify({"ok": True})
 
@@ -1457,12 +1556,20 @@ def streak_update():
     mode = data.get("mode", "")
     game_grade = data.get("grade", "")  # grade of the game being played
     is_writing = mode == "dictation_handwrite"
-    streak_col = "writing_streak" if is_writing else "recognition_streak"
-    awarded_col = "writing_coins_awarded" if is_writing else "recognition_coins_awarded"
+    STREAK_COLS = {
+        "writing": ("writing_streak", "writing_coins_awarded"),
+        "recognition": ("recognition_streak", "recognition_coins_awarded"),
+    }
+    streak_col, awarded_col = STREAK_COLS["writing" if is_writing else "recognition"]
 
     db = get_db()
-    user = db.execute(f"SELECT {streak_col}, {awarded_col}, coins FROM users WHERE id = %s",
-                      (session["user_id"],)).fetchone()
+    user = db.execute(
+        psycopg.sql.SQL("SELECT {streak}, {awarded}, coins FROM users WHERE id = %s").format(
+            streak=psycopg.sql.Identifier(streak_col),
+            awarded=psycopg.sql.Identifier(awarded_col),
+        ),
+        (session["user_id"],),
+    ).fetchone()
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
@@ -1476,19 +1583,37 @@ def streak_update():
             total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
             coins_earned = total_coins_at_streak - user[awarded_col]
             if coins_earned > 0:
-                db.execute(f"UPDATE users SET {streak_col} = %s, {awarded_col} = %s, coins = coins + %s WHERE id = %s",
-                           (new_streak, total_coins_at_streak, coins_earned, session["user_id"]))
+                db.execute(
+                    psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
+                        streak=psycopg.sql.Identifier(streak_col),
+                        awarded=psycopg.sql.Identifier(awarded_col),
+                    ),
+                    (new_streak, total_coins_at_streak, coins_earned, session["user_id"]),
+                )
             else:
-                db.execute(f"UPDATE users SET {streak_col} = %s WHERE id = %s",
-                           (new_streak, session["user_id"]))
+                db.execute(
+                    psycopg.sql.SQL("UPDATE users SET {streak} = %s WHERE id = %s").format(
+                        streak=psycopg.sql.Identifier(streak_col),
+                    ),
+                    (new_streak, session["user_id"]),
+                )
         else:
             # Still update streak display but no coins
-            db.execute(f"UPDATE users SET {streak_col} = %s WHERE id = %s",
-                       (new_streak, session["user_id"]))
+            db.execute(
+                psycopg.sql.SQL("UPDATE users SET {streak} = %s WHERE id = %s").format(
+                    streak=psycopg.sql.Identifier(streak_col),
+                ),
+                (new_streak, session["user_id"]),
+            )
     else:
         new_streak = 0
-        db.execute(f"UPDATE users SET {streak_col} = 0, {awarded_col} = 0 WHERE id = %s",
-                   (session["user_id"],))
+        db.execute(
+            psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0 WHERE id = %s").format(
+                streak=psycopg.sql.Identifier(streak_col),
+                awarded=psycopg.sql.Identifier(awarded_col),
+            ),
+            (session["user_id"],),
+        )
 
     db.commit()
     return jsonify({
@@ -2219,4 +2344,4 @@ def tts():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    app.run(debug=False, host="127.0.0.1", port=5001)

@@ -434,6 +434,18 @@
 </div>
 
 <script>
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+{
+  const _origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const method = (opts.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      opts.headers = Object.assign({}, opts.headers, {"X-CSRF-Token": "{{ csrf_token() }}"});
+    }
+    return _origFetch.call(this, url, opts);
+  };
+}
 const MODE_LABELS = {
   char_to_pinyin: "看字选拼音",
   pinyin_to_char: "看拼音选字",
@@ -484,12 +496,12 @@ async function loadWrongAnswers() {
     const rcClass = rc >= 2 ? "review-count-2" : rc >= 1 ? "review-count-1" : "review-count-0";
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="char-cell">${w.character}</td>
-      <td class="pinyin-cell">${w.pinyin}</td>
-      <td>${w.words || ""}</td>
-      <td>${w.grade}</td>
-      <td class="mode-cell">${MODE_LABELS[w.mode] || w.mode}</td>
-      <td class="date-cell">${w.date || ""}</td>
+      <td class="char-cell">${esc(w.character)}</td>
+      <td class="pinyin-cell">${esc(w.pinyin)}</td>
+      <td>${esc(w.words || "")}</td>
+      <td>${esc(w.grade)}</td>
+      <td class="mode-cell">${esc(MODE_LABELS[w.mode] || w.mode)}</td>
+      <td class="date-cell">${esc(w.date || "")}</td>
       <td class="review-count-cell ${rcClass}">${rc}次</td>
     `;
     body.appendChild(tr);
@@ -513,13 +525,13 @@ async function loadMastered() {
   items.forEach(w => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="char-cell">${w.character}</td>
-      <td class="pinyin-cell">${w.pinyin}</td>
-      <td>${w.words || ""}</td>
-      <td>${w.grade}</td>
-      <td class="mode-cell">${MODE_LABELS[w.mode] || w.mode}</td>
+      <td class="char-cell">${esc(w.character)}</td>
+      <td class="pinyin-cell">${esc(w.pinyin)}</td>
+      <td>${esc(w.words || "")}</td>
+      <td>${esc(w.grade)}</td>
+      <td class="mode-cell">${esc(MODE_LABELS[w.mode] || w.mode)}</td>
       <td>${w.review_count || 0}次</td>
-      <td class="date-cell">${w.mastered_date || ""}</td>
+      <td class="date-cell">${esc(w.mastered_date || "")}</td>
     `;
     body.appendChild(tr);
   });

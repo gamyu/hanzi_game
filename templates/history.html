@@ -144,6 +144,7 @@
 <button class="back-btn" onclick="window.close()">关闭</button>
 
 <script>
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 async function loadScores() {
   const res = await fetch("/api/scores");
   const data = await res.json();
@@ -169,8 +170,8 @@ async function loadScores() {
       : '<span style="color:#a0aec0">-</span>';
 
     tr.innerHTML = `
-      <td>${s.date || ""}</td>
-      <td style="font-size:12px;color:#718096">${s.source || ""}</td>
+      <td>${esc(s.date || "")}</td>
+      <td style="font-size:12px;color:#718096">${esc(s.source || "")}</td>
       <td>${total}</td>
       <td>${correct}</td>
       <td class="${cls}">${total > 0 ? pct + "%" : "-"}</td>

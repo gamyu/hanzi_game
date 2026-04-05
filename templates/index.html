@@ -1515,6 +1515,18 @@
 <div class="celebration" id="celebration"></div>
 
 <script>
+let CSRF_TOKEN = "{{ csrf_token() }}";
+{
+  const _origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    opts = opts || {};
+    const method = (opts.method || "GET").toUpperCase();
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      opts.headers = Object.assign({}, opts.headers, {"X-CSRF-Token": CSRF_TOKEN});
+    }
+    return _origFetch.call(this, url, opts);
+  };
+}
 const MODES = [
   { id: "char_to_pinyin", label: "看字选拼音" },
   { id: "pinyin_to_char", label: "看拼音选字" },
@@ -1713,6 +1725,7 @@ async function submitAuth() {
     return;
   }
 
+  if (data.csrf_token) CSRF_TOKEN = data.csrf_token;
   state.user = data.username;
   await loadCoins();
   await loadAppData();

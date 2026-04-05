@@ -20,6 +20,7 @@ env/
 
 # Environment variables
 .env
+hanzi_game.env
 
 # Database
 *.db
