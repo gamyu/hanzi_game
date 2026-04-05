@@ -1382,6 +1382,18 @@ def _check_coin_eligible(db, user_id, mode, game_grade):
     return game_idx >= hw_idx - max_books_back
 
 
+@app.route("/api/coin-eligible")
+def coin_eligible_check():
+    """Check if a game mode + grade combination is eligible for coin awards."""
+    if "user_id" not in session:
+        return jsonify({"eligible": True})
+    mode = request.args.get("mode", "")
+    grade = request.args.get("grade", "")
+    db = get_db()
+    eligible = _check_coin_eligible(db, session["user_id"], mode, grade)
+    return jsonify({"eligible": eligible})
+
+
 @app.route("/api/streak", methods=["POST"])
 def streak_update():
     """Update persistent streak on each answer. Awards coins at milestones."""

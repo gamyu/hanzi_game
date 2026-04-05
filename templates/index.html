@@ -1497,6 +1497,7 @@ let state = {
   seenQuestions: new Set(),
   retryQueue: [],
   retryCount: 0,
+  coinEligible: true,
 };
 
 // Streak milestone coin rules (loaded from server, these are defaults)
@@ -1520,6 +1521,10 @@ function reportStreak(correct) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ correct, mode: state.mode, grade: state.grade }),
   }).then(r => r.json()).then(data => {
+    if (data.coin_eligible !== undefined) {
+      state.coinEligible = data.coin_eligible;
+      updateStreakBar();
+    }
     if (data.coins_earned > 0) {
       state.coins = data.coins;
       document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
@@ -1528,6 +1533,18 @@ function reportStreak(correct) {
       spawnStarBurst();
     }
   }).catch(() => {});
+}
+
+async function checkCoinEligible() {
+  if (!state.user) { state.coinEligible = true; return; }
+  try {
+    const res = await fetch(`/api/coin-eligible?mode=${encodeURIComponent(state.mode)}&grade=${encodeURIComponent(state.grade)}`);
+    const data = await res.json();
+    state.coinEligible = data.eligible;
+  } catch (e) {
+    state.coinEligible = true;
+  }
+  updateScoreboard();
 }
 
 function showCoinNotification(coins, streak) {
@@ -1889,7 +1906,20 @@ function switchAdminTab(tab) {
 }
 
 async function showAdminPanel() {
-  if (!state.isAdmin) return;
+  // Always verify admin status with server first
+  try {
+    const checkRes = await fetch("/api/admin/check");
+    const checkData = await checkRes.json();
+    if (!checkData.is_admin) {
+      state.isAdmin = false;
+      renderUserBar();
+      showAdminLogin();
+      return;
+    }
+  } catch (e) {
+    showAdminLogin();
+    return;
+  }
   const modal = document.getElementById("adminModal");
   modal.classList.remove("hidden");
 
@@ -2326,13 +2356,14 @@ function renderGrades(grades) {
     const btn = document.createElement("button");
     btn.className = "grade-btn" + (g === state.grade ? " active" : "");
     btn.textContent = g;
-    btn.onclick = () => {
+    btn.onclick = async () => {
       saveScoreAsync();
       state.grade = g;
       localStorage.setItem("hanzi_grade", g);
       state.seenQuestions.clear();
       state.retryQueue = [];
       state.retryCount = 0;
+      await checkCoinEligible();
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -2358,6 +2389,7 @@ function renderModes() {
       state.retryCount = 0;
       // Load the correct persistent streak for the new mode type
       if (state.user) await loadCoins();
+      await checkCoinEligible();
       updateScoreboard();
       document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
@@ -2687,6 +2719,29 @@ function handleDictationAnswer(userInput, q) {
   }
 }
 
+// --- Handwriting quality check ---
+function checkStrokeQuality(strokes, canvas) {
+  // Count total points across all strokes
+  let totalPoints = 0;
+  for (const s of strokes) totalPoints += s[0].length;
+  // Too few points = random dots/taps
+  if (totalPoints < 8) return "笔画太少，请认真书写后再提交";
+  // Check if strokes cover too much area (scribble / black blob)
+  let allX = [], allY = [];
+  for (const s of strokes) { allX.push(...s[0]); allY.push(...s[1]); }
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const bboxArea = (maxX - minX) * (maxY - minY);
+  const canvasArea = canvas.width * canvas.height;
+  // Estimate ink density: total points * lineWidth^2 vs bbox area
+  const inkArea = totalPoints * 25; // ~5px lineWidth squared
+  if (bboxArea > 0 && inkArea / bboxArea > 1.5) return "写得太密了，请清除后重新工整书写";
+  // Check average stroke has reasonable length (not just taps)
+  const avgPointsPerStroke = totalPoints / strokes.length;
+  if (strokes.length > 3 && avgPointsPerStroke < 3) return "笔画太潦草，请清除后写工整一些";
+  return null; // OK
+}
+
 // --- Canvas handwriting ---
 let canvasStrokes = [];
 let currentStroke = null;
@@ -2762,6 +2817,13 @@ async function submitHandwriting() {
   const canvas = document.getElementById("writeCanvas");
   const statusEl = document.getElementById("hwStatus");
   const btn = document.getElementById("hwSubmitBtn");
+
+  const qualityMsg = checkStrokeQuality(canvasStrokes, canvas);
+  if (qualityMsg) {
+    statusEl.textContent = qualityMsg;
+    return;
+  }
+
   statusEl.textContent = "正在识别...";
   btn.disabled = true;
 
@@ -2836,6 +2898,10 @@ async function recognizeGamePinyin() {
   if (gamePinyinStrokes.length === 0) return;
   const canvas = document.getElementById("gamePinyinCanvas");
   const el = document.getElementById("gamePinyinRecognized");
+
+  const qualityMsg = checkStrokeQuality(gamePinyinStrokes, canvas);
+  if (qualityMsg) { el.textContent = qualityMsg; return; }
+
   el.textContent = "识别中...";
   try {
     const res = await fetch("/api/handwriting", {
@@ -2975,6 +3041,12 @@ function calcStreakBarState(combo, milestones) {
 }
 
 function updateStreakBar() {
+  const bar = document.getElementById("streakBar");
+  if (!state.coinEligible) {
+    if (bar) bar.style.display = "none";
+    return;
+  }
+  if (bar) bar.style.display = "";
   const milestones = getStreakMilestones();
   const barState = calcStreakBarState(state.combo, milestones);
   if (!barState) return;
@@ -3126,10 +3198,11 @@ function switchToHomeworkView() {
   loadHomeworkProgress();
 }
 
-function switchToGameView() {
+async function switchToGameView() {
   document.getElementById("homeworkView").style.display = "none";
   document.getElementById("gameView").style.display = "";
   document.getElementById("backToHwBtn").style.display = state.user ? "" : "none";
+  await checkCoinEligible();
   loadQuestion();
 }
 

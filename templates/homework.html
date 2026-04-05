@@ -504,6 +504,23 @@ function showQuizQuestion() {
   quiz.answering = true;
 }
 
+// --- Handwriting quality check ---
+function checkStrokeQuality(strokes, canvas) {
+  let totalPoints = 0;
+  for (const s of strokes) totalPoints += s[0].length;
+  if (totalPoints < 8) return "笔画太少，请认真书写后再提交";
+  let allX = [], allY = [];
+  for (const s of strokes) { allX.push(...s[0]); allY.push(...s[1]); }
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const bboxArea = (maxX - minX) * (maxY - minY);
+  const inkArea = totalPoints * 25;
+  if (bboxArea > 0 && inkArea / bboxArea > 1.5) return "写得太密了，请清除后重新工整书写";
+  const avgPointsPerStroke = totalPoints / strokes.length;
+  if (strokes.length > 3 && avgPointsPerStroke < 3) return "笔画太潦草，请清除后写工整一些";
+  return null;
+}
+
 // --- Pinyin handwriting for homework.html ---
 let pinyinCanvasStrokes2 = [];
 let pinyinCurrentStroke2 = null;
@@ -543,6 +560,8 @@ async function recognizePinyin2() {
   if (pinyinCanvasStrokes2.length === 0) return;
   const canvas = document.getElementById("pinyinCanvas2");
   const el = document.getElementById("pinyinRecognized2");
+  const qualityMsg = checkStrokeQuality(pinyinCanvasStrokes2, canvas);
+  if (qualityMsg) { el.textContent = qualityMsg; return; }
   el.textContent = "识别中...";
   try {
     const res = await fetch("/api/handwriting", {
@@ -801,6 +820,13 @@ async function submitHw() {
   const canvas = document.getElementById("hwCanvas");
   const statusEl = document.getElementById("hwStatus");
   const btn = document.getElementById("hwSubmitBtn");
+
+  const qualityMsg = checkStrokeQuality(canvasStrokes, canvas);
+  if (qualityMsg) {
+    statusEl.textContent = qualityMsg;
+    return;
+  }
+
   statusEl.textContent = "正在识别...";
   btn.disabled = true;
 
