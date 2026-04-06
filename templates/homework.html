@@ -145,16 +145,19 @@
   /* Handwriting in quiz */
   .quiz-canvas-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
   .quiz-hw-box { position: relative; }
-  .quiz-hw-box canvas { border: 2px solid #e2e8f0; border-radius: 12px; background: #fafafa; touch-action: none; }
+  .quiz-hw-box canvas { border: 2px solid #a0aec0; background: #fafafa; touch-action: none; }
   .hw-grid-lines { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  .hw-grid-line { position: absolute; top: 0; bottom: 0; width: 1px; background: #e2e8f0; }
-  .hw-grid-line-h { position: absolute; left: 0; right: 0; height: 1px; background: #e2e8f0; }
+  .hw-grid-line { position: absolute; top: 0; bottom: 0; width: 2px; background: #a0aec0; }
+  .hw-grid-line-h { position: absolute; left: 0; right: 0; height: 2px; background: #a0aec0; }
+  .hw-grid-dash-v { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed #cbd5e0; }
+  .hw-grid-dash-h { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed #cbd5e0; }
   .quiz-canvas-btns { display: flex; gap: 12px; }
   .quiz-canvas-btns button {
     padding: 8px 24px; border: 2px solid #e2e8f0; border-radius: 8px;
     background: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   .quiz-canvas-btns button:hover { border-color: #667eea; }
+  .hw-submit-btn { background: #667eea !important; color: #fff !important; border-color: #667eea !important; }
   .quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
 
   /* Results */
@@ -549,13 +552,16 @@ function showQuizQuestion() {
         <canvas id="hwCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
         <div class="hw-grid-lines" id="hwGridLines"></div>
       </div>
+      <div id="hwRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px"></div>
       <div class="quiz-canvas-btns">
         <button onclick="clearHwCanvas()">清除</button>
-        <button id="hwSubmitBtn" onclick="submitHw()">确认</button>
+        <button onclick="recognizeHw()">识别</button>
+        <button id="hwSubmitBtn" class="hw-submit-btn" onclick="submitHw()">确认</button>
       </div>
+      <div style="font-size:12px;color:#a0aec0">写完后可直接点确认，或先点识别查看结果</div>
       <div class="quiz-hw-status" id="hwStatus"></div>
     </div>`;
-    // Draw grid
+    // Draw grid: solid borders between cells + dashed center lines inside each cell
     const gridEl = document.getElementById("hwGridLines");
     for (let i = 1; i < cols; i++) {
       const line = document.createElement("div");
@@ -569,6 +575,26 @@ function showQuizQuestion() {
       line.style.top = (r * cellSize) + "px";
       gridEl.appendChild(line);
     }
+    // Dashed center lines (田字格) inside each cell
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (r * cols + c >= charCount) break;
+        const dashV = document.createElement("div");
+        dashV.className = "hw-grid-dash-v";
+        dashV.style.left = (c * cellSize + cellSize / 2) + "px";
+        dashV.style.top = (r * cellSize) + "px";
+        dashV.style.height = cellSize + "px";
+        gridEl.appendChild(dashV);
+        const dashH = document.createElement("div");
+        dashH.className = "hw-grid-dash-h";
+        dashH.style.top = (r * cellSize + cellSize / 2) + "px";
+        dashH.style.left = (c * cellSize) + "px";
+        dashH.style.width = cellSize + "px";
+        gridEl.appendChild(dashH);
+      }
+    }
+    hwRecognizedResult = '';
+    hwCellLayout = { cellSize, cols, rows, charCount };
     initHwCanvas();
   }
 
@@ -979,52 +1005,125 @@ function initHwCanvas() {
   canvas.addEventListener("touchend", endStroke);
 }
 
+let hwRecognizedResult = '';
+let hwCellLayout = null; // {cellSize, cols, rows, charCount}
+
 function clearHwCanvas() {
   canvasStrokes = [];
+  hwRecognizedResult = '';
   const canvas = document.getElementById("hwCanvas");
   if (!canvas) return;
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  const recEl = document.getElementById("hwRecognized");
+  if (recEl) recEl.textContent = '';
+  const statusEl = document.getElementById("hwStatus");
+  if (statusEl) statusEl.textContent = '';
+}
+
+// Assign each stroke to a cell based on its center position
+function splitStrokesByCells(strokes, layout) {
+  const { cellSize, cols, rows, charCount } = layout;
+  const cellStrokes = Array.from({ length: charCount }, () => []);
+  for (const s of strokes) {
+    // Calculate stroke center
+    const avgX = s[0].reduce((a, b) => a + b, 0) / s[0].length;
+    const avgY = s[1].reduce((a, b) => a + b, 0) / s[1].length;
+    const col = Math.min(Math.floor(avgX / cellSize), cols - 1);
+    const row = Math.min(Math.floor(avgY / cellSize), rows - 1);
+    const cellIdx = row * cols + col;
+    if (cellIdx >= 0 && cellIdx < charCount) {
+      // Offset stroke coordinates to be relative to the cell
+      const offsetX = col * cellSize;
+      const offsetY = row * cellSize;
+      cellStrokes[cellIdx].push([
+        s[0].map(x => x - offsetX),
+        s[1].map(y => y - offsetY),
+        s[2],
+      ]);
+    }
+  }
+  return cellStrokes;
+}
+
+async function recognizeHw() {
+  if (canvasStrokes.length === 0) return;
+  const canvas = document.getElementById("hwCanvas");
+  const recEl = document.getElementById("hwRecognized");
+  const statusEl = document.getElementById("hwStatus");
+
+  const qualityMsg = checkStrokeQuality(canvasStrokes, canvas);
+  if (qualityMsg) {
+    if (statusEl) statusEl.textContent = qualityMsg;
+    return;
+  }
+
+  if (recEl) recEl.textContent = "识别中...";
+  try {
+    if (hwCellLayout && hwCellLayout.charCount > 1) {
+      // Multi-char: split strokes by cell, recognize each separately
+      const cellStrokes = splitStrokesByCells(canvasStrokes, hwCellLayout);
+      const cellSize = hwCellLayout.cellSize;
+      const results = await Promise.all(cellStrokes.map(async (strokes, i) => {
+        if (strokes.length === 0) return '?';
+        const res = await fetch("/api/handwriting", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ strokes, width: cellSize, height: cellSize }),
+        });
+        const data = await res.json();
+        try { if (data[0] === "SUCCESS") { const r = data[1][0][1][0]; return r ? r[0] : '?'; } } catch(e) {}
+        return '?';
+      }));
+      const combined = results.join('');
+      if (combined.includes('?')) {
+        const missing = results.map((r, i) => r === '?' ? (i + 1) : null).filter(Boolean);
+        if (recEl) recEl.textContent = `第${missing.join('、')}个字未能识别，请清除后重写`;
+        hwRecognizedResult = '';
+      } else {
+        hwRecognizedResult = combined;
+        if (recEl) recEl.textContent = `识别结果: ${combined}`;
+      }
+    } else {
+      // Single char: recognize as before
+      const res = await fetch("/api/handwriting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
+      });
+      const data = await res.json();
+      let topResult = null;
+      try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+      if (topResult) {
+        hwRecognizedResult = topResult;
+        if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+      } else {
+        if (recEl) recEl.textContent = "未能识别，请清除后重写";
+      }
+    }
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
+  }
 }
 
 async function submitHw() {
   if (canvasStrokes.length === 0) return;
   if (!quiz.answering) return;
 
-  const canvas = document.getElementById("hwCanvas");
   const statusEl = document.getElementById("hwStatus");
   const btn = document.getElementById("hwSubmitBtn");
 
-  const qualityMsg = checkStrokeQuality(canvasStrokes, canvas);
-  if (qualityMsg) {
-    statusEl.textContent = qualityMsg;
+  // Auto-recognize if not yet recognized
+  if (!hwRecognizedResult) {
+    await recognizeHw();
+  }
+
+  if (!hwRecognizedResult) {
+    if (statusEl) statusEl.textContent = "请先写汉字";
     return;
   }
 
-  statusEl.textContent = "正在识别...";
   btn.disabled = true;
-
-  try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try {
-      if (data[0] === "SUCCESS") topResult = data[1][0][1][0];
-    } catch (e) {}
-    if (!topResult) {
-      statusEl.textContent = "未能识别，请清除后重写";
-      btn.disabled = false;
-      return;
-    }
-    statusEl.textContent = `识别结果: ${topResult}`;
-    handleHwAnswer(topResult);
-  } catch (e) {
-    statusEl.textContent = "识别失败，请重试";
-    btn.disabled = false;
-  }
+  handleHwAnswer(hwRecognizedResult);
 }
 
 // --- Init ---
