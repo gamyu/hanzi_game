@@ -171,7 +171,7 @@
   .pinyin-cell { display: flex; flex-direction: column; align-items: center; }
   .pinyin-cell-char { font-size: 28px; font-weight: 700; color: #2d3748; margin-bottom: 4px; }
   .pinyin-fourline-box {
-    position: relative; width: 120px; height: 90px; background: #fff; overflow: hidden;
+    position: relative; width: 140px; height: 130px; background: #fff; overflow: hidden;
     border-left: 1px solid #a0aec0; border-right: 1px solid #a0aec0;
   }
   .pinyin-fourline-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; z-index: 2; }
@@ -542,7 +542,7 @@ function showQuizQuestion() {
           <div class="pinyin-fourline-lines" id="pyLines${i}"></div>
           <canvas id="pyCanvas${i}" style="display:${savedMode === 'handwrite' ? 'block' : 'none'}"></canvas>
         </div>
-        <div id="pyTypeArea${i}" style="display:${savedMode === 'type' ? 'block' : 'none'};width:120px">
+        <div id="pyTypeArea${i}" style="display:${savedMode === 'type' ? 'block' : 'none'};width:140px">
           <input type="text" class="pinyin-type-input" id="pyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
           <div class="pinyin-tone-row">
             <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},1)">1</button>
@@ -815,9 +815,10 @@ let _pyCurrentStroke = null;
 function drawPinyinFourLines(idx) {
   const linesEl = document.getElementById(`pyLines${idx}`);
   if (!linesEl) return;
+  const box = document.getElementById(`pyBox${idx}`);
+  const h = box ? box.clientHeight : 130;
   // Standard 四线格: exactly 4 horizontal lines, 3 zones
-  const h = 90;
-  const positions = [0, h / 3, h * 2 / 3, h - 1]; // top, upper-mid, lower-mid, bottom
+  const positions = [0, Math.round(h / 3), Math.round(h * 2 / 3), h - 1];
   const styles = ['2px solid #a0aec0', '1px dashed #cbd5e0', '1px dashed #cbd5e0', '2px solid #a0aec0'];
   linesEl.innerHTML = positions.map((top, i) =>
     `<div style="position:absolute;left:0;right:0;top:${top}px;border-top:${styles[i]}"></div>`
@@ -971,8 +972,8 @@ async function recognizePinyin2() {
     const results = await Promise.all(pinyinCellStrokes.map(async (strokes, i) => {
       if (strokes.length === 0) return '';
       const box = document.getElementById(`pyBox${i}`);
-      const w = box ? box.clientWidth : 120;
-      const h = box ? box.clientHeight : 90;
+      const w = box ? box.clientWidth : 140;
+      const h = box ? box.clientHeight : 130;
       const res = await fetch("/api/handwriting", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ strokes, width: w, height: h }),
