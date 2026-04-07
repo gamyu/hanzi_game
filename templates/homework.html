@@ -545,10 +545,10 @@ function showQuizQuestion() {
         <div id="pyTypeArea${i}" style="display:${savedMode === 'type' ? 'block' : 'none'};width:140px">
           <input type="text" class="pinyin-type-input" id="pyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
           <div class="pinyin-tone-row">
-            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},1)">1</button>
-            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},2)">2</button>
-            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},3)">3</button>
-            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},4)">4</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},1)">ˉ</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},2)">ˊ</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},3)">ˇ</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},4)">ˋ</button>
             <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},0)">轻</button>
           </div>
         </div>
@@ -581,6 +581,9 @@ function showQuizQuestion() {
       initPinyinCellCanvas(i);
     }
     pinyinRecognized2 = '';
+    if (savedMode === 'type') {
+      setTimeout(() => { const el = document.getElementById('pyInput0'); if (el) el.focus(); }, 100);
+    }
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
     opts.style.display = "grid";
