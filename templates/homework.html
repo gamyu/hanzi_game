@@ -582,7 +582,7 @@ function showQuizQuestion() {
     }
     pinyinRecognized2 = '';
     if (savedMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('pyInput0'); if (el) el.focus(); }, 100);
+      setTimeout(() => { const el = document.getElementById('pyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
@@ -881,6 +881,9 @@ function switchPinyinMode(mode) {
     const typeArea = document.getElementById(`pyTypeArea${i}`);
     if (canvas) canvas.style.display = mode === 'handwrite' ? 'block' : 'none';
     if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
+  }
+  if (mode === 'type') {
+    setTimeout(() => { const el = document.getElementById('pyInput0'); if (el) { el.focus(); el.click(); } }, 200);
   }
 }
 

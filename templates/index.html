@@ -1710,6 +1710,7 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span style="cursor:pointer" onclick="switchToHomeworkView()">${state.user}</span>
+      <button class="user-btn" onclick="startVoluntaryReview()">复习</button>
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
@@ -2643,7 +2644,7 @@ function renderQuestion(q) {
     gamePinyinState = { recognized: '' };
     if (savedPyMode === 'handwrite') initGamePinyinCanvases();
     if (savedPyMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) el.focus(); }, 100);
+      setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
     state.currentQ = q;
     state.answering = true;
@@ -2877,17 +2878,15 @@ function handleDictationAnswer(userInput, q) {
   }
 
   updateScoreboard();
-  // Play stroke animation after answer
-  playStrokeAnimation(q.answer, hint);
 
   if (isCorrect) {
     if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
       state.retryQueue.shift();
       state.retryCount = 0;
     }
-    // Delay to allow animation to play
-    setTimeout(loadQuestion, strokeAnimEnabled ? 2000 : 100);
+    setTimeout(loadQuestion, 100);
   } else {
+    playStrokeAnimation(q.answer, hint);
     const okBtn = document.createElement("button");
     okBtn.textContent = "OK";
     okBtn.className = "ok-btn";
@@ -2980,7 +2979,7 @@ function playStrokeAnimation(answer, containerEl) {
     if (idx >= chars.length) return;
     const writer = HanziWriter.create(`_strokeAnim${idx}`, chars[idx], {
       width: 80, height: 80, padding: 4,
-      strokeAnimationSpeed: 1.5,
+      strokeAnimationSpeed: 2,
       delayBetweenStrokes: 150,
       showCharacter: false,
       showOutline: true,
@@ -3017,7 +3016,7 @@ function initStrokeOrderUI(chars, onAllComplete) {
       drawingWidth: 6,
       showHintAfterMisses: false,
       highlightOnComplete: true,
-      strokeAnimationSpeed: 1.5,
+      strokeAnimationSpeed: 2,
       delayBetweenStrokes: 200,
     });
 
@@ -3278,6 +3277,9 @@ function switchGamePinyinMode(mode) {
     if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
   }
   if (mode === 'handwrite') initGamePinyinCanvases();
+  if (mode === 'type') {
+    setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+  }
 }
 
 function setGamePinyinTone(idx, tone) {
@@ -4011,7 +4013,7 @@ function showHwQuizQuestion() {
     pinyinState = { recognized: '' };
     if (savedPyMode === 'handwrite') initHwPinyinCanvases();
     if (savedPyMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) el.focus(); }, 100);
+      setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
@@ -4193,6 +4195,9 @@ function switchHwPinyinMode(mode) {
     if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
   }
   if (mode === 'handwrite') initHwPinyinCanvases();
+  if (mode === 'type') {
+    setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+  }
 }
 
 function setHwPinyinTone(idx, tone) {
@@ -4416,8 +4421,7 @@ function hwHandleHwAnswer(userInput) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
-    playStrokeAnimation(q.answer, hint);
-    setTimeout(nextHwQuestion, strokeAnimEnabled ? 2000 : 800);
+    setTimeout(nextHwQuestion, 800);
   } else {
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
@@ -4651,12 +4655,20 @@ async function loadWrongReviewSection() {
 }
 
 async function startVoluntaryReview() {
-  // Fetch all wrong answers and use them as review items
+  if (!state.user) { showAuthModal(); return; }
   try {
     const res = await fetch("/api/wrong_answers");
     const data = await res.json();
     const items = data.wrong_answers || [];
     if (items.length === 0) { alert("没有错题可复习"); return; }
+    // Switch to homework view if in game view
+    document.getElementById("gameView").style.display = "none";
+    const hwView = document.getElementById("homeworkView");
+    hwView.style.display = "flex";
+    document.getElementById("hwTodaySection").style.display = "none";
+    document.getElementById("hwProgressSection").style.display = "none";
+    document.getElementById("hwHistorySection").style.display = "none";
+    document.getElementById("hwResultSection").style.display = "none";
     hwReviewItems = items;
     startHwReview();
   } catch (e) {
