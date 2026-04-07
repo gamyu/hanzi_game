@@ -580,18 +580,34 @@
 
   .hw-grid-line {
     position: absolute;
-    top: 10%;
-    height: 80%;
-    width: 1px;
-    border-left: 2px dashed #e2e8f0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #a0aec0;
   }
 
   .hw-grid-line-h {
     position: absolute;
-    left: 10%;
-    width: 80%;
-    height: 1px;
-    border-top: 2px dashed #e2e8f0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #a0aec0;
+  }
+
+  .hw-grid-dash-v {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed #cbd5e0;
+  }
+
+  .hw-grid-dash-h {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px dashed #cbd5e0;
   }
 
   .canvas-wrap {
@@ -1058,7 +1074,7 @@
     display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;
   }
   .pinyin-fourline-box {
-    position: relative; width: 100%; max-width: 420px; height: 120px;
+    position: relative; width: 100%; max-width: 420px; height: 180px;
     border: 2px solid #e2e8f0; border-radius: 12px; overflow: hidden;
     background: #fafafa;
   }
@@ -1103,6 +1119,27 @@
   }
   .pinyin-tone-btn:hover { border-color: #667eea; background: #f7f8ff; }
   .pinyin-tone-btn.selected { border-color: #667eea; background: #667eea; color: #fff; }
+  .game-pinyin-mode-toggle { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+  .game-pinyin-mode-toggle button {
+    padding: 8px 24px; border: 2px solid #a0aec0; border-radius: 20px;
+    background: #f7fafc; font-size: 15px; font-weight: 700; cursor: pointer; color: #4a5568;
+  }
+  .game-pinyin-mode-toggle button.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .game-pinyin-cells-row { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; }
+  .game-pinyin-cell { display: flex; flex-direction: column; align-items: center; }
+  .game-pinyin-cell-char { font-size: 28px; font-weight: 700; color: #2d3748; margin-bottom: 4px; }
+  .game-pinyin-type-input {
+    width: 100%; height: 36px; border: none; border-bottom: 2px solid #667eea; background: transparent;
+    font-size: 18px; font-weight: 600; text-align: center; outline: none; color: #2d3748;
+  }
+  .game-pinyin-tone-row { display: flex; gap: 4px; margin-top: 4px; justify-content: center; }
+  .game-pinyin-tone-btn {
+    width: 30px; height: 28px; border: 1.5px solid #e2e8f0; border-radius: 6px;
+    background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0;
+  }
+  .game-pinyin-tone-btn:hover { border-color: #667eea; }
+  .game-pinyin-tone-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .game-pinyin-cell-result { font-size: 16px; font-weight: 700; color: #5a67d8; min-height: 22px; margin-top: 2px; }
   .pinyin-correct-show {
     margin-top: 4px; font-size: 28px; font-weight: 700; color: #38a169;
     font-family: "Times New Roman", "STSong", serif;
@@ -1383,6 +1420,7 @@
     <input type="password" id="authPassword" placeholder="密码" onkeydown="if(event.key==='Enter')submitAuth()">
     <button class="modal-submit" id="authSubmit" onclick="submitAuth()">登录</button>
     <button class="modal-close" id="authCancelBtn" onclick="hideAuthModal()">取消</button>
+    <div style="text-align:right;margin-top:12px"><a href="#" style="font-size:12px;color:#a0aec0;text-decoration:none" onclick="event.preventDefault();hideAuthModal();document.getElementById('adminLoginModal').classList.remove('hidden')">管理员登录</a></div>
   </div>
 </div>
 
@@ -2540,7 +2578,7 @@ function renderQuestion(q) {
   } else if (q.mode === "pinyin_typing") {
     const contextHint = q.context_word ? ` (${q.context_word})` : '';
     area.innerHTML = `
-      <div class="question-label">请给汉字注音 (手写拼音)</div>
+      <div class="question-label">请给汉字注音</div>
       <div class="question-char">${q.question}${contextHint}</div>
     `;
   } else if (q.mode === "dictation_handwrite") {
@@ -2559,35 +2597,59 @@ function renderQuestion(q) {
     opts.style.flexDirection = "column";
     opts.style.alignItems = "center";
     opts.style.gap = "12px";
-    opts.innerHTML = `
-      <div class="canvas-wrap">
-        <div class="pinyin-fourline-box" style="position:relative;width:100%;max-width:420px;height:120px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fafafa">
-          <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:1">
-            <div style="position:absolute;left:0;right:0;top:25%;border-top:1px dashed #cbd5e0"></div>
-            <div style="position:absolute;left:0;right:0;top:50%;border-top:1px dashed #a0aec0"></div>
-            <div style="position:absolute;left:0;right:0;top:75%;border-top:2px solid #718096"></div>
+    const savedPyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+    const qChars = q.question.split("");
+    const cellsHTML = qChars.map((ch, i) => `
+      <div class="game-pinyin-cell">
+        <div class="game-pinyin-cell-char">${ch}</div>
+        <div class="pinyin-fourline-box" id="gamePyBox${i}" style="width:140px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+          <div class="pinyin-fourline-lines">
+            <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
           </div>
-          <canvas id="gamePinyinCanvas" style="position:absolute;top:0;left:0;width:100%;height:100%;touch-action:none;z-index:2"></canvas>
+          <canvas id="gamePyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
+        <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
+          <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
+          <div class="game-pinyin-tone-row">
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">1</button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},2)">2</button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},3)">3</button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},4)">4</button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},0)">轻</button>
+          </div>
+        </div>
+        <div class="game-pinyin-cell-result" id="gamePyResult${i}"></div>
+      </div>`).join('');
+    opts.innerHTML = `
+      <div class="canvas-wrap" style="width:100%">
+        <div class="game-pinyin-mode-toggle">
+          <button id="gamePyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchGamePinyinMode('handwrite')">手写</button>
+          <button id="gamePyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchGamePinyinMode('type')">打字</button>
+        </div>
+        <div class="game-pinyin-cells-row">${cellsHTML}</div>
         <div id="gamePinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearGamePinyinCanvas()">清除</button>
-          <button class="canvas-btn" onclick="recognizeGamePinyin()">识别</button>
+          <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
         </div>
       </div>
     `;
-    initGamePinyinCanvas();
+    gamePinyinCharCount = qChars.length;
+    gamePinyinCellStrokes = Array.from({ length: qChars.length }, () => []);
+    gamePinyinCellRecognized = Array.from({ length: qChars.length }, () => '');
+    gamePinyinToneSelections = Array.from({ length: qChars.length }, () => null);
+    gamePinyinBaseInputs = Array.from({ length: qChars.length }, () => '');
     gamePinyinState = { recognized: '' };
+    if (savedPyMode === 'handwrite') initGamePinyinCanvases();
     state.currentQ = q;
     state.answering = true;
     return;
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
     const cellSize = 168;
-    const isMobile = window.innerWidth <= 500;
-    // For 3+ chars on mobile, use 2-column layout
-    const cols = (isMobile && charCount >= 3) ? 2 : charCount;
+    // For 3+ chars, use 2-column layout
+    const cols = charCount >= 3 ? 2 : charCount;
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
@@ -2632,28 +2694,46 @@ function renderQuestion(q) {
           <canvas id="writeCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
           <div class="hw-grid-lines" id="hwGrid"></div>
         </div>
+        <div id="hwRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearCanvas()">清除</button>
+          <button class="canvas-btn" onclick="recognizeHandwriting()">识别</button>
           <button class="canvas-btn" id="hwSubmitBtn" onclick="submitHandwriting()">确认</button>
         </div>
         <div id="hwStatus" style="color:#999;font-size:14px;min-height:20px;text-align:center"></div>
       </div>
     `;
-    // Draw grid lines between character cells
+    // Draw grid: solid borders between cells + dashed center lines (田字格) inside each cell
     const gridEl = document.getElementById("hwGrid");
-    // Vertical lines between columns
     for (let i = 1; i < cols; i++) {
       const line = document.createElement("div");
       line.className = "hw-grid-line";
       line.style.left = (i * cellSize) + "px";
       gridEl.appendChild(line);
     }
-    // Horizontal lines between rows
     for (let r = 1; r < rows; r++) {
       const line = document.createElement("div");
       line.className = "hw-grid-line-h";
       line.style.top = (r * cellSize) + "px";
       gridEl.appendChild(line);
+    }
+    // Dashed center lines (田字格) inside each cell
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (r * cols + c >= charCount) break;
+        const dashV = document.createElement("div");
+        dashV.className = "hw-grid-dash-v";
+        dashV.style.left = (c * cellSize + cellSize / 2) + "px";
+        dashV.style.top = (r * cellSize) + "px";
+        dashV.style.height = cellSize + "px";
+        gridEl.appendChild(dashV);
+        const dashH = document.createElement("div");
+        dashH.className = "hw-grid-dash-h";
+        dashH.style.top = (r * cellSize + cellSize / 2) + "px";
+        dashH.style.left = (c * cellSize) + "px";
+        dashH.style.width = cellSize + "px";
+        gridEl.appendChild(dashH);
+      }
     }
     initCanvas();
     state.currentQ = q;
@@ -2877,12 +2957,12 @@ function initStrokeOrderUI(chars, onAllComplete) {
     const writer = HanziWriter.create(targetId, ch, {
       width: 160, height: 160, padding: 8,
       showCharacter: false,
-      showOutline: true,
+      showOutline: false,
       strokeColor: '#2d3748',
       outlineColor: '#e2e8f0',
       highlightColor: '#5a67d8',
       drawingWidth: 6,
-      showHintAfterMisses: 3,
+      showHintAfterMisses: false,
       highlightOnComplete: true,
     });
 
@@ -2910,12 +2990,12 @@ function startCharQuiz(index, onAllComplete) {
   });
 
   const statusEl = document.getElementById("hwStrokeStatus");
-  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hzWriters.length} 个字: <strong>${hzChars[index]}</strong>`;
+  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hzWriters.length} 个字`;
 
   hzWriters[index].writer.quiz({
     onMistake: function(strokeData) {
       if (statusEl) {
-        statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写「${hzChars[index]}」</span>`;
+        statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写</span>`;
       }
       const cell = document.getElementById(hzWriters[index].cellId);
       if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 600); }
@@ -3010,31 +3090,29 @@ function initCanvas() {
   canvas.addEventListener("touchend", endStroke);
 }
 
+let hwRecognizedResult = '';
+
 function clearCanvas() {
   canvasStrokes = [];
+  hwRecognizedResult = '';
   const canvas = document.getElementById("writeCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const recEl = document.getElementById("hwRecognized"); if (recEl) recEl.textContent = '';
+  const statusEl = document.getElementById("hwStatus"); if (statusEl) statusEl.textContent = '';
 }
 
-async function submitHandwriting() {
+async function recognizeHandwriting() {
   if (canvasStrokes.length === 0) return;
-  if (!state.answering) return;
-
   const canvas = document.getElementById("writeCanvas");
+  const recEl = document.getElementById("hwRecognized");
   const statusEl = document.getElementById("hwStatus");
-  const btn = document.getElementById("hwSubmitBtn");
 
   const qualityMsg = checkStrokeQuality(canvasStrokes, canvas);
-  if (qualityMsg) {
-    statusEl.textContent = qualityMsg;
-    return;
-  }
+  if (qualityMsg) { if (statusEl) statusEl.textContent = qualityMsg; return; }
 
-  statusEl.textContent = "正在识别...";
-  btn.disabled = true;
-
+  if (recEl) recEl.textContent = "识别中...";
   try {
     const res = await fetch("/api/handwriting", {
       method: "POST",
@@ -3042,86 +3120,202 @@ async function submitHandwriting() {
       body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
     });
     const data = await res.json();
-
-    // Google API returns: ["SUCCESS", [["zh-t-i0-handwrit", ["词1","词2",...]]]]
     let topResult = null;
-    try {
-      if (data[0] === "SUCCESS") {
-        topResult = data[1][0][1][0];
-      }
-    } catch (e) {}
-
-    if (!topResult) {
-      statusEl.textContent = "未能识别，请清除后重写";
-      btn.disabled = false;
-      return;
+    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+    if (topResult) {
+      hwRecognizedResult = topResult;
+      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+    } else {
+      if (recEl) recEl.textContent = "未能识别，请清除后重写";
     }
-
-    statusEl.textContent = `识别结果: ${topResult}`;
-    handleDictationAnswer(topResult, state.currentQ);
-  } catch (e) {
-    statusEl.textContent = "识别失败，请重试";
-    btn.disabled = false;
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
   }
 }
 
-// --- Game pinyin handwriting (给汉字注音 mode) ---
-let gamePinyinStrokes = [];
-let gamePinyinCurrentStroke = null;
-let gamePinyinIsDrawing = false;
-let gamePinyinState = { recognized: '' };
-
-function initGamePinyinCanvas() {
-  gamePinyinStrokes = [];
-  gamePinyinState.recognized = '';
-  const box = document.querySelector(".pinyin-fourline-box");
-  const canvas = document.getElementById("gamePinyinCanvas");
-  if (!canvas || !box) return;
-  canvas.width = box.clientWidth;
-  canvas.height = box.clientHeight;
-  const ctx = canvas.getContext("2d");
-  ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
-  function getPos(e) {
-    const rect = canvas.getBoundingClientRect();
-    const t = e.touches ? e.touches[0] : e;
-    return [t.clientX - rect.left, t.clientY - rect.top];
+async function submitHandwriting() {
+  if (!state.answering) return;
+  // Auto-recognize if not yet recognized
+  if (!hwRecognizedResult && canvasStrokes.length > 0) {
+    await recognizeHandwriting();
   }
-  function startStroke(e) { e.preventDefault(); gamePinyinIsDrawing = true; const [x,y] = getPos(e); gamePinyinCurrentStroke = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
-  function moveStroke(e) { if (!gamePinyinIsDrawing) return; e.preventDefault(); const [x,y] = getPos(e); gamePinyinCurrentStroke[0].push(x); gamePinyinCurrentStroke[1].push(y); gamePinyinCurrentStroke[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
-  function endStroke(e) { if (!gamePinyinIsDrawing) return; e.preventDefault(); gamePinyinIsDrawing = false; if (gamePinyinCurrentStroke && gamePinyinCurrentStroke[0].length > 0) gamePinyinStrokes.push(gamePinyinCurrentStroke); gamePinyinCurrentStroke = null; }
-  canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
-  canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
-  canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+  if (!hwRecognizedResult) {
+    const recEl = document.getElementById("hwRecognized");
+    if (recEl) recEl.textContent = "请先写字";
+    return;
+  }
+  const btn = document.getElementById("hwSubmitBtn");
+  if (btn) btn.disabled = true;
+  handleDictationAnswer(hwRecognizedResult, state.currentQ);
+}
+
+// --- Game pinyin (给汉字注音 mode) with handwrite/type toggle ---
+let gamePinyinState = { recognized: '' };
+let gamePinyinCharCount = 0;
+let gamePinyinCellStrokes = [];
+let gamePinyinCellRecognized = [];
+let gamePinyinToneSelections = [];
+let gamePinyinBaseInputs = [];
+let gamePinyinDrawingState = []; // per-cell drawing state
+
+const _gameToneMap = {
+  'a': ['ā','á','ǎ','à'], 'e': ['ē','é','ě','è'], 'i': ['ī','í','ǐ','ì'],
+  'o': ['ō','ó','ǒ','ò'], 'u': ['ū','ú','ǔ','ù'], 'ü': ['ǖ','ǘ','ǚ','ǜ'],
+};
+
+function gameApplyTone(base, tone) {
+  if (!base) return '';
+  base = base.toLowerCase().trim().replace(/v/g, 'ü');
+  if (tone === 0) return base;
+  const vowels = 'aeiouü';
+  let target = -1;
+  for (let i = 0; i < base.length; i++) {
+    if (base[i] === 'a' || base[i] === 'e') { target = i; break; }
+  }
+  if (target === -1) {
+    const ouIdx = base.indexOf('ou');
+    if (ouIdx !== -1) { target = ouIdx; }
+    else { for (let i = base.length - 1; i >= 0; i--) { if (vowels.includes(base[i])) { target = i; break; } } }
+  }
+  if (target === -1) return base;
+  const ch = base[target];
+  const toned = _gameToneMap[ch] ? _gameToneMap[ch][tone - 1] : ch;
+  return base.substring(0, target) + toned + base.substring(target + 1);
+}
+
+function initGamePinyinCanvases() {
+  gamePinyinDrawingState = [];
+  for (let i = 0; i < gamePinyinCharCount; i++) {
+    const box = document.getElementById(`gamePyBox${i}`);
+    const canvas = document.getElementById(`gamePyCanvas${i}`);
+    if (!canvas || !box) continue;
+    canvas.width = box.clientWidth;
+    canvas.height = box.clientHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+    const ds = { isDrawing: false, currentStroke: null };
+    gamePinyinDrawingState.push(ds);
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      return [t.clientX - rect.left, t.clientY - rect.top];
+    }
+    const idx = i;
+    function startStroke(e) { e.preventDefault(); ds.isDrawing = true; const [x,y] = getPos(e); ds.currentStroke = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
+    function moveStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); const [x,y] = getPos(e); ds.currentStroke[0].push(x); ds.currentStroke[1].push(y); ds.currentStroke[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
+    function endStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); ds.isDrawing = false; if (ds.currentStroke && ds.currentStroke[0].length > 0) gamePinyinCellStrokes[idx].push(ds.currentStroke); ds.currentStroke = null; }
+    canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
+    canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
+    canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+  }
+}
+
+function switchGamePinyinMode(mode) {
+  localStorage.setItem("pinyin_input_mode", mode);
+  document.getElementById("gamePyModeHw").className = mode === 'handwrite' ? 'active' : '';
+  document.getElementById("gamePyModeType").className = mode === 'type' ? 'active' : '';
+  const recBtn = document.getElementById("gamePyRecBtn");
+  if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  for (let i = 0; i < gamePinyinCharCount; i++) {
+    const box = document.getElementById(`gamePyBox${i}`);
+    const typeArea = document.getElementById(`gamePyTypeArea${i}`);
+    if (box) box.style.display = mode === 'handwrite' ? 'block' : 'none';
+    if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
+  }
+  if (mode === 'handwrite') initGamePinyinCanvases();
+}
+
+function setGamePinyinTone(idx, tone) {
+  gamePinyinToneSelections[idx] = tone;
+  const area = document.getElementById(`gamePyTypeArea${idx}`);
+  if (area) {
+    area.querySelectorAll('.game-pinyin-tone-btn').forEach((btn, i) => {
+      const btnTone = i < 4 ? i + 1 : 0;
+      btn.className = 'game-pinyin-tone-btn' + (btnTone === tone ? ' active' : '');
+    });
+  }
+  const input = document.getElementById(`gamePyInput${idx}`);
+  const resultEl = document.getElementById(`gamePyResult${idx}`);
+  if (input && resultEl) {
+    const base = input.value.trim();
+    gamePinyinBaseInputs[idx] = base;
+    resultEl.textContent = gameApplyTone(base, tone);
+  }
 }
 
 function clearGamePinyinCanvas() {
-  gamePinyinStrokes = [];
   gamePinyinState.recognized = '';
-  const el = document.getElementById("gamePinyinRecognized"); if (el) el.textContent = '';
-  const canvas = document.getElementById("gamePinyinCanvas");
-  if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  const recEl = document.getElementById("gamePinyinRecognized"); if (recEl) recEl.textContent = '';
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  for (let i = 0; i < gamePinyinCharCount; i++) {
+    if (mode === 'handwrite') {
+      gamePinyinCellStrokes[i] = [];
+      gamePinyinCellRecognized[i] = '';
+      const canvas = document.getElementById(`gamePyCanvas${i}`);
+      if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    } else {
+      const input = document.getElementById(`gamePyInput${i}`);
+      if (input) input.value = '';
+      gamePinyinToneSelections[i] = null;
+      gamePinyinBaseInputs[i] = '';
+      const area = document.getElementById(`gamePyTypeArea${i}`);
+      if (area) area.querySelectorAll('.game-pinyin-tone-btn').forEach(b => b.className = 'game-pinyin-tone-btn');
+    }
+    const resEl = document.getElementById(`gamePyResult${i}`);
+    if (resEl) resEl.textContent = '';
+  }
 }
 
 async function recognizeGamePinyin() {
-  if (gamePinyinStrokes.length === 0) return;
-  const canvas = document.getElementById("gamePinyinCanvas");
-  const el = document.getElementById("gamePinyinRecognized");
-
-  const qualityMsg = checkStrokeQuality(gamePinyinStrokes, canvas);
-  if (qualityMsg) { el.textContent = qualityMsg; return; }
-
-  el.textContent = "识别中...";
+  const recEl = document.getElementById("gamePinyinRecognized");
+  let anyStrokes = false;
+  for (let i = 0; i < gamePinyinCharCount; i++) {
+    if (gamePinyinCellStrokes[i].length > 0) { anyStrokes = true; break; }
+  }
+  if (!anyStrokes) return;
+  if (recEl) recEl.textContent = "识别中...";
   try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: gamePinyinStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-    if (topResult) { gamePinyinState.recognized = topResult; el.textContent = `识别结果: ${topResult}`; }
-    else { el.textContent = "未能识别，请清除后重写"; }
-  } catch(e) { el.textContent = "识别失败，请重试"; }
+    const results = await Promise.all(gamePinyinCellStrokes.map(async (strokes, i) => {
+      if (strokes.length === 0) return '';
+      const box = document.getElementById(`gamePyBox${i}`);
+      const w = box ? box.clientWidth : 140;
+      const h = box ? box.clientHeight : 180;
+      const res = await fetch("/api/handwriting", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strokes, width: w, height: h }),
+      });
+      const data = await res.json();
+      try { if (data[0] === "SUCCESS") return data[1][0][1][0]; } catch(e) {}
+      return '';
+    }));
+    for (let i = 0; i < gamePinyinCharCount; i++) {
+      gamePinyinCellRecognized[i] = results[i] || '';
+      const resEl = document.getElementById(`gamePyResult${i}`);
+      if (resEl) resEl.textContent = results[i] || (gamePinyinCellStrokes[i].length > 0 ? '?' : '');
+    }
+    const combined = results.join(' ').trim();
+    gamePinyinState.recognized = combined;
+    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
+  }
+}
+
+function getGamePinyinAnswer() {
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  if (mode === 'type') {
+    const parts = [];
+    for (let i = 0; i < gamePinyinCharCount; i++) {
+      const base = (document.getElementById(`gamePyInput${i}`)?.value || '').trim().replace(/v/g, 'ü');
+      const tone = gamePinyinToneSelections[i];
+      if (!base) return null;
+      if (tone === null || tone === undefined) return null;
+      parts.push(gameApplyTone(base, tone));
+    }
+    return parts.join(' ');
+  } else {
+    return gamePinyinState.recognized || null;
+  }
 }
 
 function normalizePinyinGame(s) {
@@ -3130,14 +3324,20 @@ function normalizePinyinGame(s) {
 
 async function submitGamePinyin() {
   if (!state.answering) return;
-  // Auto-recognize if not yet recognized
-  if (!gamePinyinState.recognized && gamePinyinStrokes.length > 0) {
-    await recognizeGamePinyin();
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  if (mode === 'handwrite') {
+    let anyStrokes = false;
+    for (let i = 0; i < gamePinyinCharCount; i++) {
+      if (gamePinyinCellStrokes[i].length > 0) { anyStrokes = true; break; }
+    }
+    if (!gamePinyinState.recognized && anyStrokes) {
+      await recognizeGamePinyin();
+    }
   }
-  const userAnswer = gamePinyinState.recognized;
+  const userAnswer = getGamePinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("gamePinyinRecognized");
-    if (el) el.textContent = "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音并选择声调" : "请先写拼音";
     return;
   }
   state.answering = false;
@@ -3492,7 +3692,15 @@ async function loadHomeworkToday() {
       html += `<div class="hw-card-status done">✓ 已完成 (今日${completedCount}课)</div>
         <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
     } else {
-      html += `<div class="hw-card-status pending">${completedCount > 0 ? '继续下一课' : '待完成'}</div>`;
+      const hasSavedProgress = a.saved_progress && a.saved_progress !== '';
+      let savedInfo = '';
+      if (hasSavedProgress) {
+        try {
+          const sp = typeof a.saved_progress === 'string' ? JSON.parse(a.saved_progress) : a.saved_progress;
+          savedInfo = sp.currentIndex ? ` (已做${sp.currentIndex}题)` : '';
+        } catch(e) {}
+      }
+      html += `<div class="hw-card-status pending">${hasSavedProgress ? '▶ 继续' + savedInfo : (completedCount > 0 ? '继续下一课' : '待完成')}</div>`;
     }
     // Preview button for recognition homework
     if (type === "recognition") {
@@ -3622,15 +3830,24 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.isPreview = false;
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
-  // Build working queue: each question once, retries added dynamically
   hwQuiz.questions = data.questions.map((q, i) => ({ ...q, _origIndex: i }));
-  hwQuiz.currentIndex = 0;
-  hwQuiz.correctCount = 0;
-  hwQuiz.wrongItems = [];
-  hwQuiz.startTime = Date.now();
   hwQuiz.answering = false;
   hwQuiz.answeredCorrectly = new Set();
   hwQuiz.retryMap = {};
+
+  // Restore saved progress if available
+  const saved = data.saved_progress;
+  if (saved && saved.currentIndex > 0 && saved.currentIndex < hwQuiz.questions.length) {
+    hwQuiz.currentIndex = saved.currentIndex;
+    hwQuiz.correctCount = saved.correctCount || 0;
+    hwQuiz.wrongItems = saved.wrongItems || [];
+    hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+  } else {
+    hwQuiz.currentIndex = 0;
+    hwQuiz.correctCount = 0;
+    hwQuiz.wrongItems = [];
+    hwQuiz.startTime = Date.now();
+  }
 
   // Show quiz, hide others
   document.getElementById("hwTodaySection").style.display = "none";
@@ -3681,34 +3898,57 @@ function showHwQuizQuestion() {
   const opts = document.getElementById("hwQuizOptionsArea");
 
   if (q.mode === "pinyin_typing") {
-    // 给汉字注音 mode: show character, handwrite pinyin on four-line grid
-    // Split answer into syllables for multi-char words
-    const syllables = q.answer.split(' ').filter(s => s.length > 0);
+    // 给汉字注音 mode: per-character cells with handwrite/type toggle
     const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音 (手写拼音)</div><div class="hw-quiz-char">${charDisplay}</div>${contextHint}`;
+    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}</div>${contextHint}`;
     opts.style.display = "block";
-    opts.innerHTML = `<div class="pinyin-hw-wrap">
-      <div class="pinyin-fourline-box">
-        <div class="pinyin-fourline-lines">
-          <div class="pline pline-1"></div>
-          <div class="pline pline-2"></div>
-          <div class="pline pline-3"></div>
+
+    const savedPyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+    const qChars = q.question.split("");
+    const cellsHTML = qChars.map((ch, i) => `
+      <div class="game-pinyin-cell">
+        <div class="game-pinyin-cell-char">${ch}</div>
+        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:140px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+          <div class="pinyin-fourline-lines">
+            <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
+          </div>
+          <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
-        <canvas class="pinyin-fourline-canvas" id="pinyinCanvas"></canvas>
+        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
+          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
+          <div class="game-pinyin-tone-row">
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">1</button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">2</button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">3</button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">4</button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻</button>
+          </div>
+        </div>
+        <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
+      </div>`).join('');
+    opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+      <div class="game-pinyin-mode-toggle">
+        <button id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
+        <button id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
       </div>
+      <div class="game-pinyin-cells-row">${cellsHTML}</div>
       <div class="pinyin-recognized" id="pinyinRecognized"></div>
       <div class="pinyin-hw-btns">
         <button onclick="clearPinyinCanvas()">清除</button>
-        <button onclick="recognizePinyin()">识别</button>
+        <button id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
         <button class="primary" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
       </div>
-      <div style="font-size:12px;color:#a0aec0;margin-top:4px">写完拼音后可直接点确认，或先点识别查看结果</div>
     </div>`;
-    initPinyinCanvas();
-    pinyinState = { syllables, recognized: '', toneSelected: 0 };
+    hwPinyinCharCount = qChars.length;
+    hwPinyinCellStrokes = Array.from({ length: qChars.length }, () => []);
+    hwPinyinCellRecognized = Array.from({ length: qChars.length }, () => '');
+    hwPinyinToneSelections = Array.from({ length: qChars.length }, () => null);
+    hwPinyinBaseInputs = Array.from({ length: qChars.length }, () => '');
+    pinyinState = { recognized: '' };
+    if (savedPyMode === 'handwrite') initHwPinyinCanvases();
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
     opts.style.display = "grid";
@@ -3760,8 +4000,8 @@ function showHwQuizQuestion() {
     opts.style.display = "block";
     const charCount = q.answer.length;
     const cellSize = 168;
-    const isMobile = window.innerWidth <= 500;
-    const cols = (isMobile && charCount >= 3) ? 2 : charCount;
+    // For 3+ chars, use 2-column layout
+    const cols = charCount >= 3 ? 2 : charCount;
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
@@ -3794,12 +4034,15 @@ function showHwQuizQuestion() {
         <canvas id="hwQuizCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
         <div class="hw-grid-lines" id="hwQuizGridLines"></div>
       </div>
+      <div id="hwQuizRecognized2" style="font-size:16px;font-weight:700;color:#5a67d8;min-height:22px;text-align:center;margin-top:4px"></div>
       <div class="hw-quiz-canvas-btns">
-        <button onclick="clearHwQuizCanvas()">清除</button>
+        <button onclick="clearHwQuizCanvas2()">清除</button>
+        <button onclick="recognizeHwQuiz2()">识别</button>
         <button id="hwQuizSubmitBtn" onclick="submitHwQuiz()">确认</button>
       </div>
       <div class="hw-quiz-hw-status" id="hwQuizStatus"></div>
     </div>`;
+    hwQuizRecognizedResult2 = '';
     const gridEl = document.getElementById("hwQuizGridLines");
     for (let i = 1; i < cols; i++) {
       const line = document.createElement("div");
@@ -3812,6 +4055,24 @@ function showHwQuizQuestion() {
       line.className = "hw-grid-line-h";
       line.style.top = (r * cellSize) + "px";
       gridEl.appendChild(line);
+    }
+    // Dashed center lines (田字格) inside each cell
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (r * cols + c >= charCount) break;
+        const dashV = document.createElement("div");
+        dashV.className = "hw-grid-dash-v";
+        dashV.style.left = (c * cellSize + cellSize / 2) + "px";
+        dashV.style.top = (r * cellSize) + "px";
+        dashV.style.height = cellSize + "px";
+        gridEl.appendChild(dashV);
+        const dashH = document.createElement("div");
+        dashH.className = "hw-grid-dash-h";
+        dashH.style.top = (r * cellSize + cellSize / 2) + "px";
+        dashH.style.left = (c * cellSize) + "px";
+        dashH.style.width = cellSize + "px";
+        gridEl.appendChild(dashH);
+      }
     }
     initHwQuizCanvas();
   }
@@ -4163,13 +4424,62 @@ function backToPreviewModesFromResult() {
   startHwPreview(previewAssignmentId);
 }
 
-function confirmHwBackToList() {
+async function confirmHwBackToList() {
   const isPreview = hwQuiz.isPreview;
-  const msg = isPreview ? "确定要退出预习吗？" : "确定要退出当前作业吗？进度不会保存。";
-  if (confirm(msg)) {
-    clearInterval(hwQuiz.timerInterval);
-    hwBackToToday();
+  if (isPreview) {
+    if (confirm("确定要退出预习吗？")) {
+      clearInterval(hwQuiz.timerInterval);
+      hwBackToToday();
+    }
+    return;
   }
+  // Show save dialog for homework
+  const choice = await showHwExitDialog();
+  if (choice === 0) return; // cancelled
+  clearInterval(hwQuiz.timerInterval);
+  if (choice === 1) {
+    // Save progress
+    const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
+    try {
+      await fetch("/api/homework/save_progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assignment_id: hwQuiz.assignmentId,
+          progress: {
+            currentIndex: hwQuiz.currentIndex,
+            correctCount: hwQuiz.correctCount,
+            wrongItems: hwQuiz.wrongItems,
+            timeElapsed: timeElapsed,
+          },
+        }),
+      });
+    } catch (e) { /* ignore save errors */ }
+  }
+  hwBackToToday();
+}
+
+function showHwExitDialog() {
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
+    box.innerHTML = `
+      <div style="font-size:18px;font-weight:700;margin-bottom:8px">退出作业</div>
+      <div style="font-size:14px;color:#718096;margin-bottom:20px">当前进度: ${hwQuiz.currentIndex}/${hwQuiz.totalOriginal} 题</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">保存进度并退出</button>
+        <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">不保存，直接退出</button>
+        <button id="_hwExitCancel" style="padding:10px;border:none;border-radius:10px;background:#e2e8f0;color:#4a5568;font-size:15px;font-weight:600;cursor:pointer">继续做作业</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    document.getElementById("_hwExitSave").onclick = () => { document.body.removeChild(overlay); resolve(1); };
+    document.getElementById("_hwExitDiscard").onclick = () => { document.body.removeChild(overlay); resolve(2); };
+    document.getElementById("_hwExitCancel").onclick = () => { document.body.removeChild(overlay); resolve(0); };
+    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(0); } };
+  });
 }
 
 function hwBackToToday() {
@@ -4315,10 +4625,58 @@ function showHwReviewQuestion() {
       `<button class="hw-quiz-opt-btn" onclick="hwReviewAnswer(${i})">${o}</button>`
     ).join("");
   } else if (q.mode === "dictation_handwrite") {
+    const charCount = q.answer.length;
+    const cellSize = 140;
+    const cols = charCount >= 3 ? 2 : charCount;
+    const rows = Math.ceil(charCount / cols);
+    const canvasW = cols * cellSize;
+    const canvasH = rows * cellSize;
     area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="hw-quiz-pinyin">${q.question}</div>
-      <div class="hw-canvas-wrap"><canvas id="hwQuizCanvas" width="280" height="140"></canvas>
-      <button class="hw-canvas-clear" onclick="clearHwQuizCanvas()">清除</button></div>`;
+      <div class="hw-canvas-wrap" style="display:flex;flex-direction:column;align-items:center">
+        <div style="position:relative;width:${canvasW}px;height:${canvasH}px;border:2px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fefefe">
+          <canvas id="hwQuizCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
+          <div class="hw-grid-lines" id="hwReviewGrid"></div>
+        </div>
+        <div id="hwQuizRecognized" style="font-size:16px;font-weight:700;color:#5a67d8;min-height:22px;text-align:center;margin-top:4px"></div>
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:4px">
+          <button class="hw-canvas-clear" onclick="clearHwQuizCanvas()">清除</button>
+          <button class="hw-canvas-clear" onclick="recognizeHwQuiz()">识别</button>
+        </div>
+      </div>`;
+    // Draw grid
+    const gridEl = document.getElementById("hwReviewGrid");
+    for (let i = 1; i < cols; i++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line";
+      line.style.left = (i * cellSize) + "px";
+      gridEl.appendChild(line);
+    }
+    for (let r = 1; r < rows; r++) {
+      const line = document.createElement("div");
+      line.className = "hw-grid-line-h";
+      line.style.top = (r * cellSize) + "px";
+      gridEl.appendChild(line);
+    }
+    // Dashed center lines (田字格)
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (r * cols + c >= charCount) break;
+        const dashV = document.createElement("div");
+        dashV.className = "hw-grid-dash-v";
+        dashV.style.left = (c * cellSize + cellSize / 2) + "px";
+        dashV.style.top = (r * cellSize) + "px";
+        dashV.style.height = cellSize + "px";
+        gridEl.appendChild(dashV);
+        const dashH = document.createElement("div");
+        dashH.className = "hw-grid-dash-h";
+        dashH.style.top = (r * cellSize + cellSize / 2) + "px";
+        dashH.style.left = (c * cellSize) + "px";
+        dashH.style.width = cellSize + "px";
+        gridEl.appendChild(dashH);
+      }
+    }
     opts.innerHTML = `<button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>`;
+    hwQuizRecognizedResult = '';
     setTimeout(initHwQuizCanvas, 50);
   }
   hwReview.answering = true;
@@ -4352,28 +4710,21 @@ function hwReviewAnswer(selected) {
 
 async function submitHwReviewHandwrite() {
   if (!hwReview.answering) return;
-  hwReview.answering = false;
   const q = hwReview.questions[hwReview.currentIndex];
   const hint = document.getElementById("hwQuizHint");
-  const canvas = document.getElementById("hwQuizCanvas");
-  if (!canvas) return;
 
-  // Use handwriting recognition
-  if (hwCanvasStrokes.length === 0) {
-    hint.innerHTML = `<span style="color:#e53e3e">请先写字</span>`;
-    hwReview.answering = true;
+  // Auto-recognize if not yet recognized
+  if (!hwQuizRecognizedResult && hwCanvasStrokes.length > 0) {
+    await recognizeHwQuiz();
+  }
+  if (!hwQuizRecognizedResult) {
+    const recEl = document.getElementById("hwQuizRecognized");
+    if (recEl) recEl.textContent = "请先写字";
     return;
   }
-  let userInput = "";
-  try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const result = await res.json();
-    if (result[0] === "SUCCESS" && result[1]?.[0]?.[1]?.length > 0)
-      userInput = result[1][0][1][0];
-  } catch(e) {}
+
+  hwReview.answering = false;
+  let userInput = hwQuizRecognizedResult;
 
   const qKey = `${q.question}_${q.mode}`;
   if (userInput === q.answer) {
@@ -4474,45 +4825,90 @@ function initHwQuizCanvas() {
   canvas.addEventListener("touchend", endStroke);
 }
 
+let hwQuizRecognizedResult = '';
+
 function clearHwQuizCanvas() {
   hwCanvasStrokes = [];
+  hwQuizRecognizedResult = '';
   const canvas = document.getElementById("hwQuizCanvas");
   if (!canvas) return;
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  const recEl = document.getElementById("hwQuizRecognized"); if (recEl) recEl.textContent = '';
 }
 
-async function submitHwQuiz() {
+async function recognizeHwQuiz() {
   if (hwCanvasStrokes.length === 0) return;
-  if (!hwQuiz.answering) return;
-
   const canvas = document.getElementById("hwQuizCanvas");
-  const statusEl = document.getElementById("hwQuizStatus");
-  const btn = document.getElementById("hwQuizSubmitBtn");
-  statusEl.textContent = "正在识别...";
-  btn.disabled = true;
-
+  const recEl = document.getElementById("hwQuizRecognized");
+  if (recEl) recEl.textContent = "识别中...";
   try {
     const res = await fetch("/api/handwriting", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
     });
     const data = await res.json();
     let topResult = null;
-    try {
-      if (data[0] === "SUCCESS") topResult = data[1][0][1][0];
-    } catch (e) {}
-    if (!topResult) {
-      statusEl.textContent = "未能识别，请清除后重写";
-      btn.disabled = false;
-      return;
+    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+    if (topResult) {
+      hwQuizRecognizedResult = topResult;
+      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+    } else {
+      if (recEl) recEl.textContent = "未能识别，请清除后重写";
     }
-    statusEl.textContent = `识别结果: ${topResult}`;
-    hwHandleHwAnswer(topResult);
-  } catch (e) {
-    statusEl.textContent = "识别失败，请重试";
-    btn.disabled = false;
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
   }
+}
+
+let hwQuizRecognizedResult2 = '';
+
+function clearHwQuizCanvas2() {
+  hwCanvasStrokes = [];
+  hwQuizRecognizedResult2 = '';
+  const canvas = document.getElementById("hwQuizCanvas");
+  if (!canvas) return;
+  canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  const recEl = document.getElementById("hwQuizRecognized2"); if (recEl) recEl.textContent = '';
+}
+
+async function recognizeHwQuiz2() {
+  if (hwCanvasStrokes.length === 0) return;
+  const canvas = document.getElementById("hwQuizCanvas");
+  const recEl = document.getElementById("hwQuizRecognized2");
+  if (recEl) recEl.textContent = "识别中...";
+  try {
+    const res = await fetch("/api/handwriting", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
+    });
+    const data = await res.json();
+    let topResult = null;
+    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+    if (topResult) {
+      hwQuizRecognizedResult2 = topResult;
+      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+    } else {
+      if (recEl) recEl.textContent = "未能识别，请清除后重写";
+    }
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
+  }
+}
+
+async function submitHwQuiz() {
+  if (!hwQuiz.answering) return;
+  // Auto-recognize if not yet recognized
+  if (!hwQuizRecognizedResult2 && hwCanvasStrokes.length > 0) {
+    await recognizeHwQuiz2();
+  }
+  if (!hwQuizRecognizedResult2) {
+    const recEl = document.getElementById("hwQuizRecognized2");
+    if (recEl) recEl.textContent = "请先写字";
+    return;
+  }
+  const btn = document.getElementById("hwQuizSubmitBtn");
+  if (btn) btn.disabled = true;
+  hwHandleHwAnswer(hwQuizRecognizedResult2);
 }
 
 init();

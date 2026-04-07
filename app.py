@@ -449,7 +449,7 @@ def csrf_protect():
     if request.method in CSRF_SAFE_METHODS:
         return
     # Skip CSRF for endpoints that don't act on an existing session
-    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting")
+    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting", "/api/admin/login")
     if request.path in CSRF_EXEMPT:
         return
     token = (
