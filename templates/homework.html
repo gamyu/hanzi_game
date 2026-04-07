@@ -160,6 +160,35 @@
   .hw-submit-btn { background: #667eea !important; color: #fff !important; border-color: #667eea !important; }
   .quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
 
+  /* Pinyin four-line grid (四线格) */
+  .pinyin-mode-toggle { display: flex; gap: 8px; justify-content: center; margin-bottom: 12px; }
+  .pinyin-mode-toggle button {
+    padding: 8px 24px; border: 2px solid #a0aec0; border-radius: 20px;
+    background: #f7fafc; font-size: 15px; font-weight: 700; cursor: pointer; color: #4a5568;
+  }
+  .pinyin-mode-toggle button.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .pinyin-cells-row { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; }
+  .pinyin-cell { display: flex; flex-direction: column; align-items: center; }
+  .pinyin-cell-char { font-size: 28px; font-weight: 700; color: #2d3748; margin-bottom: 4px; }
+  .pinyin-fourline-box {
+    position: relative; width: 120px; height: 90px; background: #fff; overflow: hidden;
+    border-left: 1px solid #a0aec0; border-right: 1px solid #a0aec0;
+  }
+  .pinyin-fourline-box canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; z-index: 2; }
+  .pinyin-fourline-lines { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 1; }
+  .pinyin-type-input {
+    width: 100%; height: 36px; border: none; border-bottom: 2px solid #667eea; background: transparent;
+    font-size: 18px; font-weight: 600; text-align: center; outline: none; color: #2d3748;
+  }
+  .pinyin-tone-row { display: flex; gap: 4px; margin-top: 4px; justify-content: center; }
+  .pinyin-tone-btn {
+    width: 30px; height: 28px; border: 1.5px solid #e2e8f0; border-radius: 6px;
+    background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0;
+  }
+  .pinyin-tone-btn:hover { border-color: #667eea; }
+  .pinyin-tone-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .pinyin-cell-result { font-size: 16px; font-weight: 700; color: #5a67d8; min-height: 22px; margin-top: 2px; }
+
   /* Results */
   .result-section {
     width: 90%; max-width: 660px;
@@ -369,6 +398,10 @@ async function loadToday() {
     if (isCompleted) {
       html += `<div class="card-status completed">✓ 已完成</div>
         <div class="card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
+    } else if (a.saved_progress && a.saved_progress !== '' && a.saved_progress !== '{}') {
+      let savedInfo = '';
+      try { const sp = JSON.parse(a.saved_progress); savedInfo = `(${sp.currentIndex}题)`; } catch(e) {}
+      html += `<div class="card-status" style="color:#d69e2e;font-weight:700">▶ 继续 ${savedInfo}</div>`;
     } else {
       html += `<div class="card-status pending">待完成</div>`;
     }
@@ -436,11 +469,29 @@ async function startQuiz(assignmentId) {
 
   quiz.assignmentId = assignmentId;
   quiz.questions = data.questions;
-  quiz.currentIndex = 0;
-  quiz.correctCount = 0;
-  quiz.wrongItems = [];
-  quiz.startTime = Date.now();
   quiz.answering = false;
+
+  // Restore saved progress if available
+  const saved = data.saved_progress;
+  if (saved && saved.currentIndex > 0 && saved.currentIndex < data.questions.length) {
+    const resumeOk = confirm(`上次做到第 ${saved.currentIndex}/${data.questions.length} 题，是否继续？\n选"取消"将从头开始。`);
+    if (resumeOk) {
+      quiz.currentIndex = saved.currentIndex;
+      quiz.correctCount = saved.correctCount || 0;
+      quiz.wrongItems = saved.wrongItems || [];
+      quiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+    } else {
+      quiz.currentIndex = 0;
+      quiz.correctCount = 0;
+      quiz.wrongItems = [];
+      quiz.startTime = Date.now();
+    }
+  } else {
+    quiz.currentIndex = 0;
+    quiz.correctCount = 0;
+    quiz.wrongItems = [];
+    quiz.startTime = Date.now();
+  }
 
   // Show quiz, hide others
   document.getElementById("todaySection").style.display = "none";
@@ -477,29 +528,58 @@ function showQuizQuestion() {
 
   if (q.mode === "pinyin_typing") {
     const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
-    const charDisplay = q.question.length > 1
-      ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
-      : q.question;
-    area.innerHTML = `<div class="quiz-label">请给汉字注音 (手写拼音)</div><div class="quiz-char">${charDisplay}</div>${contextHint}`;
+    const chars = q.question.split('');
+    const charDisplay = chars.map(c => `<span style="margin:0 8px">${c}</span>`).join('');
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="quiz-char">${charDisplay}</div>${contextHint}`;
     opts.style.display = "block";
-    opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
-      <div id="pinyinBox" style="position:relative;width:100%;max-width:420px;height:120px;border:2px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fafafa">
-        <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:1">
-          <div style="position:absolute;left:0;right:0;top:25%;border-top:1px dashed #cbd5e0"></div>
-          <div style="position:absolute;left:0;right:0;top:50%;border-top:1px dashed #a0aec0"></div>
-          <div style="position:absolute;left:0;right:0;top:75%;border-top:2px solid #718096"></div>
+
+    // Build per-character pinyin cells
+    const savedMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+    const cellsHTML = chars.map((ch, i) => `
+      <div class="pinyin-cell">
+        <div class="pinyin-cell-char">${ch}</div>
+        <div class="pinyin-fourline-box" id="pyBox${i}">
+          <div class="pinyin-fourline-lines" id="pyLines${i}"></div>
+          <canvas id="pyCanvas${i}" style="display:${savedMode === 'handwrite' ? 'block' : 'none'}"></canvas>
         </div>
-        <canvas id="pinyinCanvas2" style="position:absolute;top:0;left:0;width:100%;height:100%;touch-action:none;z-index:2"></canvas>
+        <div id="pyTypeArea${i}" style="display:${savedMode === 'type' ? 'block' : 'none'};width:120px">
+          <input type="text" class="pinyin-type-input" id="pyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
+          <div class="pinyin-tone-row">
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},1)">1</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},2)">2</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},3)">3</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},4)">4</button>
+            <button class="pinyin-tone-btn" onclick="setPinyinTone(${i},0)">轻</button>
+          </div>
+        </div>
+        <div class="pinyin-cell-result" id="pyResult${i}"></div>
+      </div>`).join('');
+
+    opts.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+      <div class="pinyin-mode-toggle">
+        <button id="pyModeHw" class="${savedMode === 'handwrite' ? 'active' : ''}" onclick="switchPinyinMode('handwrite')">手写</button>
+        <button id="pyModeType" class="${savedMode === 'type' ? 'active' : ''}" onclick="switchPinyinMode('type')">打字</button>
       </div>
+      <div class="pinyin-cells-row">${cellsHTML}</div>
       <div id="pinyinRecognized2" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px"></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center">
-        <button onclick="clearPinyinCanvas2()" style="padding:8px 20px;border:2px solid #e2e8f0;border-radius:8px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">清除</button>
-        <button onclick="recognizePinyin2()" style="padding:8px 20px;border:2px solid #e2e8f0;border-radius:8px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">识别</button>
-        <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" style="padding:8px 20px;border:2px solid #667eea;border-radius:8px;background:#667eea;color:#fff;font-size:14px;font-weight:600;cursor:pointer">确认</button>
+      <div class="quiz-canvas-btns">
+        <button onclick="clearPinyinCanvas2()">清除</button>
+        <button id="pyRecBtn" onclick="recognizePinyin2()" style="display:${savedMode === 'handwrite' ? '' : 'none'}">识别</button>
+        <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" class="hw-submit-btn">确认</button>
       </div>
-      <div style="font-size:12px;color:#a0aec0">写完拼音后可直接点确认，或先点识别查看结果</div>
+      <div id="pyHwHint" style="font-size:12px;color:#a0aec0;display:${savedMode === 'handwrite' ? '' : 'none'}">写完拼音后可直接点确认，或先点识别查看结果</div>
     </div>`;
-    initPinyinCanvas2();
+
+    pinyinCharCount = chars.length;
+    pinyinCellStrokes = Array.from({ length: chars.length }, () => []);
+    pinyinCellRecognized = Array.from({ length: chars.length }, () => '');
+    pinyinToneSelections = Array.from({ length: chars.length }, () => null);
+    pinyinBaseInputs = Array.from({ length: chars.length }, () => '');
+    // Draw four-line grids and init canvases
+    for (let i = 0; i < chars.length; i++) {
+      drawPinyinFourLines(i);
+      initPinyinCellCanvas(i);
+    }
     pinyinRecognized2 = '';
   } else if (q.mode === "char_to_pinyin") {
     area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
@@ -658,12 +738,12 @@ function initHwStrokeOrderUI(chars, onAllComplete) {
     const writer = HanziWriter.create(targetId, ch, {
       width: 160, height: 160, padding: 8,
       showCharacter: false,
-      showOutline: true,
+      showOutline: false,
       strokeColor: '#2d3748',
       outlineColor: '#e2e8f0',
       highlightColor: '#5a67d8',
       drawingWidth: 6,
-      showHintAfterMisses: 3,
+      showHintAfterMisses: false,
       highlightOnComplete: true,
     });
 
@@ -690,13 +770,24 @@ function startHwCharQuiz(index, onAllComplete) {
   });
 
   const statusEl = document.getElementById("hwStrokeStatus");
-  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hwHzWriters.length} 个字: <strong>${hwHzChars[index]}</strong>`;
+  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hwHzWriters.length} 个字`;
 
   hwHzWriters[index].writer.quiz({
     onMistake: function(strokeData) {
-      if (statusEl) statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写「${hwHzChars[index]}」</span>`;
+      // Stop quiz immediately, show correct stroke order, then restart this char
+      hwHzWriters[index].writer.cancelQuiz();
       const cell = document.getElementById(hwHzWriters[index].cellId);
-      if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 600); }
+      if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 800); }
+      if (statusEl) statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 演示正确笔顺...</span>`;
+      // Show full correct animation
+      hwHzWriters[index].writer.animateCharacter({
+        onComplete: function() {
+          if (statusEl) statusEl.innerHTML = `请重新书写第 ${index + 1} 个字`;
+          // Reset and restart quiz for this character
+          hwHzWriters[index].writer.hideCharacter();
+          setTimeout(() => startHwCharQuiz(index, onAllComplete), 500);
+        }
+      });
     },
     onCorrectStroke: function(strokeData) {
       if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">✓</span> 第 ${index + 1}/${hwHzWriters.length} 个字`;
@@ -705,90 +796,248 @@ function startHwCharQuiz(index, onAllComplete) {
       hwHzWriters[index].done = true;
       const cell = document.getElementById(hwHzWriters[index].cellId);
       if (cell) { cell.classList.remove("active"); cell.classList.add("done"); }
-
-      if (summaryData.totalMistakes > 0 && statusEl) {
-        statusEl.innerHTML = `<span class="stroke-error">本字有 ${summaryData.totalMistakes} 次笔顺错误，演示正确笔顺...</span>`;
-        hwHzWriters[index].writer.animateCharacter({
-          onComplete: function() {
-            setTimeout(() => startHwCharQuiz(index + 1, onAllComplete), 400);
-          }
-        });
-      } else {
-        setTimeout(() => startHwCharQuiz(index + 1, onAllComplete), 200);
-      }
+      hwHzWriters[index].writer.hideCharacter();
+      setTimeout(() => startHwCharQuiz(index + 1, onAllComplete), 200);
     }
   });
 }
 
-// --- Pinyin handwriting for homework.html ---
-let pinyinCanvasStrokes2 = [];
-let pinyinCurrentStroke2 = null;
-let pinyinIsDrawing2 = false;
+// --- Pinyin input for homework.html ---
 let pinyinRecognized2 = '';
+let pinyinCharCount = 0;
+let pinyinCellStrokes = [];
+let pinyinCellRecognized = [];
+let pinyinToneSelections = [];
+let pinyinBaseInputs = [];
+let _pyDrawingCell = -1;
+let _pyCurrentStroke = null;
 
-function initPinyinCanvas2() {
-  pinyinCanvasStrokes2 = [];
-  const box = document.getElementById("pinyinBox");
-  const canvas = document.getElementById("pinyinCanvas2");
+function drawPinyinFourLines(idx) {
+  const linesEl = document.getElementById(`pyLines${idx}`);
+  if (!linesEl) return;
+  // Standard 四线格: exactly 4 horizontal lines, 3 zones
+  const h = 90;
+  const positions = [0, h / 3, h * 2 / 3, h - 1]; // top, upper-mid, lower-mid, bottom
+  const styles = ['2px solid #a0aec0', '1px dashed #cbd5e0', '1px dashed #cbd5e0', '2px solid #a0aec0'];
+  linesEl.innerHTML = positions.map((top, i) =>
+    `<div style="position:absolute;left:0;right:0;top:${top}px;border-top:${styles[i]}"></div>`
+  ).join('');
+}
+
+function initPinyinCellCanvas(idx) {
+  const box = document.getElementById(`pyBox${idx}`);
+  const canvas = document.getElementById(`pyCanvas${idx}`);
   if (!canvas || !box) return;
   canvas.width = box.clientWidth;
   canvas.height = box.clientHeight;
   const ctx = canvas.getContext("2d");
-  ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+  ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+
   function getPos(e) {
     const rect = canvas.getBoundingClientRect();
     const t = e.touches ? e.touches[0] : e;
     return [t.clientX - rect.left, t.clientY - rect.top];
   }
-  function startStroke(e) { e.preventDefault(); pinyinIsDrawing2 = true; const [x,y] = getPos(e); pinyinCurrentStroke2 = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
-  function moveStroke(e) { if (!pinyinIsDrawing2) return; e.preventDefault(); const [x,y] = getPos(e); pinyinCurrentStroke2[0].push(x); pinyinCurrentStroke2[1].push(y); pinyinCurrentStroke2[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
-  function endStroke(e) { if (!pinyinIsDrawing2) return; e.preventDefault(); pinyinIsDrawing2 = false; if (pinyinCurrentStroke2 && pinyinCurrentStroke2[0].length > 0) pinyinCanvasStrokes2.push(pinyinCurrentStroke2); pinyinCurrentStroke2 = null; }
+  function startStroke(e) {
+    e.preventDefault(); _pyDrawingCell = idx;
+    const [x, y] = getPos(e);
+    _pyCurrentStroke = [[x], [y], [Date.now()]];
+    ctx.beginPath(); ctx.moveTo(x, y);
+  }
+  function moveStroke(e) {
+    if (_pyDrawingCell !== idx) return; e.preventDefault();
+    const [x, y] = getPos(e);
+    _pyCurrentStroke[0].push(x); _pyCurrentStroke[1].push(y); _pyCurrentStroke[2].push(Date.now());
+    ctx.lineTo(x, y); ctx.stroke();
+  }
+  function endStroke(e) {
+    if (_pyDrawingCell !== idx) return; e.preventDefault();
+    _pyDrawingCell = -1;
+    if (_pyCurrentStroke && _pyCurrentStroke[0].length > 0) {
+      pinyinCellStrokes[idx].push(_pyCurrentStroke);
+    }
+    _pyCurrentStroke = null;
+  }
   canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
   canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
-  canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke);
+  canvas.addEventListener("touchend", endStroke);
+}
+
+function switchPinyinMode(mode) {
+  localStorage.setItem("pinyin_input_mode", mode);
+  document.getElementById("pyModeHw").className = mode === 'handwrite' ? 'active' : '';
+  document.getElementById("pyModeType").className = mode === 'type' ? 'active' : '';
+  const recBtn = document.getElementById("pyRecBtn");
+  const hwHint = document.getElementById("pyHwHint");
+  if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  if (hwHint) hwHint.style.display = mode === 'handwrite' ? '' : 'none';
+  for (let i = 0; i < pinyinCharCount; i++) {
+    const canvas = document.getElementById(`pyCanvas${i}`);
+    const typeArea = document.getElementById(`pyTypeArea${i}`);
+    if (canvas) canvas.style.display = mode === 'handwrite' ? 'block' : 'none';
+    if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
+  }
+}
+
+// Tone mark application
+const _toneMap = {
+  'a': ['ā','á','ǎ','à'], 'e': ['ē','é','ě','è'], 'i': ['ī','í','ǐ','ì'],
+  'o': ['ō','ó','ǒ','ò'], 'u': ['ū','ú','ǔ','ù'], 'ü': ['ǖ','ǘ','ǚ','ǜ'],
+};
+
+function applyTone(base, tone) {
+  if (!base) return '';
+  base = base.toLowerCase().trim().replace(/v/g, 'ü');
+  if (tone === 0) return base; // 轻声
+  // Find which vowel to mark: a/e always get it; ou → o; otherwise last vowel
+  const vowels = 'aeiouü';
+  let target = -1;
+  for (let i = 0; i < base.length; i++) {
+    if (base[i] === 'a' || base[i] === 'e') { target = i; break; }
+  }
+  if (target === -1) {
+    const ouIdx = base.indexOf('ou');
+    if (ouIdx !== -1) { target = ouIdx; }
+    else {
+      // last vowel
+      for (let i = base.length - 1; i >= 0; i--) {
+        if (vowels.includes(base[i])) { target = i; break; }
+      }
+    }
+  }
+  if (target === -1) return base;
+  const ch = base[target];
+  const toned = _toneMap[ch] ? _toneMap[ch][tone - 1] : ch;
+  return base.substring(0, target) + toned + base.substring(target + 1);
+}
+
+function setPinyinTone(idx, tone) {
+  pinyinToneSelections[idx] = tone;
+  // Update active button
+  const row = document.getElementById(`pyTypeArea${idx}`);
+  if (row) {
+    row.querySelectorAll('.pinyin-tone-btn').forEach((btn, i) => {
+      const btnTone = i < 4 ? i + 1 : 0;
+      btn.className = 'pinyin-tone-btn' + (btnTone === tone ? ' active' : '');
+    });
+  }
+  // Show preview
+  const input = document.getElementById(`pyInput${idx}`);
+  const resultEl = document.getElementById(`pyResult${idx}`);
+  if (input && resultEl) {
+    const base = input.value.trim();
+    pinyinBaseInputs[idx] = base;
+    resultEl.textContent = applyTone(base, tone);
+  }
 }
 
 function clearPinyinCanvas2() {
-  pinyinCanvasStrokes2 = []; pinyinRecognized2 = '';
-  const el = document.getElementById("pinyinRecognized2"); if (el) el.textContent = '';
-  const canvas = document.getElementById("pinyinCanvas2");
-  if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  pinyinRecognized2 = '';
+  const recEl = document.getElementById("pinyinRecognized2");
+  if (recEl) recEl.textContent = '';
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  for (let i = 0; i < pinyinCharCount; i++) {
+    if (mode === 'handwrite') {
+      pinyinCellStrokes[i] = [];
+      pinyinCellRecognized[i] = '';
+      const canvas = document.getElementById(`pyCanvas${i}`);
+      if (canvas) canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+      const resEl = document.getElementById(`pyResult${i}`);
+      if (resEl) resEl.textContent = '';
+    } else {
+      const input = document.getElementById(`pyInput${i}`);
+      if (input) input.value = '';
+      pinyinToneSelections[i] = null;
+      pinyinBaseInputs[i] = '';
+      const resEl = document.getElementById(`pyResult${i}`);
+      if (resEl) resEl.textContent = '';
+      const area = document.getElementById(`pyTypeArea${i}`);
+      if (area) area.querySelectorAll('.pinyin-tone-btn').forEach(b => b.className = 'pinyin-tone-btn');
+    }
+  }
 }
 
 async function recognizePinyin2() {
-  if (pinyinCanvasStrokes2.length === 0) return;
-  const canvas = document.getElementById("pinyinCanvas2");
-  const el = document.getElementById("pinyinRecognized2");
-  const qualityMsg = checkStrokeQuality(pinyinCanvasStrokes2, canvas);
-  if (qualityMsg) { el.textContent = qualityMsg; return; }
-  el.textContent = "识别中...";
+  const recEl = document.getElementById("pinyinRecognized2");
+  let anyStrokes = false;
+  for (let i = 0; i < pinyinCharCount; i++) {
+    if (pinyinCellStrokes[i].length > 0) { anyStrokes = true; break; }
+  }
+  if (!anyStrokes) return;
+
+  if (recEl) recEl.textContent = "识别中...";
   try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: pinyinCanvasStrokes2, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-    if (topResult) { pinyinRecognized2 = topResult; el.textContent = `识别结果: ${topResult}`; }
-    else { el.textContent = "未能识别，请清除后重写"; }
-  } catch(e) { el.textContent = "识别失败，请重试"; }
+    const results = await Promise.all(pinyinCellStrokes.map(async (strokes, i) => {
+      if (strokes.length === 0) return '';
+      const box = document.getElementById(`pyBox${i}`);
+      const w = box ? box.clientWidth : 120;
+      const h = box ? box.clientHeight : 90;
+      const res = await fetch("/api/handwriting", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strokes, width: w, height: h }),
+      });
+      const data = await res.json();
+      try { if (data[0] === "SUCCESS") return data[1][0][1][0]; } catch(e) {}
+      return '';
+    }));
+    for (let i = 0; i < pinyinCharCount; i++) {
+      pinyinCellRecognized[i] = results[i] || '';
+      const resEl = document.getElementById(`pyResult${i}`);
+      if (resEl) resEl.textContent = results[i] || (pinyinCellStrokes[i].length > 0 ? '?' : '');
+    }
+    const combined = results.join(' ').trim();
+    pinyinRecognized2 = combined;
+    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
+  } catch(e) {
+    if (recEl) recEl.textContent = "识别失败，请重试";
+  }
 }
 
 function normalizePinyin(s) {
   return s.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+function getPinyinAnswer() {
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  if (mode === 'type') {
+    const parts = [];
+    for (let i = 0; i < pinyinCharCount; i++) {
+      const base = (document.getElementById(`pyInput${i}`)?.value || '').trim().replace(/v/g, 'ü');
+      const tone = pinyinToneSelections[i];
+      if (!base) return null;
+      if (tone === null || tone === undefined) return null;
+      parts.push(applyTone(base, tone));
+    }
+    return parts.join(' ');
+  } else {
+    return pinyinRecognized2 || null;
+  }
+}
+
 async function pinyinSubmit() {
   if (!quiz.answering) return;
-  // Auto-recognize if not yet recognized
-  if (!pinyinRecognized2 && pinyinCanvasStrokes2.length > 0) {
-    await recognizePinyin2();
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+
+  if (mode === 'handwrite') {
+    // Auto-recognize if not yet recognized
+    let anyStrokes = false;
+    for (let i = 0; i < pinyinCharCount; i++) {
+      if (pinyinCellStrokes[i].length > 0) { anyStrokes = true; break; }
+    }
+    if (!pinyinRecognized2 && anyStrokes) {
+      await recognizePinyin2();
+    }
   }
-  const userAnswer = pinyinRecognized2;
+
+  const userAnswer = getPinyinAnswer();
   if (!userAnswer) {
-    const el = document.getElementById("pinyinRecognized2");
-    if (el) el.textContent = "请先写拼音";
+    const recEl = document.getElementById("pinyinRecognized2");
+    if (mode === 'type') {
+      if (recEl) recEl.textContent = "请输入每个字的拼音并选择声调";
+    } else {
+      if (recEl) recEl.textContent = "请先写拼音";
+    }
     return;
   }
   quiz.answering = false;
@@ -932,14 +1181,60 @@ async function finishQuiz() {
   }
 }
 
-function confirmBackToList() {
-  if (confirm("确定要退出当前作业吗？进度不会保存。")) {
-    clearInterval(quiz.timerInterval);
-    document.getElementById("quizSection").style.display = "none";
-    document.getElementById("todaySection").style.display = "";
-    loadToday();
-    loadProgress();
+async function confirmBackToList() {
+  // 0 = cancel, 1 = save & exit, 2 = discard & exit
+  const choice = await showExitDialog();
+  if (choice === 0) return; // cancelled
+
+  clearInterval(quiz.timerInterval);
+
+  if (choice === 1) {
+    // Save progress
+    const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
+    try {
+      await fetch("/api/homework/save_progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assignment_id: quiz.assignmentId,
+          progress: {
+            currentIndex: quiz.currentIndex,
+            correctCount: quiz.correctCount,
+            wrongItems: quiz.wrongItems,
+            timeElapsed: timeElapsed,
+          },
+        }),
+      });
+    } catch (e) { /* ignore save errors */ }
   }
+
+  document.getElementById("quizSection").style.display = "none";
+  document.getElementById("todaySection").style.display = "";
+  loadToday();
+  loadProgress();
+}
+
+function showExitDialog() {
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
+    box.innerHTML = `
+      <div style="font-size:18px;font-weight:700;margin-bottom:8px">退出作业</div>
+      <div style="font-size:14px;color:#718096;margin-bottom:20px">当前进度: ${quiz.currentIndex}/${quiz.questions.length} 题</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button id="_exitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">保存进度并退出</button>
+        <button id="_exitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">不保存，直接退出</button>
+        <button id="_exitCancel" style="padding:10px;border:none;border-radius:10px;background:#e2e8f0;color:#4a5568;font-size:15px;font-weight:600;cursor:pointer">继续做作业</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    document.getElementById("_exitSave").onclick = () => { document.body.removeChild(overlay); resolve(1); };
+    document.getElementById("_exitDiscard").onclick = () => { document.body.removeChild(overlay); resolve(2); };
+    document.getElementById("_exitCancel").onclick = () => { document.body.removeChild(overlay); resolve(0); };
+    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(0); } };
+  });
 }
 
 function backToToday() {

@@ -614,6 +614,9 @@ def init_db():
         db.execute("ALTER TABLE users ADD COLUMN recognition_coins_awarded INTEGER NOT NULL DEFAULT 0")
     if not _col_exists("users", "writing_coins_awarded"):
         db.execute("ALTER TABLE users ADD COLUMN writing_coins_awarded INTEGER NOT NULL DEFAULT 0")
+    # Migrate daily_assignments: add saved_progress for resume support
+    if not _col_exists("daily_assignments", "saved_progress"):
+        db.execute("ALTER TABLE daily_assignments ADD COLUMN saved_progress TEXT NOT NULL DEFAULT ''")
     # Migrate homework_plans: add separate grade tracking per type
     if not _col_exists("homework_plans", "recognition_grade"):
         db.execute("ALTER TABLE homework_plans ADD COLUMN recognition_grade TEXT NOT NULL DEFAULT ''")
@@ -1893,14 +1896,26 @@ def homework_start(assignment_id):
             })
         random.shuffle(questions)
 
-    return jsonify({
+    # Check for saved progress
+    saved = assignment.get("saved_progress", "") or ""
+    saved_data = None
+    if saved:
+        try:
+            saved_data = json.loads(saved)
+        except (json.JSONDecodeError, TypeError):
+            saved_data = None
+
+    resp = {
         "assignment_id": assignment_id,
         "type": hw_type,
         "grade": grade,
         "lesson_num": lesson_num,
         "questions": questions,
         "total": len(questions),
-    })
+    }
+    if saved_data:
+        resp["saved_progress"] = saved_data
+    return jsonify(resp)
 
 
 @app.route("/api/homework/preview/<int:assignment_id>")
@@ -2015,7 +2030,8 @@ def homework_submit():
     db.execute(
         """UPDATE daily_assignments
            SET status = 'completed', total_questions = %s, correct_answers = %s,
-               time_spent = %s, wrong_items = %s, completed_at = CURRENT_TIMESTAMP
+               time_spent = %s, wrong_items = %s, saved_progress = '',
+               completed_at = CURRENT_TIMESTAMP
            WHERE id = %s""",
         (total_questions, correct_answers, time_spent, wrong_items, assignment_id),
     )
@@ -2104,6 +2120,31 @@ def homework_submit():
     all_done = pending["cnt"] == 0
 
     return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done, "next_assignment": next_assignment})
+
+
+@app.route("/api/homework/save_progress", methods=["POST"])
+def homework_save_progress():
+    """Save partial homework progress so user can resume later."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json()
+    assignment_id = data.get("assignment_id")
+    progress = data.get("progress")  # JSON string with currentIndex, correctCount, wrongItems, questions, timeElapsed
+    if not assignment_id or progress is None:
+        return jsonify({"error": "参数错误"}), 400
+    db = get_db()
+    assignment = db.execute(
+        "SELECT * FROM daily_assignments WHERE id = %s AND user_id = %s",
+        (assignment_id, session["user_id"]),
+    ).fetchone()
+    if not assignment:
+        return jsonify({"error": "作业不存在"}), 404
+    db.execute(
+        "UPDATE daily_assignments SET saved_progress = %s WHERE id = %s",
+        (json.dumps(progress, ensure_ascii=False), assignment_id),
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/homework/progress")
