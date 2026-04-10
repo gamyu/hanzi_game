@@ -3222,19 +3222,21 @@ async function checkCanvasStrokeOrderGeneric(answer, strokes, canvasW, canvasH, 
         for (const [px, py] of m) { rx += px; ry += py; }
         return [rx / m.length, ry / m.length];
       });
+      // For each user stroke, find the closest reference stroke (allow duplicates).
+      // Only check that the matched reference indices are non-decreasing.
+      // This tolerates messy handwriting — we only care about ORDER, not accuracy.
       const matched = [];
-      const used = new Set();
       for (const uc of userCentroids) {
         let bestDist = Infinity, bestRef = -1;
         for (let ri = 0; ri < refCentroids.length; ri++) {
-          if (used.has(ri)) continue;
           const dx = uc[0] - refCentroids[ri][0];
           const dy = uc[1] - refCentroids[ri][1];
           const dist = dx * dx + dy * dy;
           if (dist < bestDist) { bestDist = dist; bestRef = ri; }
         }
-        if (bestRef >= 0) { matched.push(bestRef); used.add(bestRef); }
+        if (bestRef >= 0) matched.push(bestRef);
       }
+      // Check non-decreasing order (allow equal for split strokes)
       for (let j = 1; j < matched.length; j++) {
         if (matched[j] < matched[j - 1]) { wrongChars.push(i); break; }
       }
