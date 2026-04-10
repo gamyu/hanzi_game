@@ -1211,7 +1211,7 @@ def review_question():
 
 @app.route("/api/review_done", methods=["POST"])
 def review_done():
-    """Increment review_count for a wrong answer. Move to mastered if count >= 3."""
+    """Mark a wrong answer as reviewed and delete it."""
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
 
@@ -1220,34 +1220,14 @@ def review_done():
     mode = data.get("mode", "")
     db = get_db()
 
+    # Delete the reviewed wrong answer
     db.execute(
-        "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = %s AND character = %s AND mode = %s",
+        "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s",
         (session["user_id"], character, mode),
     )
     db.commit()
 
-    # Check if any rows now have review_count >= 3 — move to mastered
-    rows = db.execute(
-        "SELECT * FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
-        (session["user_id"], character, mode),
-    ).fetchall()
-
-    mastered = False
-    for r in rows:
-        db.execute(
-            "INSERT INTO mastered_words (user_id, character, pinyin, words, grade, mode, review_count, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (r["user_id"], r["character"], r["pinyin"], r["words"], r["grade"], r["mode"], r["review_count"], r["created_at"]),
-        )
-        mastered = True
-
-    if mastered:
-        db.execute(
-            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
-            (session["user_id"], character, mode),
-        )
-        db.commit()
-
-    return jsonify({"ok": True, "mastered": mastered})
+    return jsonify({"ok": True})
 
 
 @app.route("/api/mastered_words")
@@ -1876,18 +1856,23 @@ def homework_review_submit():
     data = request.get_json()
     items = data.get("items", [])
     db = get_db()
+    delete_all = data.get("delete_all", False)
+    today = date.today().isoformat()
     for item in items:
         character = item.get("character", "")
         mode = item.get("mode", "")
-        db.execute(
-            "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = %s AND character = %s AND mode = %s",
-            (session["user_id"], character, mode),
-        )
-        # Delete after one review round
-        db.execute(
-            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 1",
-            (session["user_id"], character, mode),
-        )
+        if delete_all:
+            # Voluntary review: delete all matching wrong answers
+            db.execute(
+                "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s",
+                (session["user_id"], character, mode),
+            )
+        else:
+            # Pre-homework review: only delete old wrong answers (before today)
+            db.execute(
+                "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND DATE(created_at) < %s",
+                (session["user_id"], character, mode, today),
+            )
     db.commit()
     return jsonify({"ok": True})
 

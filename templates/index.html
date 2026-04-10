@@ -5060,13 +5060,14 @@ async function startVoluntaryReview() {
     document.getElementById("hwWrongReviewSection").style.display = "none";
     document.getElementById("hwReviewSection").style.display = "none";
     hwReviewItems = items;
+    hwReview.isVoluntary = true;
     startHwReview();
   } catch (e) {
     alert("加载错题失败");
   }
 }
 
-let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0 };
+let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };
 
 function startHwReview() {
   // Build review questions from hwReviewItems
@@ -5323,7 +5324,7 @@ async function finishHwReview() {
   await fetch("/api/homework/review_submit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items: hwReview.items }),
+    body: JSON.stringify({ items: hwReview.items, delete_all: hwReview.isVoluntary }),
   });
 
   // All review items answered correctly — go directly to today's homework
