@@ -1178,11 +1178,14 @@
   }
   .game-pinyin-tone-row { display: flex; gap: 4px; margin-top: 4px; justify-content: center; }
   .game-pinyin-tone-btn {
-    width: 30px; height: 28px; border: 1.5px solid #e2e8f0; border-radius: 6px;
+    width: 30px; height: 38px; border: 1.5px solid #e2e8f0; border-radius: 6px;
     background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; padding: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1;
   }
+  .game-pinyin-tone-btn .tone-num { font-size: 10px; color: #a0aec0; font-weight: 400; }
   .game-pinyin-tone-btn:hover { border-color: #667eea; }
   .game-pinyin-tone-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .game-pinyin-tone-btn.active .tone-num { color: rgba(255,255,255,0.7); }
   .game-pinyin-cell-result { font-size: 16px; font-weight: 700; color: #5a67d8; min-height: 22px; margin-top: 2px; }
   .pinyin-correct-show {
     margin-top: 4px; font-size: 28px; font-weight: 700; color: #38a169;
@@ -2687,11 +2690,11 @@ function renderQuestion(q) {
         <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
           <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="gamePyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
-            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ</button>
-            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},2)">ˊ</button>
-            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},3)">ˇ</button>
-            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},4)">ˋ</button>
-            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},0)">轻</button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="gamePyResult${i}"></div>
@@ -4273,11 +4276,11 @@ function showHwQuizQuestion() {
         <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
           <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
-            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ</button>
-            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ</button>
-            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ</button>
-            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ</button>
-            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻</button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
@@ -4913,9 +4916,11 @@ function hwBackToToday() {
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "none";
   document.getElementById("hwReviewSection").style.display = "none";
+  document.getElementById("hwWrongReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "";
   loadHomeworkToday();
   loadHomeworkProgress();
+  loadWrongReviewSection();
 }
 
 // --- Review Quiz ---
@@ -4954,10 +4959,15 @@ async function startVoluntaryReview() {
     document.getElementById("gameView").style.display = "none";
     const hwView = document.getElementById("homeworkView");
     hwView.style.display = "flex";
+    hwView.style.flexDirection = "column";
+    hwView.style.alignItems = "center";
+    hwView.style.width = "100%";
     document.getElementById("hwTodaySection").style.display = "none";
     document.getElementById("hwProgressSection").style.display = "none";
     document.getElementById("hwHistorySection").style.display = "none";
     document.getElementById("hwResultSection").style.display = "none";
+    document.getElementById("hwWrongReviewSection").style.display = "none";
+    document.getElementById("hwReviewSection").style.display = "none";
     hwReviewItems = items;
     startHwReview();
   } catch (e) {
@@ -4971,7 +4981,7 @@ function startHwReview() {
   // Build review questions from hwReviewItems
   const questions = [];
   hwReviewItems.forEach(item => {
-    if (item.mode === "char_to_pinyin" || item.mode === "pinyin_to_char" || item.mode === "listen_to_char" || item.mode === "pinyin_typing") {
+    if (item.mode === "char_to_pinyin" || item.mode === "pinyin_to_char" || item.mode === "listen_to_char" || item.mode === "pinyin_typing" || item.mode === "read_aloud") {
       // Recognition review: show char, pick pinyin
       questions.push({
         mode: "char_to_pinyin",
@@ -5029,9 +5039,13 @@ function startHwReview() {
   hwReview.answeredCorrectly = new Set();
   hwReview.retryMap = {};
 
-  // Show quiz section
+  // Show quiz section, hide everything else
   document.getElementById("hwReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "none";
+  document.getElementById("hwWrongReviewSection").style.display = "none";
+  document.getElementById("hwProgressSection").style.display = "none";
+  document.getElementById("hwHistorySection").style.display = "none";
+  document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "";
   clearInterval(hwReview.timerInterval);
   hwReview.timerInterval = setInterval(() => {
