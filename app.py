@@ -353,6 +353,8 @@ _secret = os.environ.get("SECRET_KEY")
 if not _secret:
     raise RuntimeError("SECRET_KEY environment variable must be set")
 app.secret_key = _secret
+app.config["SESSION_PERMANENT"] = True
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "")
 _legacy_admin_pw = os.environ.get("ADMIN_PASSWORD", "")
@@ -449,7 +451,7 @@ def csrf_protect():
     if request.method in CSRF_SAFE_METHODS:
         return
     # Skip CSRF for endpoints that don't act on an existing session
-    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting", "/api/admin/login")
+    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting", "/api/admin/login", "/api/scores")
     if request.path in CSRF_EXEMPT:
         return
     token = (
@@ -958,6 +960,7 @@ def register():
     user_id = cursor.fetchone()["id"]
     db.commit()
     session.clear()
+    session.permanent = True
     session["user_id"] = user_id
     session["username"] = username
     return jsonify({"username": username, "csrf_token": _generate_csrf_token()})
@@ -984,6 +987,7 @@ def login():
     db.commit()
 
     session.clear()
+    session.permanent = True
     session["user_id"] = user["id"]
     session["username"] = username
     return jsonify({"username": username, "csrf_token": _generate_csrf_token()})
@@ -1373,7 +1377,9 @@ def admin_login():
     if _rate_limited(f"admin_login:{request.remote_addr}", 5, 300):
         return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
 
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "无效的请求数据"}), 400
     password = data.get("password", "")
     if ADMIN_PASSWORD_HASH:
         if not bcrypt.checkpw(password.encode(), ADMIN_PASSWORD_HASH.encode()):

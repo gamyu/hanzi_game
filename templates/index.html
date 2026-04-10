@@ -2034,7 +2034,8 @@ function showAdminLogin() {
 }
 
 async function submitAdminLogin() {
-  const password = document.getElementById("adminPassword").value;
+  const password = document.getElementById("adminPassword").value.trim();
+  if (!password) { document.getElementById("adminLoginError").textContent = "请输入密码"; return; }
   const res = await fetch("/api/admin/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
