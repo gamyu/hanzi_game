@@ -684,6 +684,7 @@
   }
 
   .canvas-btn:hover { border-color: #5a67d8; background: #ebf4ff; }
+  .canvas-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
 
   /* Leaderboard */
   .lb-tabs {
@@ -2765,6 +2766,7 @@ function renderQuestion(q) {
         <div id="hwRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearCanvas()">清除</button>
+          <button class="canvas-btn" id="eraserBtn" onclick="toggleEraser('writeCanvas')">橡皮擦</button>
           <button class="canvas-btn" onclick="recognizeHandwriting()">识别</button>
           <button class="canvas-btn" id="hwSubmitBtn" onclick="submitHandwriting()">确认</button>
         </div>
@@ -2951,11 +2953,29 @@ function handleDictationAnswer(userInput, q) {
     setTimeout(loadQuestion, 100);
   } else {
     playStrokeAnimation(q.answer, hint);
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    // "修改" button: let user edit their handwriting and resubmit
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "修改答案";
+    editBtn.className = "ok-btn";
+    editBtn.style.background = "#667eea";
+    editBtn.onclick = () => {
+      hint.innerHTML = "";
+      hwRecognizedResult = '';
+      state.answering = true;
+      const submitBtn = document.getElementById("hwSubmitBtn");
+      if (submitBtn) submitBtn.disabled = false;
+      const recEl = document.getElementById("hwRecognized");
+      if (recEl) recEl.textContent = "请修改后重新识别并确认";
+    };
+    btnRow.appendChild(editBtn);
     const okBtn = document.createElement("button");
-    okBtn.textContent = "OK";
+    okBtn.textContent = "下一题";
     okBtn.className = "ok-btn";
     okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 }
 
@@ -3058,16 +3078,25 @@ function playStrokeAnimation(answer, containerEl) {
 let canvasStrokes = [];
 let currentStroke = null;
 let isDrawing = false;
+let eraserMode = false;
+
+function toggleEraser(canvasId) {
+  eraserMode = !eraserMode;
+  // Update all eraser buttons
+  document.querySelectorAll("#eraserBtn, #hwEraserBtn, #reviewEraserBtn").forEach(btn => {
+    btn.classList.toggle("active", eraserMode);
+    btn.textContent = eraserMode ? "画笔" : "橡皮擦";
+  });
+  const canvas = document.getElementById(canvasId || "writeCanvas");
+  if (canvas) canvas.style.cursor = eraserMode ? "cell" : "crosshair";
+}
 
 function initCanvas() {
   canvasStrokes = [];
+  eraserMode = false;
   const canvas = document.getElementById("writeCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  ctx.lineWidth = 5;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#2d3748";
 
   function getPos(e) {
     const rect = canvas.getBoundingClientRect();
@@ -3079,8 +3108,18 @@ function initCanvas() {
     e.preventDefault();
     isDrawing = true;
     const [x, y] = getPos(e);
-    currentStroke = [[x], [y], [Date.now()]];
     ctx.beginPath();
+    if (eraserMode) {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = 20;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineWidth = 5;
+    }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#2d3748";
+    currentStroke = eraserMode ? null : [[x], [y], [Date.now()]];
     ctx.moveTo(x, y);
   }
 
@@ -3088,9 +3127,11 @@ function initCanvas() {
     if (!isDrawing) return;
     e.preventDefault();
     const [x, y] = getPos(e);
-    currentStroke[0].push(x);
-    currentStroke[1].push(y);
-    currentStroke[2].push(Date.now());
+    if (currentStroke) {
+      currentStroke[0].push(x);
+      currentStroke[1].push(y);
+      currentStroke[2].push(Date.now());
+    }
     ctx.lineTo(x, y);
     ctx.stroke();
   }
@@ -3099,6 +3140,7 @@ function initCanvas() {
     if (!isDrawing) return;
     e.preventDefault();
     isDrawing = false;
+    ctx.globalCompositeOperation = "source-over";
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
     }
@@ -3119,8 +3161,11 @@ let hwRecognizedResult = '';
 function clearCanvas() {
   canvasStrokes = [];
   hwRecognizedResult = '';
+  eraserMode = false;
+  document.querySelectorAll("#eraserBtn, #hwEraserBtn, #reviewEraserBtn").forEach(b => { b.classList.remove("active"); b.textContent = "橡皮擦"; });
   const canvas = document.getElementById("writeCanvas");
   if (!canvas) return;
+  canvas.style.cursor = "crosshair";
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const recEl = document.getElementById("hwRecognized"); if (recEl) recEl.textContent = '';
@@ -4399,6 +4444,7 @@ function showHwQuizQuestion() {
       <div id="hwQuizRecognized2" style="font-size:16px;font-weight:700;color:#5a67d8;min-height:22px;text-align:center;margin-top:4px"></div>
       <div class="hw-quiz-canvas-btns">
         <button onclick="clearHwQuizCanvas2()">清除</button>
+        <button id="hwEraserBtn" onclick="toggleEraser('hwQuizCanvas')">橡皮擦</button>
         <button onclick="recognizeHwQuiz2()">识别</button>
         <button id="hwQuizSubmitBtn" onclick="submitHwQuiz()">确认</button>
       </div>
@@ -4759,11 +4805,30 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     playStrokeAnimation(q.answer, hint);
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    if (q.mode === "dictation_handwrite") {
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "修改答案";
+      editBtn.className = "ok-btn";
+      editBtn.style.background = "#667eea";
+      editBtn.onclick = () => {
+        hint.innerHTML = "";
+        hwQuizRecognizedResult2 = '';
+        hwQuiz.answering = true;
+        const submitBtn = document.getElementById("hwQuizSubmitBtn");
+        if (submitBtn) submitBtn.disabled = false;
+        const recEl = document.getElementById("hwQuizRecognized2");
+        if (recEl) recEl.textContent = "请修改后重新识别并确认";
+      };
+      btnRow.appendChild(editBtn);
+    }
     const okBtn = document.createElement("button");
-    okBtn.textContent = "继续";
+    okBtn.textContent = "下一题";
     okBtn.className = "ok-btn";
     okBtn.onclick = () => nextHwQuestion();
-    hint.appendChild(okBtn);
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 }
 
@@ -5115,6 +5180,7 @@ function showHwReviewQuestion() {
         <div id="hwQuizRecognized" style="font-size:16px;font-weight:700;color:#5a67d8;min-height:22px;text-align:center;margin-top:4px"></div>
         <div style="display:flex;gap:8px;justify-content:center;margin-top:4px">
           <button class="hw-canvas-clear" onclick="clearHwQuizCanvas()">清除</button>
+          <button class="hw-canvas-clear" id="reviewEraserBtn" onclick="toggleEraser('hwQuizCanvas')">橡皮擦</button>
           <button class="hw-canvas-clear" onclick="recognizeHwQuiz()">识别</button>
         </div>
       </div>`;
@@ -5215,8 +5281,29 @@ async function submitHwReviewHandwrite() {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
-      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    if (q.mode === "dictation_handwrite") {
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "修改答案";
+      editBtn.className = "ok-btn";
+      editBtn.style.background = "#667eea";
+      editBtn.onclick = () => {
+        hint.innerHTML = "";
+        hwQuizRecognizedResult = '';
+        hwReview.answering = true;
+        const recEl = document.getElementById("hwQuizRecognized");
+        if (recEl) recEl.textContent = "请修改后重新识别并提交";
+      };
+      btnRow.appendChild(editBtn);
+    }
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "下一题";
+    okBtn.className = "ok-btn";
+    okBtn.onclick = () => nextHwReviewQuestion();
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 }
 
@@ -5247,13 +5334,10 @@ async function finishHwReview() {
 // --- Homework Quiz Canvas ---
 function initHwQuizCanvas() {
   hwCanvasStrokes = [];
+  eraserMode = false;
   const canvas = document.getElementById("hwQuizCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  ctx.lineWidth = 5;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#2d3748";
 
   function getPos(e) {
     const rect = canvas.getBoundingClientRect();
@@ -5265,8 +5349,18 @@ function initHwQuizCanvas() {
     e.preventDefault();
     hwIsDrawing = true;
     const [x, y] = getPos(e);
-    hwCurrentStroke = [[x], [y], [Date.now()]];
     ctx.beginPath();
+    if (eraserMode) {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = 20;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineWidth = 5;
+    }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#2d3748";
+    hwCurrentStroke = eraserMode ? null : [[x], [y], [Date.now()]];
     ctx.moveTo(x, y);
   }
 
@@ -5274,9 +5368,11 @@ function initHwQuizCanvas() {
     if (!hwIsDrawing) return;
     e.preventDefault();
     const [x, y] = getPos(e);
-    hwCurrentStroke[0].push(x);
-    hwCurrentStroke[1].push(y);
-    hwCurrentStroke[2].push(Date.now());
+    if (hwCurrentStroke) {
+      hwCurrentStroke[0].push(x);
+      hwCurrentStroke[1].push(y);
+      hwCurrentStroke[2].push(Date.now());
+    }
     ctx.lineTo(x, y);
     ctx.stroke();
   }
@@ -5285,6 +5381,7 @@ function initHwQuizCanvas() {
     if (!hwIsDrawing) return;
     e.preventDefault();
     hwIsDrawing = false;
+    ctx.globalCompositeOperation = "source-over";
     if (hwCurrentStroke && hwCurrentStroke[0].length > 0) {
       hwCanvasStrokes.push(hwCurrentStroke);
     }
@@ -5340,8 +5437,11 @@ let hwQuizRecognizedResult2 = '';
 function clearHwQuizCanvas2() {
   hwCanvasStrokes = [];
   hwQuizRecognizedResult2 = '';
+  eraserMode = false;
+  document.querySelectorAll("#eraserBtn, #hwEraserBtn, #reviewEraserBtn").forEach(b => { b.classList.remove("active"); b.textContent = "橡皮擦"; });
   const canvas = document.getElementById("hwQuizCanvas");
   if (!canvas) return;
+  canvas.style.cursor = "crosshair";
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
   const recEl = document.getElementById("hwQuizRecognized2"); if (recEl) recEl.textContent = '';
 }
