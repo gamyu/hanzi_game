@@ -1008,7 +1008,9 @@ def scores_api():
         return jsonify({"error": "未登录"}), 401
 
     if request.method == "POST":
-        data = request.get_json()
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"error": "无效的请求数据"}), 400
         grade = data.get("grade", "")
         mode = data.get("mode", "")
         score = data.get("score", 0)
@@ -1116,7 +1118,9 @@ def wrong_answers_api():
         return jsonify({"error": "未登录"}), 401
 
     if request.method == "POST":
-        data = request.get_json()
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"error": "无效的请求数据"}), 400
         db = get_db()
         db.execute(
             "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",

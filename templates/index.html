@@ -1859,7 +1859,13 @@ async function saveScore() {
       body: JSON.stringify(payload),
     });
   } catch (e) {
-    navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+    // Fallback: use fetch with keepalive
+    fetch("/api/scores", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {});
   }
 }
 
@@ -1879,7 +1885,13 @@ function saveScoreAsync() {
   state.totalQuestions = 0;
   state.correctAnswers = 0;
   updateScoreboard();
-  navigator.sendBeacon("/api/scores", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+  // Use fetch with keepalive for reliable JSON delivery (sendBeacon may lose Content-Type)
+  fetch("/api/scores", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true,
+  }).catch(() => {});
 }
 
 function showScores() {
@@ -2712,7 +2724,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
         </div>
-        <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声，回车键确认</div>
+        <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声; Tab下一字，回车确认</div>
       </div>
     `;
     gamePinyinCharCount = qChars.length;
@@ -3384,13 +3396,16 @@ function switchGamePinyinMode(mode) {
 function gamePyInputKeydown(e, idx) {
   if (e.key === 'Enter') {
     e.preventDefault();
-    // If there's a next input, focus it; otherwise submit
     const nextInput = document.getElementById(`gamePyInput${idx + 1}`);
     if (nextInput) {
       nextInput.focus();
     } else {
       submitGamePinyin();
     }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    const nextInput = document.getElementById(`gamePyInput${idx + 1}`);
+    if (nextInput) nextInput.focus();
   }
 }
 
@@ -4298,7 +4313,7 @@ function showHwQuizQuestion() {
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
         </div>
-        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声，回车键确认</div>
+        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声; Tab下一字，回车确认</div>
       </div>
     `;
     hwPinyinCharCount = qChars.length;
@@ -4485,6 +4500,10 @@ function hwPyInputKeydown(e, idx) {
     } else {
       hwPinyinSubmit();
     }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
+    if (nextInput) nextInput.focus();
   }
 }
 
