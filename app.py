@@ -721,6 +721,32 @@ def _generate_question(grade: str, mode: str) -> dict:
             "word_hint": "、".join(correct["words"]),
         }
 
+    if mode == "read_aloud":
+        # Show character, user reads aloud — answer is pinyin (with tone marks)
+        q = {
+            "mode": mode,
+            "question": correct["char"],
+            "answer": correct["pinyin"],
+            "answer_char": correct["char"],
+            "word_hint": "、".join(correct["words"]),
+        }
+        if correct["char"] in MULTI_PINYIN:
+            cw = ""
+            for w in WORDS.get(grade, []):
+                syllables = w["pinyin"].split()
+                if len(w["word"]) == len(syllables):
+                    for ch, py in zip(w["word"], syllables):
+                        if ch == correct["char"] and py == correct["pinyin"]:
+                            cw = w["word"]
+                            break
+                if cw:
+                    break
+            if not cw and correct["words"]:
+                cw = correct["words"][0]
+            if cw:
+                q["context_word"] = cw
+        return q
+
     if mode == "pinyin_typing":
         # Show character, handwrite pinyin
         q = {
@@ -872,6 +898,31 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "answer": correct["char"],
             "word_hint": "、".join(correct["words"]),
         }
+
+    if mode == "read_aloud":
+        q = {
+            "mode": mode,
+            "question": correct["char"],
+            "answer": correct["pinyin"],
+            "answer_char": correct["char"],
+            "word_hint": "、".join(correct["words"]),
+        }
+        if correct["char"] in MULTI_PINYIN:
+            cw = ""
+            for w in WORDS.get(grade, []):
+                syllables = w["pinyin"].split()
+                if len(w["word"]) == len(syllables):
+                    for ch, py in zip(w["word"], syllables):
+                        if ch == correct["char"] and py == correct["pinyin"]:
+                            cw = w["word"]
+                            break
+                if cw:
+                    break
+            if not cw and correct["words"]:
+                cw = correct["words"][0]
+            if cw:
+                q["context_word"] = cw
+        return q
 
     return {"error": f"Unknown mode: {mode}"}
 
@@ -1143,6 +1194,12 @@ def review_question():
     if mode == "dictation_handwrite":
         return jsonify({
             "mode": mode, "question": pinyin, "answer": character,
+        })
+
+    if mode == "read_aloud":
+        return jsonify({
+            "mode": mode, "question": character, "answer": pinyin,
+            "answer_char": character, "word_hint": words,
         })
 
     return jsonify({"error": f"Unknown mode: {mode}"}), 400
@@ -1822,9 +1879,9 @@ def homework_review_submit():
             "UPDATE wrong_answers SET review_count = review_count + 1 WHERE user_id = %s AND character = %s AND mode = %s",
             (session["user_id"], character, mode),
         )
-        # Delete if reviewed enough (>= 3)
+        # Delete after one review round
         db.execute(
-            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 3",
+            "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s AND review_count >= 1",
             (session["user_id"], character, mode),
         )
     db.commit()

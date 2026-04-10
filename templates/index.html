@@ -236,6 +236,50 @@
   .listen-btn:hover { transform: scale(1.1); }
   .listen-btn:active { transform: scale(0.95); }
 
+  /* Read-aloud mic button */
+  .mic-btn {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, #48bb78, #38a169);
+    font-size: 56px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(72,187,120,0.4);
+    transition: transform 0.2s, background 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    color: #fff;
+  }
+  .mic-btn:hover { transform: scale(1.1); }
+  .mic-btn:active { transform: scale(0.95); }
+  .mic-btn.recording {
+    background: linear-gradient(135deg, #fc8181, #e53e3e);
+    box-shadow: 0 6px 20px rgba(229,62,62,0.5);
+    animation: mic-pulse 1s ease-in-out infinite;
+  }
+  @keyframes mic-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+  }
+  .mic-status {
+    text-align: center;
+    font-size: 16px;
+    color: #718096;
+    margin-top: 12px;
+    min-height: 24px;
+  }
+  .mic-result {
+    text-align: center;
+    font-size: 20px;
+    font-weight: 700;
+    color: #5a67d8;
+    margin-top: 8px;
+    min-height: 28px;
+  }
+
   /* Options grid */
   .options {
     display: grid;
@@ -1571,6 +1615,7 @@ const MODES = [
   { id: "listen_to_char", label: "听音选字" },
   { id: "pinyin_typing", label: "给汉字注音" },
   { id: "dictation_handwrite", label: "看拼音写词语" },
+  { id: "read_aloud", label: "看字读音" },
 ];
 
 let state = {
@@ -1846,6 +1891,7 @@ const MODE_LABELS = {
   listen_to_char: "听音选字",
   pinyin_typing: "给汉字注音",
   dictation_handwrite: "看拼音写词语",
+  read_aloud: "看字读音",
 };
 
 async function showLeaderboard() {
@@ -2169,7 +2215,7 @@ async function showUserDetail(userId, username) {
   document.getElementById("adminUserDetailTitle").textContent = `${username} 的详情`;
   const content = document.getElementById("adminUserDetailContent");
 
-  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", pinyin_typing: "给汉字注音", dictation_handwrite: "看拼音写词语" };
+  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", pinyin_typing: "给汉字注音", dictation_handwrite: "看拼音写词语", read_aloud: "看字读音" };
 
   let html = '';
 
@@ -2389,7 +2435,7 @@ async function loadDailyLog() {
   const log = data.daily_log || [];
   if (log.length === 0) { content.innerHTML = '<div style="color:#a0aec0;padding:16px;text-align:center">暂无记录</div>'; return; }
 
-  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", dictation_handwrite: "看拼音写词语", pinyin_typing: "给汉字注音" };
+  const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", dictation_handwrite: "看拼音写词语", pinyin_typing: "给汉字注音", read_aloud: "看字读音" };
   let html = '';
   log.forEach(day => {
     html += `<div class="day-header">${day.date}</div>`;
@@ -2428,7 +2474,12 @@ async function init() {
 
   if (state.user) {
     await loadAppData();
-    switchToHomeworkView();
+    const lastView = localStorage.getItem("hanzi_view") || "homework";
+    if (lastView === "game") {
+      await switchToGameView();
+    } else {
+      switchToHomeworkView();
+    }
   } else {
     // Must login to use — hide everything and show auth modal
     document.getElementById("homeworkView").style.display = "none";
@@ -2498,6 +2549,8 @@ function renderModes() {
 async function loadQuestion(reuseCurrentQ) {
   state.answering = false;
   document.getElementById("hintArea").innerHTML = "";
+  // Stop any ongoing speech recognition
+  if (isRecording) stopRecording();
 
   // When toggling stroke order, reuse the current question
   if (reuseCurrentQ && state.currentQ) {
@@ -2508,7 +2561,7 @@ async function loadQuestion(reuseCurrentQ) {
   // Check retry queue first (wrong answer to repeat immediately)
   if (state.retryQueue.length > 0) {
     const retryQ = state.retryQueue[0];
-    if (retryQ.mode === "dictation_handwrite" || retryQ.mode === "pinyin_typing") {
+    if (retryQ.mode === "dictation_handwrite" || retryQ.mode === "pinyin_typing" || retryQ.mode === "read_aloud") {
       renderQuestion(retryQ);
       return;
     }
@@ -2582,6 +2635,12 @@ function renderQuestion(q) {
       <div class="question-label">请给汉字注音</div>
       <div class="question-char">${q.question}${contextHint}</div>
     `;
+  } else if (q.mode === "read_aloud") {
+    const contextHint = q.context_word ? ` <span style="font-size:20px;color:#718096">(${q.context_word})</span>` : '';
+    area.innerHTML = `
+      <div class="question-label">请朗读这个字</div>
+      <div class="question-char">${q.question}${contextHint}</div>
+    `;
   } else if (q.mode === "dictation_handwrite") {
     area.innerHTML = `
       <div class="question-label">看拼音写词语</div>
@@ -2592,7 +2651,23 @@ function renderQuestion(q) {
   // Options / input area
   opts.innerHTML = "";
 
-  if (q.mode === "pinyin_typing") {
+  if (q.mode === "read_aloud") {
+    opts.style.display = "flex";
+    opts.style.gridTemplateColumns = "";
+    opts.style.flexDirection = "column";
+    opts.style.alignItems = "center";
+    opts.style.gap = "12px";
+    opts.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%">
+        <button class="mic-btn" id="micBtn" onclick="toggleRecording()">🎤</button>
+        <div class="mic-status" id="micStatus">点击麦克风开始朗读</div>
+        <div class="mic-result" id="micResult"></div>
+      </div>
+    `;
+    state.currentQ = q;
+    state.answering = true;
+    return;
+  } else if (q.mode === "pinyin_typing") {
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -2610,7 +2685,7 @@ function renderQuestion(q) {
           <canvas id="gamePyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
         <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
-          <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
+          <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="gamePyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ</button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},2)">ˊ</button>
@@ -2634,6 +2709,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
         </div>
+        <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声，回车键确认</div>
       </div>
     `;
     gamePinyinCharCount = qChars.length;
@@ -2662,34 +2738,6 @@ function renderQuestion(q) {
     opts.style.flexDirection = "column";
     opts.style.alignItems = "center";
     opts.style.gap = "12px";
-
-    if (strokeOrderEnabled) {
-      // Stroke order mode: one HanziWriter per character
-      const chars = q.answer.split("");
-      const cellsHTML = chars.map((ch, i) =>
-        `<div class="hz-writer-cell" id="hzCell${i}">
-          <span class="hz-char-label">${i + 1}</span>
-          <div id="hzTarget${i}"></div>
-        </div>`
-      ).join("");
-      opts.innerHTML = `
-        <div class="canvas-wrap">
-          ${getStrokeToggleHTML()}
-          <div class="hz-writer-row">${cellsHTML}</div>
-          <div id="hwStrokeStatus"></div>
-        </div>
-      `;
-      state.currentQ = q;
-      state.answering = true;
-      initStrokeOrderUI(chars, function() {
-        // All characters completed — count total mistakes
-        const totalMistakes = hzWriters.reduce((sum, hw) => sum + (hw.mistakeCount || 0), 0);
-        const statusEl = document.getElementById("hwStrokeStatus");
-        if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">全部完成!</span>`;
-        handleDictationAnswer(q.answer, q);
-      });
-      return;
-    }
 
     opts.innerHTML = `
       <div class="canvas-wrap">
@@ -2921,9 +2969,7 @@ function checkStrokeQuality(strokes, canvas) {
 // --- Stroke order mode (Hanzi Writer) ---
 let strokeOrderEnabled = localStorage.getItem("hanzi_stroke_order") === "true";
 let strokeAnimEnabled = localStorage.getItem("hanzi_stroke_anim") !== "false"; // default on
-let hzWriters = [];  // HanziWriter instances for current question
-let hzCharIndex = 0; // current character index being written
-let hzChars = [];     // characters to write
+// (stroke order checking is now done in checkCanvasStrokeOrderGeneric)
 
 function getStrokeToggleHTML() {
   return `<div class="stroke-toggle-wrap" style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center">
@@ -2952,12 +2998,6 @@ function toggleStrokeAnim(on) {
 function toggleStrokeOrder(on) {
   strokeOrderEnabled = on;
   localStorage.setItem("hanzi_stroke_order", on);
-  // Reload the current question to switch mode
-  if (hwQuiz.questions && hwQuiz.questions.length > 0 && hwQuiz.questions[hwQuiz.currentIndex]?.mode === "dictation_handwrite") {
-    showHwQuizQuestion();
-  } else if (state.currentQ && state.currentQ.mode === "dictation_handwrite") {
-    loadQuestion(true);
-  }
 }
 
 // Play stroke order animation after answer submission
@@ -2993,95 +3033,6 @@ function playStrokeAnimation(answer, containerEl) {
     });
   }
   animNext();
-}
-
-function initStrokeOrderUI(chars, onAllComplete) {
-  hzWriters = [];
-  hzCharIndex = 0;
-  hzChars = chars;
-
-  chars.forEach((ch, i) => {
-    const cellId = `hzCell${i}`;
-    const targetId = `hzTarget${i}`;
-    const cell = document.getElementById(cellId);
-    if (!cell) return;
-
-    const writer = HanziWriter.create(targetId, ch, {
-      width: 160, height: 160, padding: 8,
-      showCharacter: false,
-      showOutline: false,
-      strokeColor: '#2d3748',
-      outlineColor: '#e2e8f0',
-      highlightColor: '#5a67d8',
-      drawingWidth: 6,
-      showHintAfterMisses: false,
-      highlightOnComplete: true,
-      strokeAnimationSpeed: 2,
-      delayBetweenStrokes: 200,
-    });
-
-    hzWriters.push({ writer, char: ch, cellId, done: false });
-
-    if (i === 0) {
-      cell.classList.add("active");
-      startCharQuiz(0, onAllComplete);
-    }
-  });
-}
-
-function startCharQuiz(index, onAllComplete) {
-  if (index >= hzWriters.length) {
-    onAllComplete();
-    return;
-  }
-  hzCharIndex = index;
-  // Mark current cell active
-  hzWriters.forEach((hw, i) => {
-    const cell = document.getElementById(hw.cellId);
-    if (!cell) return;
-    cell.classList.remove("active");
-    if (i === index) cell.classList.add("active");
-  });
-
-  const statusEl = document.getElementById("hwStrokeStatus");
-  if (statusEl) statusEl.innerHTML = `第 ${index + 1}/${hzWriters.length} 个字 — 请按正确笔顺书写`;
-
-  hzWriters[index].writer.quiz({
-    onMistake: function(strokeData) {
-      if (statusEl) {
-        statusEl.innerHTML = `<span class="stroke-error">笔顺错误! 请按正确顺序书写</span>`;
-      }
-      const cell = document.getElementById(hzWriters[index].cellId);
-      if (cell) { cell.classList.add("error"); setTimeout(() => cell.classList.remove("error"), 600); }
-    },
-    onCorrectStroke: function(strokeData) {
-      if (statusEl) {
-        statusEl.innerHTML = `<span class="stroke-ok">✓</span> 第 ${index + 1}/${hzWriters.length} 个字`;
-      }
-    },
-    onComplete: function(summaryData) {
-      hzWriters[index].done = true;
-      const cell = document.getElementById(hzWriters[index].cellId);
-      if (cell) { cell.classList.remove("active"); cell.classList.add("done"); }
-
-      if (summaryData.totalMistakes > 0 && statusEl) {
-        // Show animation of correct stroke order before proceeding
-        statusEl.innerHTML = `<span class="stroke-error">本字有 ${summaryData.totalMistakes} 次笔顺错误，演示正确笔顺...</span>`;
-        hzWriters[index].writer.animateCharacter({
-          onComplete: function() {
-            setTimeout(() => startCharQuiz(index + 1, onAllComplete), 400);
-          }
-        });
-      } else {
-        setTimeout(() => startCharQuiz(index + 1, onAllComplete), 200);
-      }
-    }
-  });
-}
-
-function showStrokeOrderAnimation(charIndex) {
-  if (charIndex < 0 || charIndex >= hzWriters.length) return;
-  hzWriters[charIndex].writer.animateCharacter();
 }
 
 // --- Canvas handwriting ---
@@ -3198,9 +3149,138 @@ async function submitHandwriting() {
     if (recEl) recEl.textContent = "请先写字";
     return;
   }
+
+  // If stroke order checking is enabled and answer is correct, check stroke order
+  if (strokeOrderEnabled && hwRecognizedResult === state.currentQ.answer) {
+    const strokeOk = await checkCanvasStrokeOrder(hwRecognizedResult, canvasStrokes);
+    if (!strokeOk) return; // checkCanvasStrokeOrder handles UI feedback
+  }
+
   const btn = document.getElementById("hwSubmitBtn");
   if (btn) btn.disabled = true;
   handleDictationAnswer(hwRecognizedResult, state.currentQ);
+}
+
+// Check stroke order for characters written on a shared canvas
+// answer: string, strokes: array of stroke data, canvasW/H: canvas size
+// statusEl: element to show status, onRetry: callback to clear and retry
+async function checkCanvasStrokeOrderGeneric(answer, strokes, canvasW, canvasH, statusEl, msgEl, onRetry) {
+  const chars = answer.split("");
+  if (chars.length === 0 || strokes.length === 0) return true;
+
+  const cellSize = 168;
+  const cols = chars.length >= 3 ? 2 : chars.length;
+  const rows = Math.ceil(chars.length / cols);
+
+  // Assign each stroke to a cell based on its centroid position
+  const cellStrokes = Array.from({ length: chars.length }, () => []);
+  for (const s of strokes) {
+    let sx = 0, sy = 0;
+    for (let i = 0; i < s[0].length; i++) { sx += s[0][i]; sy += s[1][i]; }
+    const cx = sx / s[0].length;
+    const cy = sy / s[0].length;
+    const col = Math.min(Math.floor(cx / cellSize), cols - 1);
+    const row = Math.min(Math.floor(cy / cellSize), rows - 1);
+    const cellIdx = row * cols + col;
+    if (cellIdx >= 0 && cellIdx < chars.length) {
+      const offX = col * cellSize;
+      const offY = row * cellSize;
+      cellStrokes[cellIdx].push([s[0].map(x => x - offX), s[1].map(y => y - offY)]);
+    }
+  }
+
+  // Load stroke data for each character and check order
+  const wrongChars = [];
+  for (let i = 0; i < chars.length; i++) {
+    if (cellStrokes[i].length === 0) continue;
+    try {
+      const charData = await HanziWriter.loadCharacterData(chars[i]);
+      const medians = charData.strokes.map((s, si) => charData.medians[si]);
+      const scale = 1024 / cellSize;
+      const userCentroids = cellStrokes[i].map(s => {
+        let ux = 0, uy = 0;
+        for (let j = 0; j < s[0].length; j++) { ux += s[0][j] * scale; uy += (1024 - s[1][j] * scale); }
+        return [ux / s[0].length, uy / s[0].length];
+      });
+      const refCentroids = medians.map(m => {
+        let rx = 0, ry = 0;
+        for (const [px, py] of m) { rx += px; ry += py; }
+        return [rx / m.length, ry / m.length];
+      });
+      const matched = [];
+      const used = new Set();
+      for (const uc of userCentroids) {
+        let bestDist = Infinity, bestRef = -1;
+        for (let ri = 0; ri < refCentroids.length; ri++) {
+          if (used.has(ri)) continue;
+          const dx = uc[0] - refCentroids[ri][0];
+          const dy = uc[1] - refCentroids[ri][1];
+          const dist = dx * dx + dy * dy;
+          if (dist < bestDist) { bestDist = dist; bestRef = ri; }
+        }
+        if (bestRef >= 0) { matched.push(bestRef); used.add(bestRef); }
+      }
+      for (let j = 1; j < matched.length; j++) {
+        if (matched[j] < matched[j - 1]) { wrongChars.push(i); break; }
+      }
+    } catch(e) { /* skip if data unavailable */ }
+  }
+
+  if (wrongChars.length > 0) {
+    if (msgEl) msgEl.innerHTML = `<span style="color:#e53e3e;font-weight:600">笔顺有误，请看正确笔顺演示</span>`;
+
+    // Find a container for the animation
+    const container = msgEl ? msgEl.parentNode : (statusEl ? statusEl.parentNode : document.getElementById("hintArea"));
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;gap:4px;justify-content:center;flex-wrap:wrap;margin-top:8px";
+    chars.forEach((ch, i) => {
+      const box = document.createElement("div");
+      box.id = `_soAnim${i}`;
+      const isWrong = wrongChars.includes(i);
+      box.style.cssText = `width:80px;height:80px;border:2px solid ${isWrong ? '#e53e3e' : '#e2e8f0'};border-radius:8px;background:${isWrong ? '#fff5f5' : '#fafafa'}`;
+      wrap.appendChild(box);
+    });
+    if (container) container.appendChild(wrap);
+
+    let idx = 0;
+    function animNext() {
+      if (idx >= chars.length) {
+        const retryBtn = document.createElement("button");
+        retryBtn.textContent = "重新写";
+        retryBtn.className = "ok-btn";
+        retryBtn.onclick = () => {
+          if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+          if (retryBtn.parentNode) retryBtn.parentNode.removeChild(retryBtn);
+          if (msgEl) msgEl.textContent = "";
+          if (onRetry) onRetry();
+        };
+        if (container) container.appendChild(retryBtn);
+        return;
+      }
+      const writer = HanziWriter.create(`_soAnim${idx}`, chars[idx], {
+        width: 80, height: 80, padding: 4,
+        strokeAnimationSpeed: 2, delayBetweenStrokes: 150,
+        showCharacter: false, showOutline: true,
+        outlineColor: '#e2e8f0', strokeColor: '#2d3748',
+      });
+      idx++;
+      writer.animateCharacter({ onComplete: () => animNext() });
+    }
+    animNext();
+    return false;
+  }
+  return true;
+}
+
+// Game mode wrapper
+async function checkCanvasStrokeOrder(answer, strokes) {
+  const canvas = document.getElementById("writeCanvas");
+  if (!canvas) return true;
+  const statusEl = document.getElementById("hwStatus");
+  const msgEl = document.getElementById("hwRecognized");
+  return checkCanvasStrokeOrderGeneric(answer, strokes, canvas.width, canvas.height, statusEl, msgEl, function() {
+    clearCanvas();
+  });
 }
 
 // --- Game pinyin (给汉字注音 mode) with handwrite/type toggle ---
@@ -3237,6 +3317,20 @@ function gameApplyTone(base, tone) {
   return base.substring(0, target) + toned + base.substring(target + 1);
 }
 
+// Parse number-tone pinyin: "hua2" → gameApplyTone("hua", 2), "le" → gameApplyTone("le", 0)
+function parseNumberTonePinyin(input) {
+  input = input.toLowerCase().trim().replace(/v/g, 'ü');
+  if (!input) return '';
+  const lastChar = input[input.length - 1];
+  if (lastChar >= '0' && lastChar <= '4') {
+    const tone = parseInt(lastChar);
+    const base = input.slice(0, -1);
+    return gameApplyTone(base, tone);
+  }
+  // No number suffix — treat as tone 0 (轻声)
+  return input;
+}
+
 function initGamePinyinCanvases() {
   gamePinyinDrawingState = [];
   for (let i = 0; i < gamePinyinCharCount; i++) {
@@ -3270,6 +3364,8 @@ function switchGamePinyinMode(mode) {
   document.getElementById("gamePyModeType").className = mode === 'type' ? 'active' : '';
   const recBtn = document.getElementById("gamePyRecBtn");
   if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  const hintEl = document.getElementById("gamePyNumToneHint");
+  if (hintEl) hintEl.style.display = mode === 'type' ? 'block' : 'none';
   for (let i = 0; i < gamePinyinCharCount; i++) {
     const box = document.getElementById(`gamePyBox${i}`);
     const typeArea = document.getElementById(`gamePyTypeArea${i}`);
@@ -3279,6 +3375,19 @@ function switchGamePinyinMode(mode) {
   if (mode === 'handwrite') initGamePinyinCanvases();
   if (mode === 'type') {
     setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+  }
+}
+
+function gamePyInputKeydown(e, idx) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    // If there's a next input, focus it; otherwise submit
+    const nextInput = document.getElementById(`gamePyInput${idx + 1}`);
+    if (nextInput) {
+      nextInput.focus();
+    } else {
+      submitGamePinyin();
+    }
   }
 }
 
@@ -3363,11 +3472,17 @@ function getGamePinyinAnswer() {
   if (mode === 'type') {
     const parts = [];
     for (let i = 0; i < gamePinyinCharCount; i++) {
-      const base = (document.getElementById(`gamePyInput${i}`)?.value || '').trim().replace(/v/g, 'ü');
+      const raw = (document.getElementById(`gamePyInput${i}`)?.value || '').trim();
+      if (!raw) return null;
       const tone = gamePinyinToneSelections[i];
-      if (!base) return null;
-      if (tone === null || tone === undefined) return null;
-      parts.push(gameApplyTone(base, tone));
+      // If tone button was selected, use that
+      if (tone !== null && tone !== undefined) {
+        const base = raw.replace(/[0-4]$/, '').replace(/v/g, 'ü');
+        parts.push(gameApplyTone(base, tone));
+      } else {
+        // Try number-tone format (e.g., "hua2")
+        parts.push(parseNumberTonePinyin(raw));
+      }
     }
     return parts.join(' ');
   } else {
@@ -3394,7 +3509,7 @@ async function submitGamePinyin() {
   const userAnswer = getGamePinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("gamePinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音并选择声调" : "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
     return;
   }
   state.answering = false;
@@ -3449,7 +3564,7 @@ async function submitGamePinyin() {
 function recordWrongAnswer(q) {
   if (!state.user) return;
   let character, pinyin;
-  if (q.mode === "char_to_pinyin" || q.mode === "pinyin_typing") {
+  if (q.mode === "char_to_pinyin" || q.mode === "pinyin_typing" || q.mode === "read_aloud") {
     character = q.question;
     pinyin = q.answer;
   } else if (q.mode === "pinyin_to_char") {
@@ -3558,6 +3673,181 @@ function speakChar(char) {
   ttsAudio.play();
 }
 
+// --- Speech Recognition (看字读音 mode) ---
+let speechRecognition = null;
+let isRecording = false;
+
+function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function startRecording() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    document.getElementById("micStatus").textContent = "您的浏览器不支持语音识别，请使用Chrome浏览器";
+    return;
+  }
+
+  speechRecognition = new SpeechRecognition();
+  speechRecognition.lang = "zh-CN";
+  speechRecognition.continuous = false;
+  speechRecognition.interimResults = true;
+  speechRecognition.maxAlternatives = 5;
+
+  const micBtn = document.getElementById("micBtn");
+  const micStatus = document.getElementById("micStatus");
+  const micResult = document.getElementById("micResult");
+
+  micBtn.classList.add("recording");
+  micStatus.textContent = "正在听...请朗读";
+  micResult.textContent = "";
+  isRecording = true;
+
+  speechRecognition.onresult = function(event) {
+    const result = event.results[0];
+    const transcript = result[0].transcript.trim();
+    micResult.textContent = `识别: ${transcript}`;
+
+    if (result.isFinal) {
+      stopRecording();
+      // Collect all alternatives for better matching
+      const alternatives = [];
+      for (let i = 0; i < result.length; i++) {
+        alternatives.push(result[i].transcript.trim());
+      }
+      handleReadAloudAnswer(alternatives);
+    }
+  };
+
+  speechRecognition.onerror = function(event) {
+    stopRecording();
+    if (event.error === "no-speech") {
+      micStatus.textContent = "没有检测到语音，请再试一次";
+    } else if (event.error === "not-allowed") {
+      micStatus.textContent = "麦克风权限被拒绝，请在浏览器设置中允许";
+    } else {
+      micStatus.textContent = "识别出错: " + event.error;
+    }
+  };
+
+  speechRecognition.onend = function() {
+    if (isRecording) {
+      // Stopped without result
+      stopRecording();
+      micStatus.textContent = "没有检测到语音，请再试一次";
+    }
+  };
+
+  speechRecognition.start();
+}
+
+function stopRecording() {
+  isRecording = false;
+  const micBtn = document.getElementById("micBtn");
+  if (micBtn) micBtn.classList.remove("recording");
+  if (speechRecognition) {
+    try { speechRecognition.stop(); } catch(e) {}
+    speechRecognition = null;
+  }
+}
+
+function handleReadAloudAnswer(alternatives) {
+  if (!state.answering || !state.currentQ) return;
+  state.answering = false;
+
+  const q = state.currentQ;
+  const targetChar = q.answer_char || q.question;
+  const targetPinyin = q.answer; // pinyin with tone marks
+
+  // Check if any alternative matches the target character
+  let isCorrect = false;
+  let recognizedText = alternatives[0] || "";
+
+  for (const alt of alternatives) {
+    // Direct character match (handles single char or multi-char with the target)
+    if (alt === targetChar || alt.includes(targetChar)) {
+      isCorrect = true;
+      recognizedText = alt;
+      break;
+    }
+  }
+
+  const hint = document.getElementById("hintArea");
+  const micStatus = document.getElementById("micStatus");
+  const micResult = document.getElementById("micResult");
+
+  state.totalQuestions += 1;
+  if (isCorrect) {
+    state.correctAnswers += 1;
+    state.combo += 1;
+    if (state.combo > state.comboMax) state.comboMax = state.combo;
+    const bonus = Math.min(state.combo, 10);
+    const points = 10 + bonus * 2;
+    state.score += points;
+
+    micStatus.textContent = "";
+    micResult.innerHTML = `<span style="color:#38a169">✓ 正确!</span>`;
+    hint.innerHTML = `<span class="correct-text">正确! +${points}分</span> &nbsp; 拼音: ${targetPinyin} &nbsp; 组词: ${q.word_hint || ""}`;
+
+    if (state.combo > 0 && state.combo % 5 === 0) spawnConfetti();
+    reportStreak(true);
+
+    const comboEl = document.getElementById("comboBox");
+    comboEl.classList.remove("hot");
+    void comboEl.offsetWidth;
+    comboEl.classList.add("hot");
+
+    // If this was a retry and answered correctly, remove from queue
+    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
+      state.retryQueue.shift();
+      state.retryCount = 0;
+    }
+    setTimeout(loadQuestion, 800);
+  } else {
+    state.combo = 0;
+    reportStreak(false);
+
+    micStatus.textContent = "";
+    micResult.innerHTML = `<span style="color:#e53e3e">✗ 你读的: "${recognizedText}"</span>`;
+
+    // Build hint with correct answer, pinyin, words
+    let hintHTML = `<span class="wrong-text">读错了!</span><br>`;
+    hintHTML += `<span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确读音: ${targetPinyin}</span><br>`;
+    if (q.word_hint) {
+      hintHTML += `<span style="color:#718096">组词: ${q.word_hint}</span><br>`;
+    }
+    hint.innerHTML = hintHTML;
+
+    // Play correct pronunciation
+    setTimeout(() => speakChar(targetChar), 300);
+
+    // Record wrong answer and queue retry
+    if (state.retryQueue.length === 0) {
+      recordWrongAnswer(q);
+      state.retryQueue.push(q);
+      state.retryCount = 0;
+    } else {
+      state.retryCount += 1;
+      if (state.retryCount >= 2) {
+        state.retryQueue.shift();
+        state.retryCount = 0;
+      }
+    }
+
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "OK";
+    okBtn.className = "ok-btn";
+    okBtn.onclick = () => loadQuestion();
+    hint.appendChild(okBtn);
+  }
+
+  updateScoreboard();
+}
+
 // --- Confetti ---
 function spawnConfetti() {
   const container = document.getElementById("celebration");
@@ -3648,6 +3938,7 @@ let hwIsDrawing = false;
 
 // --- View switching ---
 function switchToHomeworkView() {
+  localStorage.setItem("hanzi_view", "homework");
   const hwView = document.getElementById("homeworkView");
   hwView.style.display = "flex";
   hwView.style.flexDirection = "column";
@@ -3666,6 +3957,7 @@ function switchToHomeworkView() {
 }
 
 async function switchToGameView() {
+  localStorage.setItem("hanzi_view", "game");
   document.getElementById("homeworkView").style.display = "none";
   document.getElementById("gameView").style.display = "";
   document.getElementById("backToHwBtn").style.display = state.user ? "" : "none";
@@ -3979,7 +4271,7 @@ function showHwQuizQuestion() {
           <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
         <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
-          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音" autocomplete="off" autocapitalize="off">
+          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ</button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ</button>
@@ -4003,6 +4295,7 @@ function showHwQuizQuestion() {
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
         </div>
+        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声，回车键确认</div>
       </div>
     `;
     hwPinyinCharCount = qChars.length;
@@ -4071,28 +4364,6 @@ function showHwQuizQuestion() {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
-
-    if (strokeOrderEnabled) {
-      const chars = q.answer.split("");
-      const cellsHTML = chars.map((ch, i) =>
-        `<div class="hz-writer-cell" id="hzCell${i}">
-          <span class="hz-char-label">${i + 1}</span>
-          <div id="hzTarget${i}"></div>
-        </div>`
-      ).join("");
-      opts.innerHTML = `<div class="hw-quiz-canvas-wrap">
-        ${getStrokeToggleHTML()}
-        <div class="hz-writer-row">${cellsHTML}</div>
-        <div id="hwStrokeStatus"></div>
-      </div>`;
-      hwQuiz.answering = true;
-      initStrokeOrderUI(chars, function() {
-        const statusEl = document.getElementById("hwStrokeStatus");
-        if (statusEl) statusEl.innerHTML = `<span class="stroke-ok">全部完成!</span>`;
-        hwHandleHwAnswer(q.answer);
-      });
-      return;
-    }
 
     opts.innerHTML = `<div class="hw-quiz-canvas-wrap">
       ${getStrokeToggleHTML()}
@@ -4188,6 +4459,8 @@ function switchHwPinyinMode(mode) {
   document.getElementById("hwPyModeType").className = mode === 'type' ? 'active' : '';
   const recBtn = document.getElementById("hwPyRecBtn");
   if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  const hintEl = document.getElementById("hwPyNumToneHint");
+  if (hintEl) hintEl.style.display = mode === 'type' ? 'block' : 'none';
   for (let i = 0; i < hwPinyinCharCount; i++) {
     const box = document.getElementById(`hwPyBox${i}`);
     const typeArea = document.getElementById(`hwPyTypeArea${i}`);
@@ -4197,6 +4470,18 @@ function switchHwPinyinMode(mode) {
   if (mode === 'handwrite') initHwPinyinCanvases();
   if (mode === 'type') {
     setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+  }
+}
+
+function hwPyInputKeydown(e, idx) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
+    if (nextInput) {
+      nextInput.focus();
+    } else {
+      hwPinyinSubmit();
+    }
   }
 }
 
@@ -4281,11 +4566,15 @@ function getHwPinyinAnswer() {
   if (mode === 'type') {
     const parts = [];
     for (let i = 0; i < hwPinyinCharCount; i++) {
-      const base = (document.getElementById(`hwPyInput${i}`)?.value || '').trim().replace(/v/g, 'ü');
+      const raw = (document.getElementById(`hwPyInput${i}`)?.value || '').trim();
+      if (!raw) return null;
       const tone = hwPinyinToneSelections[i];
-      if (!base) return null;
-      if (tone === null || tone === undefined) return null;
-      parts.push(gameApplyTone(base, tone));
+      if (tone !== null && tone !== undefined) {
+        const base = raw.replace(/[0-4]$/, '').replace(/v/g, 'ü');
+        parts.push(gameApplyTone(base, tone));
+      } else {
+        parts.push(parseNumberTonePinyin(raw));
+      }
     }
     return parts.join(' ');
   } else {
@@ -4312,7 +4601,7 @@ async function hwPinyinSubmit() {
   const userAnswer = getHwPinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音并选择声调" : "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
     return;
   }
   hwQuiz.answering = false;
@@ -5052,10 +5341,43 @@ async function submitHwQuiz() {
     if (recEl) recEl.textContent = "请先写字";
     return;
   }
+  // Check stroke order if enabled and answer is correct
+  const q = hwQuiz.questions[hwQuiz.currentIndex];
+  if (strokeOrderEnabled && q && hwQuizRecognizedResult2 === q.answer) {
+    const canvas = document.getElementById("hwQuizCanvas");
+    if (canvas && hwCanvasStrokes.length > 0) {
+      const strokeOk = await checkCanvasStrokeOrderGeneric(hwQuizRecognizedResult2, hwCanvasStrokes, canvas.width, canvas.height, document.getElementById("hwQuizStatus"), document.getElementById("hwQuizRecognized2"), function() {
+        clearHwQuizCanvas2();
+        const statusEl = document.getElementById("hwQuizStatus");
+        if (statusEl) statusEl.textContent = "";
+        const recEl = document.getElementById("hwQuizRecognized2");
+        if (recEl) recEl.textContent = "";
+      });
+      if (!strokeOk) return;
+    }
+  }
   const btn = document.getElementById("hwQuizSubmitBtn");
   if (btn) btn.disabled = true;
   hwHandleHwAnswer(hwQuizRecognizedResult2);
 }
+
+// Global Enter key: click OK button or submit pinyin answer if visible
+document.addEventListener("keydown", function(e) {
+  if (e.key !== "Enter") return;
+  // Don't intercept if focused on a pinyin input (handled by gamePyInputKeydown)
+  if (e.target && e.target.classList.contains("game-pinyin-type-input")) return;
+  // Click OK button if visible
+  const okBtn = document.querySelector(".ok-btn");
+  if (okBtn) { e.preventDefault(); okBtn.click(); return; }
+  // Click pinyin submit button if visible and in type mode
+  const pyMode = localStorage.getItem("pinyin_input_mode");
+  if (pyMode === "type") {
+    const gameSubmit = document.getElementById("gamePinyinSubmitBtn");
+    if (gameSubmit && !gameSubmit.disabled && gameSubmit.offsetParent !== null) { e.preventDefault(); gameSubmit.click(); return; }
+    const hwSubmit = document.getElementById("pinyinSubmitBtn");
+    if (hwSubmit && !hwSubmit.disabled && hwSubmit.offsetParent !== null) { e.preventDefault(); hwSubmit.click(); return; }
+  }
+});
 
 init();
 </script>

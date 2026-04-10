@@ -86,7 +86,7 @@
 <button class="back-btn" onclick="window.close()">关闭</button>
 <script>
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-const modeLabels = { char_to_pinyin: "选拼音", pinyin_to_char: "选字", listen_to_char: "听音选字", dictation_handwrite: "写词语", pinyin_typing: "注音" };
+const modeLabels = { char_to_pinyin: "选拼音", pinyin_to_char: "选字", listen_to_char: "听音选字", dictation_handwrite: "写词语", pinyin_typing: "注音", read_aloud: "读音" };
 async function load() {
   const res = await fetch("/api/admin/user/{{ user_id }}/details");
   const data = await res.json();
