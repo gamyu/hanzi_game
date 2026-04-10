@@ -2707,6 +2707,7 @@ function renderQuestion(q) {
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
+            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('gamePyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="gamePyResult${i}"></div>
@@ -2724,7 +2725,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
         </div>
-        <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声; Tab下一字，回车确认</div>
+        <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
       </div>
     `;
     gamePinyinCharCount = qChars.length;
@@ -4301,6 +4302,7 @@ function showHwQuizQuestion() {
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
+            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('hwPyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
@@ -4318,7 +4320,7 @@ function showHwQuizQuestion() {
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
         </div>
-        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">提示: 可用数字代替声调，如 hua2=huá, li4=lì, le0=轻声; Tab下一字，回车确认</div>
+        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
       </div>
     `;
     hwPinyinCharCount = qChars.length;
