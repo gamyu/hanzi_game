@@ -2451,5 +2451,36 @@ def tts():
     return Response(audio_data, mimetype="audio/mpeg")
 
 
+@app.route("/api/check_pronunciation", methods=["POST"])
+def check_pronunciation():
+    """Check if recognized text matches target pronunciation.
+
+    Compares by pinyin (tone-insensitive) so homophones are accepted.
+    E.g., recognizing 顶 for target 鼎 (both dǐng) → correct.
+    Uses pypinyin for comprehensive character coverage beyond curriculum.
+    """
+    import pypinyin
+
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "无效的请求数据"}), 400
+
+    recognized_texts = data.get("recognized", [])  # list of alternatives
+    target_pinyin = data.get("target_pinyin", "")   # e.g. "dǐng"
+
+    target_base = _strip_tone(target_pinyin.lower())
+
+    for text in recognized_texts:
+        for ch in text:
+            # Get all possible pinyin readings for this character
+            readings = pypinyin.pinyin(ch, style=pypinyin.Style.TONE, heteronym=True)
+            if readings and readings[0]:
+                for py in readings[0]:
+                    if _strip_tone(py.lower()) == target_base:
+                        return jsonify({"correct": True, "matched": ch, "pinyin": py})
+
+    return jsonify({"correct": False})
+
+
 if __name__ == "__main__":
     app.run(debug=False, host="127.0.0.1", port=5001)

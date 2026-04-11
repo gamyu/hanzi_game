@@ -2677,12 +2677,16 @@ function renderQuestion(q) {
     opts.innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%">
         <button class="mic-btn" id="micBtn" onclick="toggleRecording()">🎤</button>
-        <div class="mic-status" id="micStatus">点击麦克风开始朗读</div>
+        <div class="mic-status" id="micStatus">准备中...</div>
         <div class="mic-result" id="micResult"></div>
+        <div style="font-size:12px;color:#a0aec0;margin-top:4px">点击麦克风或直接朗读，同音字算正确</div>
       </div>
     `;
     state.currentQ = q;
     state.answering = true;
+    // Auto-start recording after a brief delay
+    readAloudRetryCount = 0;
+    setTimeout(() => { if (state.answering && state.currentQ === q) startRecording(); }, 600);
     return;
   } else if (q.mode === "pinyin_typing") {
     opts.style.display = "flex";
@@ -3746,6 +3750,7 @@ function speakChar(char) {
 // --- Speech Recognition (看字读音 mode) ---
 let speechRecognition = null;
 let isRecording = false;
+let readAloudRetryCount = 0;
 
 function toggleRecording() {
   if (isRecording) {
@@ -3766,14 +3771,14 @@ function startRecording() {
   speechRecognition.lang = "zh-CN";
   speechRecognition.continuous = false;
   speechRecognition.interimResults = true;
-  speechRecognition.maxAlternatives = 5;
+  speechRecognition.maxAlternatives = 10;
 
   const micBtn = document.getElementById("micBtn");
   const micStatus = document.getElementById("micStatus");
   const micResult = document.getElementById("micResult");
 
   micBtn.classList.add("recording");
-  micStatus.textContent = "正在听...请朗读";
+  micStatus.textContent = "正在听...请大声朗读";
   micResult.textContent = "";
   isRecording = true;
 
@@ -3784,7 +3789,6 @@ function startRecording() {
 
     if (result.isFinal) {
       stopRecording();
-      // Collect all alternatives for better matching
       const alternatives = [];
       for (let i = 0; i < result.length; i++) {
         alternatives.push(result[i].transcript.trim());
@@ -3796,19 +3800,34 @@ function startRecording() {
   speechRecognition.onerror = function(event) {
     stopRecording();
     if (event.error === "no-speech") {
-      micStatus.textContent = "没有检测到语音，请再试一次";
+      readAloudRetryCount++;
+      if (readAloudRetryCount < 3) {
+        micStatus.textContent = "没有检测到语音，自动重试...";
+        setTimeout(startRecording, 500);
+      } else {
+        micStatus.textContent = "未检测到语音，请点击麦克风重试";
+        readAloudRetryCount = 0;
+      }
     } else if (event.error === "not-allowed") {
       micStatus.textContent = "麦克风权限被拒绝，请在浏览器设置中允许";
+    } else if (event.error === "aborted") {
+      // Silently ignore aborted (happens when we stop manually)
     } else {
-      micStatus.textContent = "识别出错: " + event.error;
+      micStatus.textContent = "识别出错，请点击麦克风重试";
     }
   };
 
   speechRecognition.onend = function() {
     if (isRecording) {
-      // Stopped without result
       stopRecording();
-      micStatus.textContent = "没有检测到语音，请再试一次";
+      readAloudRetryCount++;
+      if (readAloudRetryCount < 3) {
+        setTimeout(startRecording, 500);
+      } else {
+        const micStatus = document.getElementById("micStatus");
+        if (micStatus) micStatus.textContent = "未检测到语音，请点击麦克风重试";
+        readAloudRetryCount = 0;
+      }
     }
   };
 
@@ -3825,30 +3844,39 @@ function stopRecording() {
   }
 }
 
-function handleReadAloudAnswer(alternatives) {
+async function handleReadAloudAnswer(alternatives) {
   if (!state.answering || !state.currentQ) return;
   state.answering = false;
+  readAloudRetryCount = 0;
 
   const q = state.currentQ;
   const targetChar = q.answer_char || q.question;
-  const targetPinyin = q.answer; // pinyin with tone marks
-
-  // Check if any alternative matches the target character
-  let isCorrect = false;
-  let recognizedText = alternatives[0] || "";
-
-  for (const alt of alternatives) {
-    // Direct character match (handles single char or multi-char with the target)
-    if (alt === targetChar || alt.includes(targetChar)) {
-      isCorrect = true;
-      recognizedText = alt;
-      break;
-    }
-  }
+  const targetPinyin = q.answer;
 
   const hint = document.getElementById("hintArea");
   const micStatus = document.getElementById("micStatus");
   const micResult = document.getElementById("micResult");
+
+  micStatus.textContent = "判断中...";
+
+  // Use backend to check pronunciation by pinyin (handles homophones)
+  let isCorrect = false;
+  let recognizedText = alternatives[0] || "";
+  try {
+    const res = await fetch("/api/check_pronunciation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recognized: alternatives, target_pinyin: targetPinyin }),
+    });
+    const result = await res.json();
+    isCorrect = result.correct;
+    if (result.matched) recognizedText = result.matched;
+  } catch (e) {
+    // Fallback: direct character match
+    for (const alt of alternatives) {
+      if (alt.includes(targetChar)) { isCorrect = true; recognizedText = alt; break; }
+    }
+  }
 
   state.totalQuestions += 1;
   if (isCorrect) {
@@ -3860,7 +3888,7 @@ function handleReadAloudAnswer(alternatives) {
     state.score += points;
 
     micStatus.textContent = "";
-    micResult.innerHTML = `<span style="color:#38a169">✓ 正确!</span>`;
+    micResult.innerHTML = `<span style="color:#38a169;font-size:24px">✓ 正确!</span>`;
     hint.innerHTML = `<span class="correct-text">正确! +${points}分</span> &nbsp; 拼音: ${targetPinyin} &nbsp; 组词: ${q.word_hint || ""}`;
 
     if (state.combo > 0 && state.combo % 5 === 0) spawnConfetti();
@@ -3871,7 +3899,6 @@ function handleReadAloudAnswer(alternatives) {
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
 
-    // If this was a retry and answered correctly, remove from queue
     if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
       state.retryQueue.shift();
       state.retryCount = 0;
@@ -3884,7 +3911,6 @@ function handleReadAloudAnswer(alternatives) {
     micStatus.textContent = "";
     micResult.innerHTML = `<span style="color:#e53e3e">✗ 你读的: "${recognizedText}"</span>`;
 
-    // Build hint with correct answer, pinyin, words
     let hintHTML = `<span class="wrong-text">读错了!</span><br>`;
     hintHTML += `<span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确读音: ${targetPinyin}</span><br>`;
     if (q.word_hint) {
@@ -3892,10 +3918,8 @@ function handleReadAloudAnswer(alternatives) {
     }
     hint.innerHTML = hintHTML;
 
-    // Play correct pronunciation
     setTimeout(() => speakChar(targetChar), 300);
 
-    // Record wrong answer and queue retry
     if (state.retryQueue.length === 0) {
       recordWrongAnswer(q);
       state.retryQueue.push(q);
@@ -3908,11 +3932,25 @@ function handleReadAloudAnswer(alternatives) {
       }
     }
 
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    const retryBtn = document.createElement("button");
+    retryBtn.textContent = "重新朗读";
+    retryBtn.className = "ok-btn";
+    retryBtn.style.background = "#667eea";
+    retryBtn.onclick = () => {
+      hint.innerHTML = "";
+      micResult.textContent = "";
+      state.answering = true;
+      startRecording();
+    };
+    btnRow.appendChild(retryBtn);
     const okBtn = document.createElement("button");
-    okBtn.textContent = "OK";
+    okBtn.textContent = "下一题";
     okBtn.className = "ok-btn";
     okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 
   updateScoreboard();
