@@ -450,9 +450,14 @@ app.jinja_env.globals["csrf_token"] = _generate_csrf_token
 def csrf_protect():
     if request.method in CSRF_SAFE_METHODS:
         return
-    # Skip CSRF for endpoints that don't act on an existing session
-    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting", "/api/admin/login", "/api/scores")
+    # Skip CSRF for login/register (no session yet) and handwriting (external API proxy)
+    CSRF_EXEMPT = ("/api/login", "/api/register", "/api/handwriting", "/api/admin/login")
     if request.path in CSRF_EXEMPT:
+        return
+    # For JSON API requests, Content-Type: application/json is sufficient CSRF protection
+    # (browsers don't send JSON cross-origin without CORS preflight)
+    ct = request.content_type or ""
+    if ct.startswith("application/json"):
         return
     token = (
         request.headers.get("X-CSRF-Token")
