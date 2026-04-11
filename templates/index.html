@@ -3593,16 +3593,16 @@ async function submitGamePinyin() {
     if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
     return;
   }
-  state.answering = false;
   const q = state.currentQ;
   const hint = document.getElementById("hintArea");
   const btn = document.getElementById("gamePinyinSubmitBtn");
-  if (btn) btn.disabled = true;
 
   const isCorrect = normalizePinyinGame(userAnswer) === normalizePinyinGame(q.answer);
   state.totalQuestions += 1;
 
   if (isCorrect) {
+    state.answering = false;
+    if (btn) btn.disabled = true;
     state.correctAnswers += 1;
     state.combo += 1;
     if (state.combo > state.comboMax) state.comboMax = state.combo;
@@ -3620,6 +3620,8 @@ async function submitGamePinyin() {
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
+    // Keep answering enabled — user can edit and re-submit via 确认
+    state.answering = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}<br>
@@ -3634,30 +3636,11 @@ async function submitGamePinyin() {
       if (state.retryCount >= 2) { state.retryQueue.shift(); state.retryCount = 0; }
     }
     updateScoreboard();
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    const editBtn = document.createElement("button");
-    editBtn.textContent = "修改答案";
-    editBtn.className = "ok-btn";
-    editBtn.style.background = "#667eea";
-    editBtn.onclick = () => {
-      hint.innerHTML = "";
-      state.answering = true;
-      if (btn) btn.disabled = false;
-      // Focus the first input in type mode
-      const pyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
-      if (pyMode === 'type') {
-        const firstInput = document.getElementById('gamePyInput0');
-        if (firstInput) firstInput.focus();
-      }
-    };
-    btnRow.appendChild(editBtn);
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => loadQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -4745,17 +4728,16 @@ async function hwPinyinSubmit() {
     if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
     return;
   }
-  hwQuiz.answering = false;
-
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const hint = document.getElementById("hwQuizHint");
   const btn = document.getElementById("pinyinSubmitBtn");
-  btn.disabled = true;
 
   const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
   const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
 
   if (isCorrect) {
+    hwQuiz.answering = false;
+    if (btn) btn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
       hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
@@ -4764,6 +4746,8 @@ async function hwPinyinSubmit() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    // Keep answering enabled — user can edit and re-submit via 确认
+    hwQuiz.answering = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -4782,29 +4766,11 @@ async function hwPinyinSubmit() {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    const editBtn = document.createElement("button");
-    editBtn.textContent = "修改答案";
-    editBtn.className = "ok-btn";
-    editBtn.style.background = "#667eea";
-    editBtn.onclick = () => {
-      hint.innerHTML = "";
-      hwQuiz.answering = true;
-      if (btn) btn.disabled = false;
-      const pyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
-      if (pyMode === 'type') {
-        const firstInput = document.getElementById('hwPyInput0');
-        if (firstInput) firstInput.focus();
-      }
-    };
-    btnRow.appendChild(editBtn);
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => nextHwQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
