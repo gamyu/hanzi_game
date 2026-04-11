@@ -2036,20 +2036,24 @@ function showAdminLogin() {
 async function submitAdminLogin() {
   const password = document.getElementById("adminPassword").value.trim();
   if (!password) { document.getElementById("adminLoginError").textContent = "请输入密码"; return; }
-  const res = await fetch("/api/admin/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    document.getElementById("adminLoginError").textContent = data.error;
-    return;
+  try {
+    const res = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById("adminLoginError").textContent = data.error + ` (HTTP ${res.status})`;
+      return;
+    }
+    state.isAdmin = true;
+    document.getElementById("adminLoginModal").classList.add("hidden");
+    renderUserBar();
+    showAdminPanel();
+  } catch (e) {
+    document.getElementById("adminLoginError").textContent = "网络错误: " + e.message;
   }
-  state.isAdmin = true;
-  document.getElementById("adminLoginModal").classList.add("hidden");
-  renderUserBar();
-  showAdminPanel();
 }
 
 function switchAdminTab(tab) {
@@ -2064,19 +2068,22 @@ function switchAdminTab(tab) {
 }
 
 async function showAdminPanel() {
-  // Always verify admin status with server first
-  try {
-    const checkRes = await fetch("/api/admin/check");
-    const checkData = await checkRes.json();
-    if (!checkData.is_admin) {
-      state.isAdmin = false;
+  // If we just logged in (state.isAdmin is true), trust it;
+  // otherwise verify with server
+  if (!state.isAdmin) {
+    try {
+      const checkRes = await fetch("/api/admin/check");
+      const checkData = await checkRes.json();
+      if (!checkData.is_admin) {
+        showAdminLogin();
+        return;
+      }
+      state.isAdmin = true;
       renderUserBar();
+    } catch (e) {
       showAdminLogin();
       return;
     }
-  } catch (e) {
-    showAdminLogin();
-    return;
   }
   const modal = document.getElementById("adminModal");
   modal.classList.remove("hidden");
@@ -3627,10 +3634,30 @@ async function submitGamePinyin() {
       if (state.retryCount >= 2) { state.retryQueue.shift(); state.retryCount = 0; }
     }
     updateScoreboard();
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "修改答案";
+    editBtn.className = "ok-btn";
+    editBtn.style.background = "#667eea";
+    editBtn.onclick = () => {
+      hint.innerHTML = "";
+      state.answering = true;
+      if (btn) btn.disabled = false;
+      // Focus the first input in type mode
+      const pyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+      if (pyMode === 'type') {
+        const firstInput = document.getElementById('gamePyInput0');
+        if (firstInput) firstInput.focus();
+      }
+    };
+    btnRow.appendChild(editBtn);
     const okBtn = document.createElement("button");
-    okBtn.textContent = "OK"; okBtn.className = "ok-btn";
+    okBtn.textContent = "下一题";
+    okBtn.className = "ok-btn";
     okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 }
 
@@ -4754,8 +4781,30 @@ async function hwPinyinSubmit() {
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
-      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "修改答案";
+    editBtn.className = "ok-btn";
+    editBtn.style.background = "#667eea";
+    editBtn.onclick = () => {
+      hint.innerHTML = "";
+      hwQuiz.answering = true;
+      if (btn) btn.disabled = false;
+      const pyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+      if (pyMode === 'type') {
+        const firstInput = document.getElementById('hwPyInput0');
+        if (firstInput) firstInput.focus();
+      }
+    };
+    btnRow.appendChild(editBtn);
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "下一题";
+    okBtn.className = "ok-btn";
+    okBtn.onclick = () => nextHwQuestion();
+    btnRow.appendChild(okBtn);
+    hint.appendChild(btnRow);
   }
 }
 
