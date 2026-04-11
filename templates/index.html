@@ -2917,13 +2917,15 @@ function handleAnswer(selected, q, btn) {
 // --- Dictation ---
 function handleDictationAnswer(userInput, q) {
   if (!state.answering) return;
-  state.answering = false;
 
   const isCorrect = userInput === q.answer;
   const hint = document.getElementById("hintArea");
 
   state.totalQuestions += 1;
   if (isCorrect) {
+    state.answering = false;
+    const submitBtn = document.getElementById("hwSubmitBtn");
+    if (submitBtn) submitBtn.disabled = true;
     state.correctAnswers += 1;
     state.combo += 1;
     if (state.combo > state.comboMax) state.comboMax = state.combo;
@@ -2938,7 +2940,16 @@ function handleDictationAnswer(userInput, q) {
     comboEl.classList.remove("hot");
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
+    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
+      state.retryQueue.shift();
+      state.retryCount = 0;
+    }
+    updateScoreboard();
+    setTimeout(loadQuestion, 100);
   } else {
+    // Keep answering enabled — user can erase/edit and re-submit via 确认
+    state.answering = true;
+    hwRecognizedResult = '';
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
@@ -2953,41 +2964,15 @@ function handleDictationAnswer(userInput, q) {
         state.retryCount = 0;
       }
     }
-  }
-
-  updateScoreboard();
-
-  if (isCorrect) {
-    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
-      state.retryQueue.shift();
-      state.retryCount = 0;
-    }
-    setTimeout(loadQuestion, 100);
-  } else {
+    updateScoreboard();
     playStrokeAnimation(q.answer, hint);
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    // "修改" button: let user edit their handwriting and resubmit
-    const editBtn = document.createElement("button");
-    editBtn.textContent = "修改答案";
-    editBtn.className = "ok-btn";
-    editBtn.style.background = "#667eea";
-    editBtn.onclick = () => {
-      hint.innerHTML = "";
-      hwRecognizedResult = '';
-      state.answering = true;
-      const submitBtn = document.getElementById("hwSubmitBtn");
-      if (submitBtn) submitBtn.disabled = false;
-      const recEl = document.getElementById("hwRecognized");
-      if (recEl) recEl.textContent = "请修改后重新识别并确认";
-    };
-    btnRow.appendChild(editBtn);
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    const recEl = document.getElementById("hwRecognized");
+    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并确认";
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => loadQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -4827,7 +4812,6 @@ function hwQuizAnswer(selected, correctIdx) {
 
 function hwHandleHwAnswer(userInput) {
   if (!hwQuiz.answering) return;
-  hwQuiz.answering = false;
 
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const isCorrect = userInput === q.answer;
@@ -4835,6 +4819,9 @@ function hwHandleHwAnswer(userInput) {
   const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
 
   if (isCorrect) {
+    hwQuiz.answering = false;
+    const submitBtn = document.getElementById("hwQuizSubmitBtn");
+    if (submitBtn) submitBtn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
       hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
@@ -4843,6 +4830,9 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    // Keep answering enabled — user can erase/edit and re-submit via 确认
+    hwQuiz.answering = true;
+    hwQuizRecognizedResult2 = '';
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -4862,30 +4852,13 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     playStrokeAnimation(q.answer, hint);
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    if (q.mode === "dictation_handwrite") {
-      const editBtn = document.createElement("button");
-      editBtn.textContent = "修改答案";
-      editBtn.className = "ok-btn";
-      editBtn.style.background = "#667eea";
-      editBtn.onclick = () => {
-        hint.innerHTML = "";
-        hwQuizRecognizedResult2 = '';
-        hwQuiz.answering = true;
-        const submitBtn = document.getElementById("hwQuizSubmitBtn");
-        if (submitBtn) submitBtn.disabled = false;
-        const recEl = document.getElementById("hwQuizRecognized2");
-        if (recEl) recEl.textContent = "请修改后重新识别并确认";
-      };
-      btnRow.appendChild(editBtn);
-    }
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => nextHwQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    const recEl = document.getElementById("hwQuizRecognized2");
+    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并确认";
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -5322,11 +5295,11 @@ async function submitHwReviewHandwrite() {
     return;
   }
 
-  hwReview.answering = false;
   let userInput = hwQuizRecognizedResult;
 
   const qKey = `${q.question}_${q.mode}`;
   if (userInput === q.answer) {
+    hwReview.answering = false;
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
@@ -5334,34 +5307,21 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    // Wrong: show answer, re-queue at end until answered correctly once
+    // Keep answering enabled — user can erase/edit and re-submit
+    hwReview.answering = true;
+    hwQuizRecognizedResult = '';
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    if (q.mode === "dictation_handwrite") {
-      const editBtn = document.createElement("button");
-      editBtn.textContent = "修改答案";
-      editBtn.className = "ok-btn";
-      editBtn.style.background = "#667eea";
-      editBtn.onclick = () => {
-        hint.innerHTML = "";
-        hwQuizRecognizedResult = '';
-        hwReview.answering = true;
-        const recEl = document.getElementById("hwQuizRecognized");
-        if (recEl) recEl.textContent = "请修改后重新识别并提交";
-      };
-      btnRow.appendChild(editBtn);
-    }
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => nextHwReviewQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    const recEl = document.getElementById("hwQuizRecognized");
+    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并提交";
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwReviewQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
