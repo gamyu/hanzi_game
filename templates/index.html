@@ -4757,6 +4757,7 @@ async function hwPinyinSubmit() {
         words: q.word_hint || "",
         mode: q.mode,
       });
+      recordWrongAnswer(q);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     if (retryCount + 1 <= 2) {
@@ -4809,6 +4810,7 @@ function hwQuizAnswer(selected, correctIdx) {
         words: q.word_hint || "",
         mode: q.mode,
       });
+      recordWrongAnswer(q);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     // Add retry if under limit (max 2 retries after first wrong = total 3 attempts)
@@ -4850,6 +4852,7 @@ function hwHandleHwAnswer(userInput) {
         words: q.answer,
         mode: q.mode,
       });
+      recordWrongAnswer(q);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     if (retryCount + 1 < 2) {
