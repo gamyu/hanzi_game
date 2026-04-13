@@ -1516,6 +1516,7 @@
         <button class="admin-tab" onclick="switchAdminTab('homework')">布置作业</button>
         <button class="admin-tab" onclick="switchAdminTab('users')">用户进度</button>
         <button class="admin-tab" onclick="switchAdminTab('dailylog')">每日记录</button>
+        <button class="admin-tab" onclick="switchAdminTab('messages')">用户留言</button>
       </div>
     </div>
     <div style="flex:1;overflow-y:auto;padding:16px 24px 24px">
@@ -1562,6 +1563,15 @@
         <div class="admin-section">
           <h3>用户记录查询</h3>
           <div class="admin-item-list" id="adminUserList" style="max-height:none"></div>
+        </div>
+      </div>
+      <!-- Tab: 用户留言 -->
+      <div class="admin-tab-content hidden" id="adminTabMessages">
+        <div class="admin-section">
+          <h3>用户留言 <span style="font-size:12px;color:#a0aec0" id="adminMsgCount"></span></h3>
+          <div id="adminMessagesContent" style="max-height:none">
+            <div style="color:#a0aec0;padding:16px;text-align:center">加载中...</div>
+          </div>
         </div>
       </div>
       <!-- Tab: 每日记录 -->
@@ -1763,11 +1773,13 @@ function renderUserBar() {
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
+      <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
       ${adminBtn}
     `;
   } else {
     bar.innerHTML = `
+      <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
       <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
     `;
   }
@@ -2062,9 +2074,45 @@ function switchAdminTab(tab) {
   document.querySelector(`.admin-tab[onclick*="${tab}"]`).classList.add("active");
   // Show/hide content
   document.querySelectorAll(".admin-tab-content").forEach(el => el.classList.add("hidden"));
-  const tabMap = { rules: "adminTabRules", homework: "adminTabHomework", users: "adminTabUsers", dailylog: "adminTabDailylog" };
+  const tabMap = { rules: "adminTabRules", homework: "adminTabHomework", users: "adminTabUsers", dailylog: "adminTabDailylog", messages: "adminTabMessages" };
   document.getElementById(tabMap[tab]).classList.remove("hidden");
   if (tab === "dailylog") initDailyLogTab();
+  if (tab === "messages") loadAdminMessages();
+}
+
+async function loadAdminMessages() {
+  const content = document.getElementById("adminMessagesContent");
+  const countEl = document.getElementById("adminMsgCount");
+  try {
+    const res = await fetch("/api/admin/messages");
+    const data = await res.json();
+    const msgs = data.messages || [];
+    countEl.textContent = msgs.length ? `(${msgs.length})` : "";
+    if (msgs.length === 0) {
+      content.innerHTML = '<div style="color:#a0aec0;padding:16px;text-align:center">暂无留言</div>';
+      return;
+    }
+    const escape = s => String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    content.innerHTML = msgs.map(m => {
+      const statusTag = m.email_sent
+        ? '<span style="background:#c6f6d5;color:#22543d;padding:1px 6px;border-radius:4px;font-size:11px">✓ 已邮件通知</span>'
+        : '<span style="background:#fed7d7;color:#822727;padding:1px 6px;border-radius:4px;font-size:11px" title="' + escape(m.email_error) + '">⚠ 邮件未发送</span>';
+      const replyLink = m.reply_email
+        ? `<a href="mailto:${escape(m.reply_email)}" style="color:#5a67d8;margin-left:6px">✉ 回复 ${escape(m.reply_email)}</a>`
+        : '';
+      return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
+          <div style="font-size:13px;color:#4a5568"><strong>${escape(m.username) || '(匿名)'}</strong> · ${escape(m.created_at)}</div>
+          ${statusTag}
+        </div>
+        ${m.subject ? `<div style="font-size:14px;font-weight:600;color:#2d3748;margin-bottom:4px">${escape(m.subject)}</div>` : ''}
+        <div style="font-size:13px;color:#2d3748;white-space:pre-wrap;line-height:1.5">${escape(m.message)}</div>
+        <div style="font-size:12px;margin-top:4px">${replyLink}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    content.innerHTML = '<div style="color:#e53e3e;padding:16px;text-align:center">加载失败</div>';
+  }
 }
 
 async function showAdminPanel() {
@@ -2245,48 +2293,51 @@ async function showUserDetail(userId, username) {
   let html = '';
 
   // --- 金币来源 (coin source breakdown) ---
+  // Always render the header so the admin can see the feature exists even
+  // before any transactions have been logged (legacy coins earned before
+  // the coin_transactions migration aren't attributed).
   const coinTotals = data.coin_totals || [];
   const coinDaily = data.coin_daily || [];
-  if (coinTotals.length > 0 || coinDaily.length > 0) {
-    const totalsBySrc = {};
-    coinTotals.forEach(t => { totalsBySrc[t.source] = t; });
-    const earnedGame = (totalsBySrc.game && totalsBySrc.game.earned) || 0;
-    const earnedHw   = (totalsBySrc.homework && totalsBySrc.homework.earned) || 0;
-    const earnedAdmin = (totalsBySrc.admin && totalsBySrc.admin.earned) || 0;
-    const spentShop  = (totalsBySrc.shop && totalsBySrc.shop.spent) || 0;
-    html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">金币来源 <span style="font-size:12px;color:#a0aec0">(当前余额 ' + (data.user.coins || 0) + ')</span></h3>';
-    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
-      <span style="padding:4px 10px;background:#ebf8ff;border-radius:6px;color:#2c5282"><strong>游戏:</strong> +${earnedGame}</span>
-      <span style="padding:4px 10px;background:#fefcbf;border-radius:6px;color:#744210"><strong>作业:</strong> +${earnedHw}</span>
-      ${earnedAdmin > 0 ? `<span style="padding:4px 10px;background:#e9d8fd;border-radius:6px;color:#553c9a"><strong>管理员:</strong> +${earnedAdmin}</span>` : ''}
-      <span style="padding:4px 10px;background:#fed7d7;border-radius:6px;color:#822727"><strong>消费:</strong> -${spentShop}</span>
-    </div>`;
+  const totalsBySrc = {};
+  coinTotals.forEach(t => { totalsBySrc[t.source] = t; });
+  const earnedGame  = (totalsBySrc.game && totalsBySrc.game.earned) || 0;
+  const earnedHw    = (totalsBySrc.homework && totalsBySrc.homework.earned) || 0;
+  const earnedAdmin = (totalsBySrc.admin && totalsBySrc.admin.earned) || 0;
+  const spentShop   = (totalsBySrc.shop && totalsBySrc.shop.spent) || 0;
+  html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">金币来源 <span style="font-size:12px;color:#a0aec0">(当前余额 ' + (data.user.coins || 0) + ')</span></h3>';
+  html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
+    <span style="padding:4px 10px;background:#ebf8ff;border-radius:6px;color:#2c5282"><strong>游戏:</strong> +${earnedGame}</span>
+    <span style="padding:4px 10px;background:#fefcbf;border-radius:6px;color:#744210"><strong>作业:</strong> +${earnedHw}</span>
+    ${earnedAdmin > 0 ? `<span style="padding:4px 10px;background:#e9d8fd;border-radius:6px;color:#553c9a"><strong>管理员:</strong> +${earnedAdmin}</span>` : ''}
+    <span style="padding:4px 10px;background:#fed7d7;border-radius:6px;color:#822727"><strong>消费:</strong> -${spentShop}</span>
+  </div>`;
 
-    if (coinDaily.length > 0) {
-      // Group by date: { date: { game, homework, shop, admin, net } }
-      const byDate = {};
-      coinDaily.forEach(r => {
-        if (!byDate[r.date]) byDate[r.date] = { date: r.date, game: 0, homework: 0, shop: 0, admin: 0, net: 0 };
-        if (r.source === "shop") byDate[r.date].shop += r.spent;
-        else byDate[r.date][r.source] = (byDate[r.date][r.source] || 0) + r.earned;
-        byDate[r.date].net += r.net;
-      });
-      const rows = Object.values(byDate).sort((a, b) => (a.date < b.date ? 1 : -1));
-      html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
-      html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>游戏</th><th>作业</th><th>消费</th><th>净变化</th></tr>';
-      rows.forEach(r => {
-        const netColor = r.net > 0 ? '#38a169' : r.net < 0 ? '#e53e3e' : '#718096';
-        const netSign = r.net > 0 ? '+' : '';
-        html += `<tr style="border-bottom:1px solid #f0f0f0">
-          <td style="padding:4px 6px">${r.date}</td>
-          <td style="text-align:center;color:#2c5282">${r.game ? '+' + r.game : '-'}</td>
-          <td style="text-align:center;color:#744210">${r.homework ? '+' + r.homework : '-'}</td>
-          <td style="text-align:center;color:#822727">${r.shop ? '-' + r.shop : '-'}</td>
-          <td style="text-align:center;font-weight:700;color:${netColor}">${netSign}${r.net}</td>
-        </tr>`;
-      });
-      html += '</table></div>';
-    }
+  if (coinDaily.length > 0) {
+    // Group by date: { date: { game, homework, shop, admin, net } }
+    const byDate = {};
+    coinDaily.forEach(r => {
+      if (!byDate[r.date]) byDate[r.date] = { date: r.date, game: 0, homework: 0, shop: 0, admin: 0, net: 0 };
+      if (r.source === "shop") byDate[r.date].shop += r.spent;
+      else byDate[r.date][r.source] = (byDate[r.date][r.source] || 0) + r.earned;
+      byDate[r.date].net += r.net;
+    });
+    const rows = Object.values(byDate).sort((a, b) => (a.date < b.date ? 1 : -1));
+    html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>游戏</th><th>作业</th><th>消费</th><th>净变化</th></tr>';
+    rows.forEach(r => {
+      const netColor = r.net > 0 ? '#38a169' : r.net < 0 ? '#e53e3e' : '#718096';
+      const netSign = r.net > 0 ? '+' : '';
+      html += `<tr style="border-bottom:1px solid #f0f0f0">
+        <td style="padding:4px 6px">${r.date}</td>
+        <td style="text-align:center;color:#2c5282">${r.game ? '+' + r.game : '-'}</td>
+        <td style="text-align:center;color:#744210">${r.homework ? '+' + r.homework : '-'}</td>
+        <td style="text-align:center;color:#822727">${r.shop ? '-' + r.shop : '-'}</td>
+        <td style="text-align:center;font-weight:700;color:${netColor}">${netSign}${r.net}</td>
+      </tr>`;
+    });
+    html += '</table></div>';
+  } else {
+    html += '<div style="color:#a0aec0;font-size:12px;padding:6px 0">暂无金币流水记录 (功能上线后的奖励/消费会显示在这里)</div>';
   }
 
   // Score history
@@ -2567,7 +2618,20 @@ async function loadDailyLog() {
         html += `<div class="day-item">游戏 ${gs} ${ml}: ${g.total_questions}题 正确率${acc}% 得分${g.score}</div>`;
       });
     }
-    if (day.homework.length === 0 && day.games.length === 0) {
+    // 金币来源 per day
+    const c = day.coins || {};
+    const hasCoin = (c.game || c.homework || c.admin || c.shop);
+    if (hasCoin) {
+      const parts = [];
+      if (c.game)     parts.push(`<span style="color:#2c5282">游戏 +${c.game}</span>`);
+      if (c.homework) parts.push(`<span style="color:#744210">作业 +${c.homework}</span>`);
+      if (c.admin)    parts.push(`<span style="color:#553c9a">管理员 +${c.admin}</span>`);
+      if (c.shop)     parts.push(`<span style="color:#822727">消费 -${c.shop}</span>`);
+      const netColor = c.net > 0 ? '#38a169' : c.net < 0 ? '#e53e3e' : '#718096';
+      const netSign = c.net > 0 ? '+' : '';
+      html += `<div class="day-item" style="background:#fffaf0"><span>🪙 金币: ${parts.join(' · ')} </span><span style="font-weight:700;color:${netColor};margin-left:6px">净 ${netSign}${c.net}</span></div>`;
+    }
+    if (day.homework.length === 0 && day.games.length === 0 && !hasCoin) {
       html += `<div class="day-item" style="color:#a0aec0">无活动</div>`;
     }
   });

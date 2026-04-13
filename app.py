@@ -22,6 +22,7 @@ import json
 import os
 import random
 import atexit
+import smtplib
 import socket
 import subprocess
 import psycopg
@@ -30,6 +31,10 @@ from psycopg.rows import dict_row
 import urllib.request
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from email.message import EmailMessage
+
+# Hard-coded admin destination for contact-us messages (per product spec).
+ADMIN_CONTACT_EMAIL = "jinhuanjoy@gmail.com"
 
 import bcrypt
 import edge_tts
@@ -724,6 +729,20 @@ def init_db():
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user_date ON coin_transactions(user_id, created_at)")
     db.execute("""
+        CREATE TABLE IF NOT EXISTS contact_messages (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER,
+            username TEXT NOT NULL DEFAULT '',
+            reply_email TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL,
+            email_sent INTEGER NOT NULL DEFAULT 0,
+            email_error TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_contact_created ON contact_messages(created_at)")
+    db.execute("""
         CREATE TABLE IF NOT EXISTS daily_assignments (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -1241,6 +1260,112 @@ def me():
     if "user_id" not in session:
         return jsonify({"logged_in": False})
     return jsonify({"logged_in": True, "username": session["username"]})
+
+
+def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str) -> tuple[bool, str]:
+    """Send a contact-us message to ADMIN_CONTACT_EMAIL via SMTP.
+
+    Returns (ok, error). SMTP is configured via env vars:
+      SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASSWORD,
+      SMTP_FROM (defaults to SMTP_USER), SMTP_USE_SSL ("1" for SMTPS on 465).
+    If SMTP is not configured, returns (False, 'smtp_not_configured') —
+    callers should still persist the message to the DB.
+    """
+    host = os.environ.get("SMTP_HOST", "").strip()
+    user = os.environ.get("SMTP_USER", "").strip()
+    pwd = os.environ.get("SMTP_PASSWORD", "").strip()
+    if not (host and user and pwd):
+        return False, "smtp_not_configured"
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    sender = os.environ.get("SMTP_FROM", user).strip() or user
+    use_ssl = os.environ.get("SMTP_USE_SSL", "").strip() in ("1", "true", "True")
+
+    msg = EmailMessage()
+    msg["Subject"] = f"[汉字游戏 留言] {subject or '(无主题)'}"
+    msg["From"] = sender
+    msg["To"] = ADMIN_CONTACT_EMAIL
+    if reply_email:
+        msg["Reply-To"] = reply_email
+    body_lines = [
+        f"来自用户: {from_name or '(匿名)'}",
+        f"回复邮箱: {reply_email or '(未填写)'}",
+        "",
+        message or "",
+    ]
+    msg.set_content("\n".join(body_lines))
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=10) as s:
+                s.login(user, pwd)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=10) as s:
+                s.ehlo()
+                s.starttls()
+                s.login(user, pwd)
+                s.send_message(msg)
+        return True, ""
+    except Exception as e:
+        return False, str(e)[:500]
+
+
+@app.route("/contact")
+def contact_page():
+    return render_template(
+        "contact.html",
+        admin_email=ADMIN_CONTACT_EMAIL,
+        username=session.get("username", ""),
+    )
+
+
+@app.route("/api/contact", methods=["POST"])
+def contact_api():
+    """Accept a contact-us message. Non-logged-in users can submit too."""
+    if _rate_limited(f"contact:{request.remote_addr}", 5, 300):
+        return jsonify({"error": "提交过于频繁，请稍后再试"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    subject = (data.get("subject") or "").strip()[:200]
+    message = (data.get("message") or "").strip()
+    reply_email = (data.get("reply_email") or "").strip()[:200]
+    if not message:
+        return jsonify({"error": "请填写留言内容"}), 400
+    if len(message) > 4000:
+        return jsonify({"error": "留言过长（4000字以内）"}), 400
+
+    user_id = session.get("user_id")
+    username = session.get("username", "") or (data.get("username") or "").strip()[:50]
+
+    # Send email first — capture result so we can store alongside the message.
+    ok, err = _send_contact_email(username, reply_email, subject, message)
+
+    db = get_db()
+    db.execute(
+        """INSERT INTO contact_messages
+                (user_id, username, reply_email, subject, message, email_sent, email_error)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (user_id, username, reply_email, subject, message, 1 if ok else 0, "" if ok else err),
+    )
+    db.commit()
+
+    return jsonify({
+        "ok": True,
+        "email_sent": ok,
+        "admin_email": ADMIN_CONTACT_EMAIL,
+    })
+
+
+@app.route("/api/admin/messages")
+def admin_messages():
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+    db = get_db()
+    rows = db.execute(
+        """SELECT id, user_id, username, reply_email, subject, message,
+                  email_sent, email_error, created_at
+           FROM contact_messages ORDER BY created_at DESC LIMIT 100"""
+    ).fetchall()
+    return jsonify({"messages": [dict(r) for r in rows]})
 
 
 @app.route("/api/scores", methods=["GET", "POST"])
@@ -2823,19 +2948,41 @@ def admin_user_daily_log(user_id):
         (user_id, start_date),
     ).fetchall()
 
+    # Coin transactions per day+source (for "每日记录" coin column)
+    coin_rows = db.execute(
+        """SELECT DATE(created_at) as date, source,
+                  COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
+                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) as spent
+           FROM coin_transactions
+           WHERE user_id = %s AND DATE(created_at) >= %s
+           GROUP BY DATE(created_at), source""",
+        (user_id, start_date),
+    ).fetchall()
+
     # Group by date (normalize keys to strings for consistent merging)
     daily_log = {}
-    for row in hw_rows:
-        d = str(row["date"])
+    def _ensure(d):
         if d not in daily_log:
-            daily_log[d] = {"date": d, "homework": [], "games": []}
-        daily_log[d]["homework"].append(dict(row))
+            daily_log[d] = {
+                "date": d, "homework": [], "games": [],
+                "coins": {"game": 0, "homework": 0, "shop": 0, "admin": 0, "net": 0},
+            }
+        return daily_log[d]
 
+    for row in hw_rows:
+        _ensure(str(row["date"]))["homework"].append(dict(row))
     for row in game_rows:
+        _ensure(str(row["date"]))["games"].append(dict(row))
+    for row in coin_rows:
         d = str(row["date"])
-        if d not in daily_log:
-            daily_log[d] = {"date": d, "homework": [], "games": []}
-        daily_log[d]["games"].append(dict(row))
+        bucket = _ensure(d)["coins"]
+        src = row["source"]
+        if src == "shop":
+            bucket["shop"] += row["spent"]
+            bucket["net"] -= row["spent"]
+        elif src in ("game", "homework", "admin"):
+            bucket[src] += row["earned"]
+            bucket["net"] += row["earned"]
 
     # Sort by date descending
     result = sorted(daily_log.values(), key=lambda x: x["date"], reverse=True)
