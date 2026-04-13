@@ -2332,30 +2332,62 @@ def homework_preview(assignment_id):
 
     grade = assignment["grade"]
     lesson_num = assignment["lesson_num"]
+    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
+    hw_type = assignment["type"]
     mode = request.args.get("mode", "char_to_pinyin")
     if mode not in ("char_to_pinyin", "pinyin_to_char", "listen_to_char"):
         mode = "char_to_pinyin"
 
-    lessons = HOMEWORK_LESSONS.get(grade, {})
-    lesson_data = lessons.get(lesson_num, {})
+    # 分册复习: preview must use the exact same pool as the day's homework.
+    # lesson_num here is a day index (1..7) into the book-review split, not
+    # a lesson number, so looking it up in HOMEWORK_LESSONS would return
+    # the wrong content (or nothing).
+    if asn_mode == "book_review":
+        split = get_book_review_split(grade)
+        day = lesson_num
+        if not (1 <= day <= BOOK_REVIEW_DAYS):
+            return jsonify({"error": f"无效的复习天数: {day}"}), 400
+        entries = split.get(hw_type, [[]])[day - 1] if hw_type in ("recognition", "writing") else []
+    else:
+        lessons = HOMEWORK_LESSONS.get(grade, {})
+        lesson_data = lessons.get(lesson_num, {})
+        entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
 
-    # Build preview questions from 认字 pool
-    entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
     if not entries:
         return jsonify({"error": "该课暂无数据"}), 400
 
     all_chars = CHARACTERS.get(grade, [])
+    grade_words = WORDS.get(grade, [])
+    # Pre-build a length -> candidate word list so multi-char entries get
+    # matching-字数 distractors without O(n) rescans per question.
+    words_by_len: dict[int, list[dict]] = {}
+    for w in grade_words:
+        words_by_len.setdefault(len(w["word"]), []).append(
+            {"char": w["word"], "pinyin": w["pinyin"], "words": []}
+        )
+
     questions = []
     for entry in entries:
-        # Only single characters for game modes (multi-char words don't work well for selection)
-        if len(entry["word"]) > 1:
-            continue
-        correct = {"char": entry["word"], "pinyin": entry["pinyin"], "words": []}
-        for c in all_chars:
-            if c["char"] == entry["word"]:
-                correct["words"] = c.get("words", [])
-                break
-        others = [c for c in all_chars if c["char"] != correct["char"]]
+        word_text = entry["word"]
+        correct = {"char": word_text, "pinyin": entry["pinyin"], "words": []}
+        if len(word_text) == 1:
+            # Single char: use CHARACTERS pool for hints + distractors
+            for c in all_chars:
+                if c["char"] == word_text:
+                    correct["words"] = c.get("words", [])
+                    break
+            others = [c for c in all_chars if c["char"] != word_text]
+        else:
+            # Multi-char 词语: pool = same-length 词语 from this grade, falling
+            # back to all grades if fewer than 4 candidates exist.
+            others = [c for c in words_by_len.get(len(word_text), []) if c["char"] != word_text]
+            if len(others) < 4:
+                for g, ws in WORDS.items():
+                    if g == grade:
+                        continue
+                    for w in ws:
+                        if len(w["word"]) == len(word_text) and w["word"] != word_text:
+                            others.append({"char": w["word"], "pinyin": w["pinyin"], "words": []})
 
         if mode == "char_to_pinyin":
             distractors = _pick_distractors(correct, others, key="pinyin")
