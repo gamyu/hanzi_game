@@ -382,7 +382,14 @@ async function loadToday() {
     return;
   }
 
-  let html = '<div class="assignment-cards">';
+  let html = '';
+  if (plan.mode === "book_review") {
+    html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#ebf4ff,#f0f5ff);border:1px solid #bee3f8;border-radius:10px;color:#2c5282;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span style="font-size:18px">📚</span>
+      <span>当前为「分册复习」模式 · 每册分 7 天复习 · ${plan.grade_short || ''}</span>
+    </div>`;
+  }
+  html += '<div class="assignment-cards">';
   assignments.forEach(a => {
     const isCompleted = a.status === "completed";
     const icon = a.type === "recognition" ? "📖" : "✍️";

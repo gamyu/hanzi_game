@@ -196,6 +196,74 @@ def _build_multi_pinyin():
 _build_multi_pinyin()
 
 
+# --- 形近字 (visually similar characters) lookup ---
+# Hand-curated groups of characters that primary-school students easily confuse
+# because they share a radical / component or have very similar structure.
+# Each string is a group where every char is 形近 to every other in that group.
+# Extend this list as needed; 3000+ chars would ideally come from an IDS
+# decomposition database, but a curated list covers the most common confusions.
+_SHAPE_GROUPS = [
+    "己已巳", "未末", "土士", "干于", "人入八", "大太天夫犬",
+    "白百", "日曰目", "木本末禾术", "月用", "田由甲申电",
+    "千干午牛", "刀力", "手毛", "小少", "心必", "水永",
+    "问闻间", "休体", "玩完元园", "青清请情晴睛蜻",
+    "跟根很恨银", "吸级极", "圆园圈", "住往", "买卖",
+    "找我戏", "比北", "东车乐", "去云丢", "先洗",
+    "跑泡抱炮饱袍", "码妈吗骂蚂", "江红工功攻",
+    "球求", "衣农", "到倒", "办为", "中忠钟种",
+    "爬抓瓜", "处外", "乌鸟岛", "牙与", "巴吧把爸爬",
+    "主注住往", "方放访纺", "请情晴睛", "晴情请清",
+    "看着", "在再", "从人", "几儿", "又叉",
+    "勺匀均", "人从众", "口吕品", "木林森", "水淼",
+    "火炎焱", "日昌晶", "夕多", "土圭", "石磊",
+    "他她它", "吃乞", "今令冷", "向响", "贝贯",
+    "竹笨", "书输", "米粉", "羊洋样", "草早",
+    "花化", "鸡鸭", "苗描猫瞄", "睛晴情请清静",
+    "跟银狠恨很", "银跟根", "忘望", "吃汔",
+    "睡垂", "办为万", "字学", "孩该",
+    "汗汉", "快块", "坐座", "朋明", "阳阴",
+    "做作", "找钱", "饭板", "妈奶", "弟第",
+    "桃跳", "请情", "园圆", "冷今令",
+    "包饱抱跑", "青情请清晴睛", "工红空江",
+    "每海梅", "可河何", "广床", "开井",
+    "公松", "云会", "夕岁", "力另男",
+    "是题", "分盆", "半伴", "羊美",
+    "会合", "京就", "同洞", "相想",
+    "旦早", "也地他", "真直", "自白",
+    "且具直", "首道", "安案",
+]
+
+SIMILAR_SHAPE: dict[str, set[str]] = {}
+for _g in _SHAPE_GROUPS:
+    for _ch in _g:
+        SIMILAR_SHAPE.setdefault(_ch, set()).update(c for c in _g if c != _ch)
+
+
+# --- Pinyin initial (声母) / final (韵母) parsing ---
+_PINYIN_INITIALS_2 = ("zh", "ch", "sh")
+_PINYIN_INITIALS_1 = set("bpmfdtnlgkhjqxrzcsyw")
+
+
+def _pinyin_initial(pinyin_str: str) -> str:
+    """Return the initial consonant (声母) of the first syllable, toneless."""
+    base = _strip_tone(pinyin_str or "").strip().lower().split(" ")[0] if pinyin_str else ""
+    if not base:
+        return ""
+    for d in _PINYIN_INITIALS_2:
+        if base.startswith(d):
+            return d
+    if base[0] in _PINYIN_INITIALS_1:
+        return base[0]
+    return ""
+
+
+def _pinyin_final(pinyin_str: str) -> str:
+    """Return the final (韵母) of the first syllable, toneless."""
+    base = _strip_tone(pinyin_str or "").strip().lower().split(" ")[0] if pinyin_str else ""
+    initial = _pinyin_initial(pinyin_str)
+    return base[len(initial):] if base else ""
+
+
 def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> str:
     """Find a context word for a multi-pronunciation character.
     Searches: 1) lesson vocabulary, 2) lesson text entries, 3) grade WORDS."""
@@ -307,8 +375,11 @@ def get_book_review_split(grade):
     ] + [
         {"word": w["word"], "pinyin": w["pinyin"]} for w in words
     ]
+    # 看拼音写词语 must be multi-character only — single hanzi are ambiguous
+    # when dictated (many homophones), so restrict to 2+ char 词语 only.
     writing_pool = [
-        {"word": w["word"], "pinyin": w["pinyin"]} for w in words
+        {"word": w["word"], "pinyin": w["pinyin"]}
+        for w in words if len(w["word"]) >= 2
     ]
 
     # Deterministic shuffle keyed on grade name
@@ -639,6 +710,20 @@ def init_db():
         )
     """)
     db.execute("""
+        CREATE TABLE IF NOT EXISTS coin_transactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            amount INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT '',
+            grade TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user_date ON coin_transactions(user_id, created_at)")
+    db.execute("""
         CREATE TABLE IF NOT EXISTS daily_assignments (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
@@ -755,7 +840,7 @@ def _generate_question(grade: str, mode: str) -> dict:
         distractors = _pick_distractors(correct, others, key="pinyin")
         options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
         random.shuffle(options)
-        return {
+        q = {
             "mode": mode,
             "question": correct["char"],
             "options": options,
@@ -763,6 +848,14 @@ def _generate_question(grade: str, mode: str) -> dict:
             "answer": correct["pinyin"],
             "word_hint": "、".join(correct["words"]),
         }
+        # For 多音字, show a context word so the reader knows which reading is asked
+        if correct["char"] in MULTI_PINYIN:
+            cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
+            if not cw and correct.get("words"):
+                cw = correct["words"][0]
+            if cw:
+                q["context_word"] = cw
+        return q
 
     if mode == "pinyin_to_char":
         # Show pinyin, pick correct character from options
@@ -867,30 +960,94 @@ def _generate_question(grade: str, mode: str) -> dict:
 
 def _pick_distractors(correct: dict, others: list, key: str, count: int = 3,
                       exclude_homophones: bool = False) -> list:
-    """Pick distractor options that differ from the correct answer."""
+    """Pick distractor options that differ from the correct answer.
+
+    Applies 字数 matching (single-char questions only yield single-char
+    distractors; 2-char words only yield 2-char distractors; etc.) and
+    prefers harder distractors — 形近字, 同音字, 近音字 — before falling
+    back to random same-length picks.
+    """
     correct_val = correct[key]
-    candidates = [c for c in others if c[key] != correct_val]
+    correct_pinyin = correct.get("pinyin", "")
+    correct_char = correct.get("char", "")
+
+    # --- Length / syllable-count matching ---
+    # For key="char": distractor chars must have the same number of hanzi.
+    # For key="pinyin": distractor pinyins must have the same syllable count
+    # (syllables are whitespace-separated in our data).
+    if key == "char":
+        target_len = len(correct_val)
+        def _same_len(c):
+            return len(c.get("char", "")) == target_len
+    elif key == "pinyin":
+        target_sylls = len(correct_val.split())
+        def _same_len(c):
+            return len(c.get("pinyin", "").split()) == target_sylls
+    else:
+        def _same_len(c):
+            return True
+
+    candidates = [c for c in others if c[key] != correct_val and _same_len(c)]
 
     if exclude_homophones:
-        # Remove characters whose pinyin matches the correct answer exactly
-        candidates = [c for c in candidates if c["pinyin"] != correct["pinyin"]]
-    elif key == "char":
-        # Prefer characters with similar pinyin (same base syllable) for harder questions
-        base = _strip_tone(correct["pinyin"])
-        similar = [c for c in candidates if _strip_tone(c["pinyin"]) == base]
-        if len(similar) >= count:
-            return random.sample(similar, count)
+        candidates = [c for c in candidates if c.get("pinyin") != correct_pinyin]
 
-    if len(candidates) < count:
-        fallback = [c for c in others if c[key] != correct_val]
-        if exclude_homophones:
-            fallback = [c for c in fallback if c["pinyin"] != correct["pinyin"]]
-        candidates = fallback
+    # --- Priority pools: harder distractors first ---
+    priority: list = []
+    seen_vals = {correct_val}
 
-    if len(candidates) < count:
-        return random.sample(candidates, len(candidates)) if candidates else []
+    def _add(pool):
+        for c in pool:
+            v = c[key]
+            if v in seen_vals:
+                continue
+            priority.append(c)
+            seen_vals.add(v)
 
-    return random.sample(candidates, count)
+    if key == "char":
+        # 1) 形近字 — shape-similar characters (only meaningful for single chars)
+        if len(correct_char) == 1:
+            shape_sim = SIMILAR_SHAPE.get(correct_char, set())
+            if shape_sim:
+                _add([c for c in candidates if c.get("char") in shape_sim])
+        # 2) 同音字 — exact pinyin match (skip when excluded, e.g. listen mode)
+        if not exclude_homophones and correct_pinyin:
+            _add([c for c in candidates if c.get("pinyin") == correct_pinyin])
+        # 3) 近音字 — same base syllable, different tone
+        if correct_pinyin:
+            base = _strip_tone(correct_pinyin)
+            _add([c for c in candidates if _strip_tone(c.get("pinyin", "")) == base])
+        # 4) 同声母 / 同韵母 — further phonetic confusables
+        if correct_pinyin:
+            initial = _pinyin_initial(correct_pinyin)
+            final = _pinyin_final(correct_pinyin)
+            if initial:
+                _add([c for c in candidates if _pinyin_initial(c.get("pinyin", "")) == initial])
+            if final:
+                _add([c for c in candidates if _pinyin_final(c.get("pinyin", "")) == final])
+    elif key == "pinyin":
+        # 1) Tone-variant pinyins (same base syllable)
+        base = _strip_tone(correct_val)
+        _add([c for c in candidates if _strip_tone(c.get("pinyin", "")) == base])
+        # 2) Same initial / same final
+        initial = _pinyin_initial(correct_val)
+        final = _pinyin_final(correct_val)
+        if initial:
+            _add([c for c in candidates if _pinyin_initial(c.get("pinyin", "")) == initial])
+        if final:
+            _add([c for c in candidates if _pinyin_final(c.get("pinyin", "")) == final])
+
+    random.shuffle(priority)
+    result = priority[:count]
+
+    # Fill from remaining same-length candidates if priority pools are short
+    if len(result) < count:
+        used = {c[key] for c in result} | {correct_val}
+        remaining = [c for c in candidates if c[key] not in used]
+        random.shuffle(remaining)
+        result += remaining[:count - len(result)]
+
+    return result[:count]
 
 
 def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
@@ -942,12 +1099,20 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
         distractors = _pick_distractors(correct, distractor_pool, key="pinyin")
         options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
         random.shuffle(options)
-        return {
+        q = {
             "mode": mode, "question": correct["char"], "options": options,
             "correct_index": options.index(correct["pinyin"]),
             "answer": correct["pinyin"],
             "word_hint": "、".join(correct["words"]),
         }
+        if correct["char"] in MULTI_PINYIN:
+            ln0 = lessons[0] if lessons else 0
+            cw = _find_context_word(correct["char"], correct["pinyin"], grade, ln0)
+            if not cw and correct.get("words"):
+                cw = correct["words"][0]
+            if cw:
+                q["context_word"] = cw
+        return q
 
     if mode == "pinyin_to_char":
         distractors = _pick_distractors(correct, distractor_pool, key="char")
@@ -1245,11 +1410,18 @@ def review_question():
         distractors = _pick_distractors(correct, others, key="pinyin")
         options = [pinyin] + [d["pinyin"] for d in distractors]
         random.shuffle(options)
-        return jsonify({
+        resp = {
             "mode": mode, "question": character, "options": options,
             "correct_index": options.index(pinyin),
             "answer": pinyin, "word_hint": words,
-        })
+        }
+        if character in MULTI_PINYIN:
+            cw = _find_context_word(character, pinyin, grade, 0)
+            if not cw and correct.get("words"):
+                cw = correct["words"][0]
+            if cw:
+                resp["context_word"] = cw
+        return jsonify(resp)
 
     if mode == "pinyin_to_char":
         distractors = _pick_distractors(correct, others, key="char")
@@ -1556,11 +1728,39 @@ def admin_user_details(user_id):
         (user_id,),
     ).fetchall()
 
+    # Coin transactions — totals by source + per-day breakdown
+    coin_totals = db.execute(
+        """SELECT source,
+                  COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
+                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) as spent
+           FROM coin_transactions WHERE user_id = %s GROUP BY source""",
+        (user_id,),
+    ).fetchall()
+    coin_daily = db.execute(
+        """SELECT DATE(created_at) as date, source,
+                  COALESCE(SUM(amount), 0) as net,
+                  COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
+                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) as spent
+           FROM coin_transactions WHERE user_id = %s
+           GROUP BY DATE(created_at), source
+           ORDER BY date DESC LIMIT 200""",
+        (user_id,),
+    ).fetchall()
+    coin_recent = db.execute(
+        """SELECT amount, source, mode, grade, details, created_at
+           FROM coin_transactions WHERE user_id = %s
+           ORDER BY created_at DESC LIMIT 50""",
+        (user_id,),
+    ).fetchall()
+
     return jsonify({
         "user": dict(user),
         "scores": [dict(r) for r in scores],
         "wrong_answers": [dict(r) for r in wrong_answers],
         "mastered": [dict(r) for r in mastered],
+        "coin_totals": [dict(r) for r in coin_totals],
+        "coin_daily": [dict(r) for r in coin_daily],
+        "coin_recent": [dict(r) for r in coin_recent],
     })
 
 
@@ -1693,6 +1893,10 @@ def streak_update():
     correct = data.get("correct", False)
     mode = data.get("mode", "")
     game_grade = data.get("grade", "")  # grade of the game being played
+    # source: 'game' | 'homework' — defaults to 'game' for legacy clients
+    source = data.get("source", "game")
+    if source not in ("game", "homework"):
+        source = "game"
     is_writing = mode == "dictation_handwrite"
     STREAK_COLS = {
         "writing": ("writing_streak", "writing_coins_awarded"),
@@ -1727,6 +1931,11 @@ def streak_update():
                         awarded=psycopg.sql.Identifier(awarded_col),
                     ),
                     (new_streak, total_coins_at_streak, coins_earned, session["user_id"]),
+                )
+                db.execute(
+                    "INSERT INTO coin_transactions (user_id, amount, source, mode, grade, details) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (session["user_id"], coins_earned, source, mode, game_grade,
+                     f"连对 {new_streak} 次 · {'写字' if is_writing else '认字'}"),
                 )
             else:
                 db.execute(
@@ -1789,6 +1998,10 @@ def shop_buy():
 
     db.execute("UPDATE users SET coins = coins - %s, game_minutes = game_minutes + %s WHERE id = %s",
                (package["price"], package["minutes"], session["user_id"]))
+    db.execute(
+        "INSERT INTO coin_transactions (user_id, amount, source, details) VALUES (%s, %s, 'shop', %s)",
+        (session["user_id"], -package["price"], f"兑换 {package['minutes']} 分钟游戏时间"),
+    )
     db.commit()
     new_coins = user["coins"] - package["price"]
     new_minutes = user["game_minutes"] + package["minutes"]
@@ -2131,13 +2344,20 @@ def homework_preview(assignment_id):
             distractors = _pick_distractors(correct, others, key="pinyin")
             options = [correct["pinyin"]] + [d["pinyin"] for d in distractors]
             random.shuffle(options)
-            questions.append({
+            q = {
                 "mode": mode, "question": correct["char"],
                 "options": options, "correct_index": options.index(correct["pinyin"]),
                 "answer": correct["pinyin"],
                 "word_hint": "、".join(correct["words"]),
                 "display_char": correct["char"], "display_pinyin": correct["pinyin"],
-            })
+            }
+            if correct["char"] in MULTI_PINYIN:
+                cw = _find_context_word(correct["char"], correct["pinyin"], grade, lesson_num)
+                if not cw and correct.get("words"):
+                    cw = correct["words"][0]
+                if cw:
+                    q["context_word"] = cw
+            questions.append(q)
         elif mode == "pinyin_to_char":
             distractors = _pick_distractors(correct, others, key="char")
             options = [correct["char"]] + [d["char"] for d in distractors]

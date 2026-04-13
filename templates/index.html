@@ -1661,7 +1661,7 @@ function reportStreak(correct) {
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ correct, mode: state.mode, grade: state.grade }),
+    body: JSON.stringify({ correct, mode: state.mode, grade: state.grade, source: "game" }),
   }).then(r => r.json()).then(data => {
     if (data.coin_eligible !== undefined) {
       state.coinEligible = data.coin_eligible;
@@ -2240,8 +2240,54 @@ async function showUserDetail(userId, username) {
   const content = document.getElementById("adminUserDetailContent");
 
   const modeLabels = { char_to_pinyin: "看字选拼音", pinyin_to_char: "看拼音选字", listen_to_char: "听音选字", pinyin_typing: "给汉字注音", dictation_handwrite: "看拼音写词语", read_aloud: "看字读音" };
+  const sourceLabels = { game: "游戏", homework: "作业", shop: "商店消费", admin: "管理员调整" };
 
   let html = '';
+
+  // --- 金币来源 (coin source breakdown) ---
+  const coinTotals = data.coin_totals || [];
+  const coinDaily = data.coin_daily || [];
+  if (coinTotals.length > 0 || coinDaily.length > 0) {
+    const totalsBySrc = {};
+    coinTotals.forEach(t => { totalsBySrc[t.source] = t; });
+    const earnedGame = (totalsBySrc.game && totalsBySrc.game.earned) || 0;
+    const earnedHw   = (totalsBySrc.homework && totalsBySrc.homework.earned) || 0;
+    const earnedAdmin = (totalsBySrc.admin && totalsBySrc.admin.earned) || 0;
+    const spentShop  = (totalsBySrc.shop && totalsBySrc.shop.spent) || 0;
+    html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">金币来源 <span style="font-size:12px;color:#a0aec0">(当前余额 ' + (data.user.coins || 0) + ')</span></h3>';
+    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
+      <span style="padding:4px 10px;background:#ebf8ff;border-radius:6px;color:#2c5282"><strong>游戏:</strong> +${earnedGame}</span>
+      <span style="padding:4px 10px;background:#fefcbf;border-radius:6px;color:#744210"><strong>作业:</strong> +${earnedHw}</span>
+      ${earnedAdmin > 0 ? `<span style="padding:4px 10px;background:#e9d8fd;border-radius:6px;color:#553c9a"><strong>管理员:</strong> +${earnedAdmin}</span>` : ''}
+      <span style="padding:4px 10px;background:#fed7d7;border-radius:6px;color:#822727"><strong>消费:</strong> -${spentShop}</span>
+    </div>`;
+
+    if (coinDaily.length > 0) {
+      // Group by date: { date: { game, homework, shop, admin, net } }
+      const byDate = {};
+      coinDaily.forEach(r => {
+        if (!byDate[r.date]) byDate[r.date] = { date: r.date, game: 0, homework: 0, shop: 0, admin: 0, net: 0 };
+        if (r.source === "shop") byDate[r.date].shop += r.spent;
+        else byDate[r.date][r.source] = (byDate[r.date][r.source] || 0) + r.earned;
+        byDate[r.date].net += r.net;
+      });
+      const rows = Object.values(byDate).sort((a, b) => (a.date < b.date ? 1 : -1));
+      html += '<div style="max-height:200px;overflow-y:auto;font-size:13px">';
+      html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>游戏</th><th>作业</th><th>消费</th><th>净变化</th></tr>';
+      rows.forEach(r => {
+        const netColor = r.net > 0 ? '#38a169' : r.net < 0 ? '#e53e3e' : '#718096';
+        const netSign = r.net > 0 ? '+' : '';
+        html += `<tr style="border-bottom:1px solid #f0f0f0">
+          <td style="padding:4px 6px">${r.date}</td>
+          <td style="text-align:center;color:#2c5282">${r.game ? '+' + r.game : '-'}</td>
+          <td style="text-align:center;color:#744210">${r.homework ? '+' + r.homework : '-'}</td>
+          <td style="text-align:center;color:#822727">${r.shop ? '-' + r.shop : '-'}</td>
+          <td style="text-align:center;font-weight:700;color:${netColor}">${netSign}${r.net}</td>
+        </tr>`;
+      });
+      html += '</table></div>';
+    }
+  }
 
   // Score history
   html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">历史成绩</h3>';
@@ -2673,9 +2719,10 @@ function renderQuestion(q) {
 
   // Question display
   if (q.mode === "char_to_pinyin") {
+    const contextHint = q.context_word ? ` <span style="font-size:20px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请选择正确的拼音</div>
-      <div class="question-char">${q.question}</div>
+      <div class="question-char">${q.question}${contextHint}</div>
     `;
   } else if (q.mode === "pinyin_to_char") {
     area.innerHTML = `
@@ -4046,7 +4093,7 @@ function reportHwStreak(correct) {
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ correct, mode }),
+    body: JSON.stringify({ correct, mode, source: "homework" }),
   }).then(r => r.json()).then(data => {
     hwStreak = data.streak;
     updateHwStreakBar();
@@ -4454,7 +4501,8 @@ function showHwQuizQuestion() {
       setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
-    area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
+    const contextHint = q.context_word ? ` <span style="font-size:18px;color:#718096">(${q.context_word})</span>` : '';
+    area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}${contextHint}</div>`;
     opts.style.display = "grid";
     // Re-shuffle options for retries
     let options = [...q.options];
@@ -5386,11 +5434,22 @@ function nextHwReviewQuestion() {
 async function finishHwReview() {
   clearInterval(hwReview.timerInterval);
 
-  // Submit review results to mark items as reviewed
+  // Only mark items as reviewed if the user actually answered them correctly
+  // at least once — 跳过 (skip) counts as wrong and the item stays in 错题集.
+  // Review questions are remapped by startHwReview: recognition modes →
+  // char_to_pinyin (keyed by character), dictation_handwrite stays
+  // (keyed by pinyin). Mirror that keying here.
+  const reviewedItems = (hwReview.items || []).filter(it => {
+    const qKey = it.mode === "dictation_handwrite"
+      ? `${it.pinyin}_dictation_handwrite`
+      : `${it.character}_char_to_pinyin`;
+    return hwReview.answeredCorrectly.has(qKey);
+  });
+
   await fetch("/api/homework/review_submit", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items: hwReview.items, delete_all: hwReview.isVoluntary }),
+    body: JSON.stringify({ items: reviewedItems, delete_all: hwReview.isVoluntary }),
   });
 
   // All review items answered correctly — go directly to today's homework
