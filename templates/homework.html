@@ -348,6 +348,7 @@ let quiz = {
   startTime: null,
   timerInterval: null,
   answering: false,
+  _wrongRecorded: new Set(),
 };
 
 // Canvas state
@@ -390,10 +391,12 @@ async function loadToday() {
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
 
+    const unit = a.mode === "book_review" ? "天" : "课";
+    const reviewBadge = a.mode === "book_review" ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>' : '';
     html += `<div class="assignment-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
       <div class="card-icon">${icon}</div>
-      <div class="card-type">${typeLabel}作业</div>
-      <div class="card-info">第${a.lesson_num}课 · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : plan.grade_short}</div>`;
+      <div class="card-type">${typeLabel}作业${reviewBadge}</div>
+      <div class="card-info">第${a.lesson_num}${unit} · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : plan.grade_short}</div>`;
 
     if (isCompleted) {
       html += `<div class="card-status completed">✓ 已完成</div>
@@ -439,7 +442,7 @@ async function loadProgress() {
         </svg>
         <div class="progress-pct">${pct}%</div>
       </div>
-      <div class="progress-label">${p.grade_short}</div>
+      <div class="progress-label">${p.grade_short}${p.mode === "book_review" ? " (复习)" : ""}</div>
       <div class="progress-sub">认${p.recognition_lesson - 1}/${p.rec_total_lessons||p.total_lessons} 写${p.writing_lesson - 1}/${p.wrt_total_lessons||p.total_lessons}</div>
     </div>`;
   }).join("");
@@ -454,7 +457,8 @@ async function loadProgress() {
       const accCls = acc >= 80 ? "acc-good" : "acc-bad";
       const mins = Math.floor(h.time_spent / 60);
       const secs = h.time_spent % 60;
-      hhtml += `<tr><td>${h.date}</td><td>${TYPE_LABELS[h.type]}</td><td>第${h.lesson_num}课</td><td class="${accCls}">${acc}%</td><td>${mins}分${secs}秒</td></tr>`;
+      const hUnit = h.mode === "book_review" ? "天" : "课";
+      hhtml += `<tr><td>${h.date}</td><td>${TYPE_LABELS[h.type]}</td><td>第${h.lesson_num}${hUnit}</td><td class="${accCls}">${acc}%</td><td>${mins}分${secs}秒</td></tr>`;
     });
     hhtml += '</table>';
     document.getElementById("historyContent").innerHTML = hhtml;
@@ -1104,26 +1108,47 @@ function quizAnswer(selected) {
 
 function handleHwAnswer(userInput) {
   if (!quiz.answering) return;
-  quiz.answering = false;
 
   const q = quiz.questions[quiz.currentIndex];
   const isCorrect = userInput === q.answer;
   const hint = document.getElementById("quizHint");
 
   if (isCorrect) {
+    quiz.answering = false;
+    const submitBtn = document.getElementById("hwSubmitBtn");
+    if (submitBtn) submitBtn.disabled = true;
     quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextQuestion, 800);
   } else {
-    quiz.wrongItems.push({
-      character: q.answer,
-      pinyin: q.question,
-      words: q.answer,
-      mode: q.mode,
-    });
+    // Keep answering enabled — user can rewrite and re-submit via 确认.
+    // Only record the wrong answer on the first miss so retries don't
+    // double-count. Clear the canvas so remaining old strokes don't
+    // combine with retry strokes and get recognized as two characters.
+    const qKey = quiz.currentIndex;
+    if (!quiz._wrongRecorded.has(qKey)) {
+      quiz.wrongItems.push({
+        character: q.answer,
+        pinyin: q.question,
+        words: q.answer,
+        mode: q.mode,
+      });
+      quiz._wrongRecorded.add(qKey);
+    }
+    quiz.answering = true;
+    hwRecognizedResult = '';
+    clearHwCanvas();
+    const submitBtn = document.getElementById("hwSubmitBtn");
+    if (submitBtn) submitBtn.disabled = false;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
-      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    const recEl = document.getElementById("hwRecognized");
+    if (recEl) recEl.textContent = "画布已清空，请重写后点确认";
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -1412,7 +1437,6 @@ async function submitHw() {
   if (!quiz.answering) return;
 
   const statusEl = document.getElementById("hwStatus");
-  const btn = document.getElementById("hwSubmitBtn");
 
   // Auto-recognize if not yet recognized
   if (!hwRecognizedResult) {
@@ -1424,7 +1448,8 @@ async function submitHw() {
     return;
   }
 
-  btn.disabled = true;
+  // Don't pre-disable the submit button — handleHwAnswer disables it only
+  // on correct so the user can re-submit after a wrong answer.
   handleHwAnswer(hwRecognizedResult);
 }
 

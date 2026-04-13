@@ -2318,23 +2318,28 @@ async function loadAdminHomework() {
       const wrtPct = u.total_lessons > 0 ? Math.round((u.writing_lesson - 1) / u.total_lessons * 100) : 0;
       const recGradeShort = u.recognition_grade ? (u.recognition_grade[0] + u.recognition_grade[u.recognition_grade.length-1]) : u.grade_short;
       const wrtGradeShort = u.writing_grade ? (u.writing_grade[0] + u.writing_grade[u.writing_grade.length-1]) : u.grade_short;
+      const isReview = u.mode === "book_review";
+      const unit = isReview ? "天" : "课";
+      const modeTag = isReview ? ' <span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-right:4px">分册复习</span>' : '';
       html += `<div class="admin-item-row" style="flex-wrap:wrap;gap:4px">
-        <span><strong>${u.username}</strong> — 认:${recGradeShort}第${u.recognition_lesson}/${u.rec_total_lessons||u.total_lessons}课 写:${wrtGradeShort}第${u.writing_lesson}/${u.wrt_total_lessons||u.total_lessons}课</span>
+        <span>${modeTag}<strong>${u.username}</strong> — 认:${recGradeShort}第${u.recognition_lesson}/${u.rec_total_lessons||u.total_lessons}${unit} 写:${wrtGradeShort}第${u.writing_lesson}/${u.wrt_total_lessons||u.total_lessons}${unit}</span>
         <span style="font-size:12px;color:#718096">认${recPct}% 写${wrtPct}%</span>
       </div>`;
       // Today's assignments
       if (u.today_assignments && u.today_assignments.length > 0) {
         u.today_assignments.forEach(a => {
           const tl = a.type === "recognition" ? "认字" : "写字";
+          const aIsReview = a.mode === "book_review";
+          const aUnit = aIsReview ? "天" : "课";
           if (a.status === "completed") {
             const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
             const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
             html += `<div style="padding:2px 0 2px 16px;font-size:12px;color:#718096">
-              ${tl}第${a.lesson_num}课: <span style="color:${accColor};font-weight:700">${acc}%</span> (${a.correct_answers}/${a.total_questions})
+              ${tl}第${a.lesson_num}${aUnit}: <span style="color:${accColor};font-weight:700">${acc}%</span> (${a.correct_answers}/${a.total_questions})
               ${acc < 80 ? `<button style="font-size:11px;padding:1px 6px;margin-left:4px;cursor:pointer;border:1px solid #e53e3e;background:#fff5f5;border-radius:4px;color:#e53e3e" onclick="repeatAssignment(${a.id})">重复</button>` : ''}
             </div>`;
           } else {
-            html += `<div style="padding:2px 0 2px 16px;font-size:12px;color:#d69e2e">${tl}第${a.lesson_num}课: 待完成</div>`;
+            html += `<div style="padding:2px 0 2px 16px;font-size:12px;color:#d69e2e">${tl}第${a.lesson_num}${aUnit}: 待完成</div>`;
           }
         });
       }
@@ -2344,11 +2349,15 @@ async function loadAdminHomework() {
   // Assign homework form
   html += '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0">';
   html += '<div style="font-size:13px;font-weight:600;color:#4a5568;margin-bottom:8px">布置新作业计划:</div>';
+  html += '<div class="admin-row" style="flex-wrap:wrap;gap:6px;margin-bottom:6px">';
+  html += '<label style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:4px"><input type="radio" name="hwMode" value="by_lesson" checked onchange="onHwModeChange()">按课布置</label>';
+  html += '<label style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:4px"><input type="radio" name="hwMode" value="book_review" onchange="onHwModeChange()">分册复习 (7天)</label>';
+  html += '</div>';
   html += '<div class="admin-row" style="flex-wrap:wrap;gap:6px">';
   html += '<select id="hwUserId" class="admin-input" style="max-width:120px"><option value="">选择用户</option></select>';
   html += '<select id="hwGrade" class="admin-input" style="max-width:100px"><option value="">选择年级</option></select>';
-  html += '<input type="number" id="hwRecLesson" class="admin-input" style="max-width:60px" placeholder="认课" min="1" value="1">';
-  html += '<input type="number" id="hwWrtLesson" class="admin-input" style="max-width:60px" placeholder="写课" min="1" value="1">';
+  html += '<input type="number" id="hwRecLesson" class="admin-input" style="max-width:70px" placeholder="认课" min="1" value="1" title="认字课号">';
+  html += '<input type="number" id="hwWrtLesson" class="admin-input" style="max-width:70px" placeholder="写课" min="1" value="1" title="写字课号">';
   html += '<button class="admin-btn" onclick="saveHomeworkPlan()">保存</button>';
   html += '</div>';
   html += '<div id="hwPlanMsg" style="font-size:12px;min-height:16px;margin-top:4px"></div>';
@@ -2377,15 +2386,42 @@ async function loadAdminHomework() {
   });
 }
 
+function onHwModeChange() {
+  const mode = (document.querySelector('input[name="hwMode"]:checked') || {}).value || "by_lesson";
+  const recInput = document.getElementById("hwRecLesson");
+  const wrtInput = document.getElementById("hwWrtLesson");
+  if (!recInput || !wrtInput) return;
+  if (mode === "book_review") {
+    recInput.max = 7; wrtInput.max = 7;
+    recInput.placeholder = "认字第几天"; wrtInput.placeholder = "写字第几天";
+    recInput.title = "分册复习 · 认字第几天 (1-7)";
+    wrtInput.title = "分册复习 · 写字第几天 (1-7)";
+    if (parseInt(recInput.value) > 7) recInput.value = 7;
+    if (parseInt(wrtInput.value) > 7) wrtInput.value = 7;
+  } else {
+    recInput.removeAttribute("max");
+    wrtInput.removeAttribute("max");
+    recInput.placeholder = "认课"; wrtInput.placeholder = "写课";
+    recInput.title = "认字课号";
+    wrtInput.title = "写字课号";
+  }
+}
+
 async function saveHomeworkPlan() {
   const userId = document.getElementById("hwUserId").value;
   const grade = document.getElementById("hwGrade").value;
   const recLesson = parseInt(document.getElementById("hwRecLesson").value) || 1;
   const wrtLesson = parseInt(document.getElementById("hwWrtLesson").value) || 1;
+  const mode = (document.querySelector('input[name="hwMode"]:checked') || {}).value || "by_lesson";
   const msg = document.getElementById("hwPlanMsg");
 
   if (!userId || !grade) {
     msg.textContent = "请选择用户和年级";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  if (mode === "book_review" && (recLesson < 1 || recLesson > 7 || wrtLesson < 1 || wrtLesson > 7)) {
+    msg.textContent = "分册复习的天数需在 1-7 之间";
     msg.style.color = "#e53e3e";
     return;
   }
@@ -2394,7 +2430,7 @@ async function saveHomeworkPlan() {
     const res = await fetch("/api/admin/homework/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: parseInt(userId), grade, recognition_lesson: recLesson, writing_lesson: wrtLesson }),
+      body: JSON.stringify({ user_id: parseInt(userId), grade, recognition_lesson: recLesson, writing_lesson: wrtLesson, mode }),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -2947,9 +2983,14 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    // Keep answering enabled — user can erase/edit and re-submit via 确认
+    // Keep answering enabled — user can rewrite and re-submit via 确认.
+    // Clear the canvas so remaining old strokes don't combine with the
+    // retry strokes and get recognized as two separate characters.
     state.answering = true;
     hwRecognizedResult = '';
+    clearCanvas();
+    const submitBtn = document.getElementById("hwSubmitBtn");
+    if (submitBtn) submitBtn.disabled = false;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
@@ -2967,7 +3008,7 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
     const recEl = document.getElementById("hwRecognized");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并确认";
+    if (recEl) recEl.textContent = "画布已清空，请重写后点确认";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -3217,8 +3258,8 @@ async function submitHandwriting() {
     if (!strokeOk) return; // checkCanvasStrokeOrder handles UI feedback
   }
 
-  const btn = document.getElementById("hwSubmitBtn");
-  if (btn) btn.disabled = true;
+  // Don't pre-disable the submit button here — handleDictationAnswer disables
+  // it only in the correct branch so the user can re-submit after a wrong answer.
   handleDictationAnswer(hwRecognizedResult, state.currentQ);
 }
 
@@ -4830,9 +4871,14 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    // Keep answering enabled — user can erase/edit and re-submit via 确认
+    // Keep answering enabled — user can rewrite and re-submit via 确认.
+    // Clear the canvas so remaining old strokes don't combine with the
+    // retry strokes and get recognized as two separate characters.
     hwQuiz.answering = true;
     hwQuizRecognizedResult2 = '';
+    clearHwQuizCanvas2();
+    const submitBtn = document.getElementById("hwQuizSubmitBtn");
+    if (submitBtn) submitBtn.disabled = false;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -4853,7 +4899,7 @@ function hwHandleHwAnswer(userInput) {
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     playStrokeAnimation(q.answer, hint);
     const recEl = document.getElementById("hwQuizRecognized2");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并确认";
+    if (recEl) recEl.textContent = "画布已清空，请重写后点确认";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -5307,16 +5353,19 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    // Keep answering enabled — user can erase/edit and re-submit
+    // Keep answering enabled — user can rewrite and re-submit.
+    // Clear the canvas so remaining old strokes don't combine with the
+    // retry strokes and get recognized as two separate characters.
     hwReview.answering = true;
     hwQuizRecognizedResult = '';
+    clearHwQuizCanvas();
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     const recEl = document.getElementById("hwQuizRecognized");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后重新识别并提交";
+    if (recEl) recEl.textContent = "画布已清空，请重写后点提交";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -5514,8 +5563,8 @@ async function submitHwQuiz() {
       if (!strokeOk) return;
     }
   }
-  const btn = document.getElementById("hwQuizSubmitBtn");
-  if (btn) btn.disabled = true;
+  // Don't pre-disable the submit button — hwHandleHwAnswer disables it only
+  // on correct so the user can re-submit after a wrong answer.
   hwHandleHwAnswer(hwQuizRecognizedResult2);
 }
 

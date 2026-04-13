@@ -263,6 +263,66 @@ def grade_short_name(grade):
     return grade[0] + grade[-1]
 
 
+# --- 分册复习 (per-book review) support ---
+# Each book is split into 7 daily portions. The split is deterministic per
+# grade (seeded by grade name) so all students get the same day-N content
+# and it stays stable across restarts.
+BOOK_REVIEW_DAYS = 7
+_BOOK_REVIEW_CACHE: dict = {}
+
+
+def _split_even(lst, n):
+    """Split lst into n contiguous chunks whose sizes differ by at most 1."""
+    if n <= 0:
+        return []
+    if not lst:
+        return [[] for _ in range(n)]
+    size, rem = divmod(len(lst), n)
+    out = []
+    i = 0
+    for k in range(n):
+        s = size + (1 if k < rem else 0)
+        out.append(lst[i:i + s])
+        i += s
+    return out
+
+
+def get_book_review_split(grade):
+    """Return {'recognition': [[day1],[day2],...,[day7]],
+               'writing':     [[day1],...,[day7]]} for the given book.
+
+    - recognition pool = 识字表 single chars + 写字表 whole words (Q1=A)
+    - writing pool     = 写字表 whole words (only used in 看拼音写字)
+    Each entry is a dict {'word': str, 'pinyin': str}.
+    Deterministic shuffle so every student sees the same day-N slice.
+    """
+    if grade in _BOOK_REVIEW_CACHE:
+        return _BOOK_REVIEW_CACHE[grade]
+
+    chars = CHARACTERS.get(grade, []) or []
+    words = WORDS.get(grade, []) or []
+
+    recognition_pool = [
+        {"word": c["char"], "pinyin": c["pinyin"]} for c in chars
+    ] + [
+        {"word": w["word"], "pinyin": w["pinyin"]} for w in words
+    ]
+    writing_pool = [
+        {"word": w["word"], "pinyin": w["pinyin"]} for w in words
+    ]
+
+    # Deterministic shuffle keyed on grade name
+    random.Random(f"book_review::rec::{grade}").shuffle(recognition_pool)
+    random.Random(f"book_review::wrt::{grade}").shuffle(writing_pool)
+
+    result = {
+        "recognition": _split_even(recognition_pool, BOOK_REVIEW_DAYS),
+        "writing": _split_even(writing_pool, BOOK_REVIEW_DAYS),
+    }
+    _BOOK_REVIEW_CACHE[grade] = result
+    return result
+
+
 DEFAULT_COIN_RULES = {
     "recognition": [
         {"streak": 15, "coins": 1},
@@ -572,6 +632,7 @@ def init_db():
             writing_lesson INTEGER NOT NULL DEFAULT 1,
             recognition_grade TEXT NOT NULL DEFAULT '',
             writing_grade TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT 'by_lesson',
             active INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
@@ -585,6 +646,7 @@ def init_db():
             type TEXT NOT NULL,
             grade TEXT NOT NULL,
             lesson_num INTEGER NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'by_lesson',
             status TEXT NOT NULL DEFAULT 'pending',
             total_questions INTEGER NOT NULL DEFAULT 0,
             correct_answers INTEGER NOT NULL DEFAULT 0,
@@ -630,6 +692,11 @@ def init_db():
         db.execute("ALTER TABLE homework_plans ADD COLUMN writing_grade TEXT NOT NULL DEFAULT ''")
         # Backfill: copy existing grade to both recognition_grade and writing_grade
         db.execute("UPDATE homework_plans SET recognition_grade = grade, writing_grade = grade")
+    # Migrate: add mode column for 分册复习 (book review) plans
+    if not _col_exists("homework_plans", "mode"):
+        db.execute("ALTER TABLE homework_plans ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
+    if not _col_exists("daily_assignments", "mode"):
+        db.execute("ALTER TABLE daily_assignments ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
     db.commit()
     db.close()
 
@@ -1758,27 +1825,42 @@ def _get_or_create_today_assignments(db, user_id):
         (user_id, today),
     ).fetchall()
 
+    plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+
     if not existing:
-        # First visit today: create initial assignments using cross-grade search
-        rec_base_grade = plan["recognition_grade"] or plan["grade"]
-        wrt_base_grade = plan["writing_grade"] or plan["grade"]
-        rec_grade, rec_ln = find_next_lesson_across_grades(
-            rec_base_grade, plan["recognition_lesson"], "识字")
-        wrt_grade, wrt_ln = find_next_lesson_across_grades(
-            wrt_base_grade, plan["writing_lesson"], "词语")
-        if rec_grade and rec_ln:
+        if plan_mode == "book_review":
+            # Day-of-7 schedule: recognition_lesson / writing_lesson store day 1..7
             db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'recognition', %s, %s)",
-                (user_id, today, rec_grade, rec_ln),
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'book_review')",
+                (user_id, today, plan["grade"], plan["recognition_lesson"]),
             )
-        if wrt_grade and wrt_ln:
             db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'writing', %s, %s)",
-                (user_id, today, wrt_grade, wrt_ln),
+                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'book_review')",
+                (user_id, today, plan["grade"], plan["writing_lesson"]),
             )
-        db.commit()
-    else:
+            db.commit()
+        else:
+            # First visit today: create initial assignments using cross-grade search
+            rec_base_grade = plan["recognition_grade"] or plan["grade"]
+            wrt_base_grade = plan["writing_grade"] or plan["grade"]
+            rec_grade, rec_ln = find_next_lesson_across_grades(
+                rec_base_grade, plan["recognition_lesson"], "识字")
+            wrt_grade, wrt_ln = find_next_lesson_across_grades(
+                wrt_base_grade, plan["writing_lesson"], "词语")
+            if rec_grade and rec_ln:
+                db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'recognition', %s, %s)",
+                    (user_id, today, rec_grade, rec_ln),
+                )
+            if wrt_grade and wrt_ln:
+                db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'writing', %s, %s)",
+                    (user_id, today, wrt_grade, wrt_ln),
+                )
+            db.commit()
+    elif plan_mode != "book_review":
         # Auto-create next lesson for each type if all of that type are completed
+        # (by_lesson only — book_review waits for admin to assign next day)
         changed = False
         for hw_type, content_key in [("recognition", "识字"), ("writing", "词语")]:
             type_assignments = [dict(r) for r in existing if r["type"] == hw_type]
@@ -1828,8 +1910,13 @@ def homework_today():
     if plan:
         rec_grade = plan["recognition_grade"] or plan["grade"]
         wrt_grade = plan["writing_grade"] or plan["grade"]
-        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+        if p_mode == "book_review":
+            rec_total = BOOK_REVIEW_DAYS
+            wrt_total = BOOK_REVIEW_DAYS
+        else:
+            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         plan_info = {
             "grade": plan["grade"],
             "grade_short": grade_short_name(plan["grade"]),
@@ -1840,6 +1927,7 @@ def homework_today():
             "rec_total_lessons": rec_total,
             "wrt_total_lessons": wrt_total,
             "total_lessons": max(rec_total, wrt_total),
+            "mode": p_mode,
         }
     # Check if there are wrong answers from previous days needing review
     today = date.today().isoformat()
@@ -1904,16 +1992,39 @@ def homework_start(assignment_id):
     grade = assignment["grade"]
     lesson_num = assignment["lesson_num"]
     hw_type = assignment["type"]
+    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
 
-    lessons = HOMEWORK_LESSONS.get(grade, {})
-    lesson_data = lessons.get(lesson_num, {})
+    # Collect raw entries for this assignment (both modes produce the same
+    # {word, pinyin} shape, question-building then diverges by hw_type)
+    if asn_mode == "book_review":
+        split = get_book_review_split(grade)
+        day = lesson_num
+        if not (1 <= day <= BOOK_REVIEW_DAYS):
+            return jsonify({"error": f"无效的复习天数: {day}"}), 400
+        if hw_type == "recognition":
+            entries = split["recognition"][day - 1]
+        elif hw_type == "writing":
+            entries = split["writing"][day - 1]
+        else:
+            entries = []
+        if not entries:
+            return jsonify({"error": "该天暂无数据"}), 400
+    else:
+        lessons = HOMEWORK_LESSONS.get(grade, {})
+        lesson_data = lessons.get(lesson_num, {})
+        if hw_type == "recognition":
+            entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
+            if not entries:
+                return jsonify({"error": "该课暂无识字数据"}), 400
+        elif hw_type == "writing":
+            entries = lesson_data.get("词语", [])
+            if not entries:
+                return jsonify({"error": "该课暂无词语数据"}), 400
+        else:
+            entries = []
 
     questions = []
     if hw_type == "recognition":
-        # Use combined 认字 pool (识字表 + 写字表)
-        entries = lesson_data.get("认字", []) or lesson_data.get("识字", [])
-        if not entries:
-            return jsonify({"error": "该课暂无识字数据"}), 400
         all_chars = CHARACTERS.get(grade, [])
         for entry in entries:
             word_hint_list = []
@@ -1925,6 +2036,9 @@ def homework_start(assignment_id):
             context_word = ""
             char_text = entry["word"]
             if len(char_text) == 1 and char_text in MULTI_PINYIN:
+                # context lookup uses lesson_num only in by_lesson mode; in
+                # book_review the lesson_num is a day index and the lookup
+                # would come up empty — passing it is harmless.
                 context_word = _find_context_word(
                     char_text, entry["pinyin"], grade, lesson_num)
             # Recognition homework uses pinyin typing mode (给汉字注音)
@@ -1941,9 +2055,6 @@ def homework_start(assignment_id):
             questions.append(q)
         random.shuffle(questions)
     elif hw_type == "writing":
-        entries = lesson_data.get("词语", [])
-        if not entries:
-            return jsonify({"error": "该课暂无词语数据"}), 400
         for entry in entries:
             questions.append({
                 "mode": "dictation_handwrite",
@@ -2093,12 +2204,14 @@ def homework_submit():
         (total_questions, correct_answers, time_spent, wrong_items, assignment_id),
     )
 
-    # Advance lesson if this assignment was completed (not a repeat)
+    # Advance lesson if this assignment was completed (not a repeat).
+    # book_review mode does NOT auto-advance — admin manually picks next day.
     plan = db.execute(
         "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (session["user_id"],),
     ).fetchone()
-    if plan and assignment["status"] == "pending":
+    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
+    if plan and assignment["status"] == "pending" and asn_mode != "book_review":
         content_key = "识字" if assignment["type"] == "recognition" else "词语"
         if assignment["type"] == "recognition":
             base_grade = plan["recognition_grade"] or plan["grade"]
@@ -2127,9 +2240,10 @@ def homework_submit():
     # Coins are now awarded in real-time via /api/streak during the quiz
     coins_earned = 0
 
-    # Auto-create next lesson assignment if this was first completion
+    # Auto-create next lesson assignment if this was first completion.
+    # Skipped in book_review mode (admin assigns next day manually, Q3=A).
     next_assignment = None
-    if plan and assignment["status"] == "pending":
+    if plan and assignment["status"] == "pending" and asn_mode != "book_review":
         today = date.today().isoformat()
         # Re-read the updated plan to get the advanced grade/lesson
         updated_plan = db.execute(
@@ -2220,8 +2334,13 @@ def homework_progress():
     for p in plans:
         rec_grade = p["recognition_grade"] or p["grade"]
         wrt_grade = p["writing_grade"] or p["grade"]
-        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        p_mode = p["mode"] if "mode" in p.keys() else "by_lesson"
+        if p_mode == "book_review":
+            rec_total = BOOK_REVIEW_DAYS
+            wrt_total = BOOK_REVIEW_DAYS
+        else:
+            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         rec_pct = round((p["recognition_lesson"] - 1) / rec_total * 100) if rec_total > 0 else 0
         wrt_pct = round((p["writing_lesson"] - 1) / wrt_total * 100) if wrt_total > 0 else 0
         overall_pct = round((rec_pct + wrt_pct) / 2)
@@ -2239,12 +2358,13 @@ def homework_progress():
             "writing_pct": wrt_pct,
             "overall_pct": overall_pct,
             "active": p["active"],
+            "mode": p_mode,
         })
 
     # Also include recent history (last 7 days)
     week_ago = (date.today() - timedelta(days=7)).isoformat()
     history = db.execute(
-        """SELECT date, type, grade, lesson_num, status, total_questions, correct_answers, time_spent
+        """SELECT date, type, grade, lesson_num, mode, status, total_questions, correct_answers, time_spent
            FROM daily_assignments WHERE user_id = %s AND date >= %s
            ORDER BY date DESC, type""",
         (session["user_id"], week_ago),
@@ -2257,7 +2377,12 @@ def homework_progress():
 
 @app.route("/api/admin/homework/plan", methods=["POST"])
 def admin_homework_plan():
-    """Create or update a homework plan for a user."""
+    """Create or update a homework plan for a user.
+
+    mode = 'by_lesson'   — recognition_lesson/writing_lesson are lesson numbers
+    mode = 'book_review' — recognition_lesson/writing_lesson are day numbers 1..7
+                           (content comes from get_book_review_split)
+    """
     if not session.get("is_admin"):
         return jsonify({"error": "无管理员权限"}), 403
 
@@ -2266,11 +2391,17 @@ def admin_homework_plan():
         return jsonify({"error": "无效的请求数据"}), 400
     user_id = data.get("user_id")
     grade = data.get("grade", "")
-    rec_lesson = data.get("recognition_lesson", 1)
-    wrt_lesson = data.get("writing_lesson", 1)
+    rec_lesson = int(data.get("recognition_lesson", 1) or 1)
+    wrt_lesson = int(data.get("writing_lesson", 1) or 1)
+    mode = data.get("mode", "by_lesson")
 
     if grade not in HOMEWORK_LESSONS:
         return jsonify({"error": f"无效年级: {grade}"}), 400
+    if mode not in ("by_lesson", "book_review"):
+        return jsonify({"error": f"无效模式: {mode}"}), 400
+    if mode == "book_review":
+        if not (1 <= rec_lesson <= BOOK_REVIEW_DAYS) or not (1 <= wrt_lesson <= BOOK_REVIEW_DAYS):
+            return jsonify({"error": f"分册复习的天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
 
     db = get_db()
     # Deactivate existing plans for this user
@@ -2283,8 +2414,8 @@ def admin_homework_plan():
     )
     # Create new plan with separate grade tracking for each type
     db.execute(
-        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade) VALUES (%s, %s, %s, %s, %s, %s)",
-        (user_id, grade, rec_lesson, wrt_lesson, grade, grade),
+        "INSERT INTO homework_plans (user_id, grade, recognition_lesson, writing_lesson, recognition_grade, writing_grade, mode) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (user_id, grade, rec_lesson, wrt_lesson, grade, grade, mode),
     )
     db.commit()
     return jsonify({"ok": True})
@@ -2308,21 +2439,23 @@ def admin_homework_repeat():
 
     # Create repeat for tomorrow
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
     # Remove any existing assignment of same type for tomorrow
     db.execute(
         "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s",
         (assignment["user_id"], tomorrow, assignment["type"]),
     )
     db.execute(
-        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s)",
-        (assignment["user_id"], tomorrow, assignment["type"], assignment["grade"], assignment["lesson_num"]),
+        "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, %s, %s, %s, %s)",
+        (assignment["user_id"], tomorrow, assignment["type"], assignment["grade"], assignment["lesson_num"], asn_mode),
     )
-    # Roll back the lesson advancement
+    # Roll back the lesson advancement (by_lesson only — book_review never
+    # auto-advanced, so nothing to roll back).
     plan = db.execute(
         "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
         (assignment["user_id"],),
     ).fetchone()
-    if plan:
+    if plan and asn_mode != "book_review":
         if assignment["type"] == "recognition":
             db.execute(
                 "UPDATE homework_plans SET recognition_lesson = %s, recognition_grade = %s WHERE id = %s",
@@ -2363,8 +2496,13 @@ def admin_homework_overview():
 
         rec_grade = plan["recognition_grade"] or plan["grade"]
         wrt_grade = plan["writing_grade"] or plan["grade"]
-        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+        if p_mode == "book_review":
+            rec_total = BOOK_REVIEW_DAYS
+            wrt_total = BOOK_REVIEW_DAYS
+        else:
+            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         result.append({
             "user_id": u["id"],
             "username": u["username"],
@@ -2377,6 +2515,7 @@ def admin_homework_overview():
             "rec_total_lessons": rec_total,
             "wrt_total_lessons": wrt_total,
             "total_lessons": max(rec_total, wrt_total),
+            "mode": p_mode,
             "today_assignments": [dict(a) for a in assignments],
         })
 
