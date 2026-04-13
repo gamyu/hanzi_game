@@ -4208,7 +4208,14 @@ async function loadHomeworkToday() {
     byType[a.type].push(a);
   });
 
-  let html = '<div class="hw-cards">';
+  let html = '';
+  if (plan.mode === "book_review") {
+    html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#ebf4ff,#f0f5ff);border:1px solid #bee3f8;border-radius:10px;color:#2c5282;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span style="font-size:18px">📚</span>
+      <span>当前为「分册复习」模式 · 每册分 7 天复习 · ${plan.grade_short || ''}</span>
+    </div>`;
+  }
+  html += '<div class="hw-cards">';
   for (const type of ["recognition", "writing"]) {
     const group = byType[type];
     if (!group) continue;
@@ -4222,14 +4229,16 @@ async function loadHomeworkToday() {
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
     const completedCount = group.filter(x => x.status === "completed").length;
+    const unit = a.mode === "book_review" ? "天" : "课";
+    const reviewBadge = a.mode === "book_review" ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>' : '';
 
     html += `<div class="hw-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startHwQuiz(${a.id})"`}>
       <div class="hw-card-icon">${icon}</div>
-      <div class="hw-card-type">${typeLabel}作业</div>
-      <div class="hw-card-info">第${a.lesson_num}课 · ${gradeShort(a.grade)} · ${modeLabel}</div>`;
+      <div class="hw-card-type">${typeLabel}作业${reviewBadge}</div>
+      <div class="hw-card-info">第${a.lesson_num}${unit} · ${gradeShort(a.grade)} · ${modeLabel}</div>`;
 
     if (isCompleted) {
-      html += `<div class="hw-card-status done">✓ 已完成 (今日${completedCount}课)</div>
+      html += `<div class="hw-card-status done">✓ 已完成 (今日${completedCount}${unit})</div>
         <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
     } else {
       const hasSavedProgress = a.saved_progress && a.saved_progress !== '';
@@ -4240,7 +4249,8 @@ async function loadHomeworkToday() {
           savedInfo = sp.currentIndex ? ` (已做${sp.currentIndex}题)` : '';
         } catch(e) {}
       }
-      html += `<div class="hw-card-status pending">${hasSavedProgress ? '▶ 继续' + savedInfo : (completedCount > 0 ? '继续下一课' : '待完成')}</div>`;
+      const continueLabel = a.mode === "book_review" ? '继续下一天' : '继续下一课';
+      html += `<div class="hw-card-status pending">${hasSavedProgress ? '▶ 继续' + savedInfo : (completedCount > 0 ? continueLabel : '待完成')}</div>`;
     }
     // Preview button for recognition homework
     if (type === "recognition") {
