@@ -1,0 +1,375 @@
+<!--
+  Copyright 2026 Huan Jin
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>家长控制</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh; color: #2d3748; padding: 20px 12px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .top-nav {
+    width: 100%; max-width: 860px; display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 14px;
+  }
+  .top-nav a, .top-nav button {
+    color: #fff; font-size: 14px; background: transparent; border: none;
+    cursor: pointer; text-decoration: none; opacity: 0.92;
+  }
+  .top-nav a:hover, .top-nav button:hover { opacity: 1; text-decoration: underline; }
+  h1 { color: #fff; font-size: 26px; font-weight: 900; margin-bottom: 4px; text-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+  .subtitle { color: rgba(255,255,255,0.88); font-size: 14px; margin-bottom: 18px; }
+
+  .card {
+    width: 100%; max-width: 760px; background: #fff; border-radius: 14px;
+    padding: 20px 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); margin-bottom: 14px;
+  }
+  .card h2 { font-size: 17px; color: #2d3748; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
+  label { display:block; font-size: 13px; color:#4a5568; margin: 10px 0 4px; font-weight: 600; }
+  input, select {
+    width: 100%; padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 8px;
+    font-size: 14px; background: #f7fafc; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: #667eea; background: #fff; box-shadow: 0 0 0 3px rgba(102,126,234,0.15); }
+
+  button.primary {
+    background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
+    border: none; padding: 9px 22px; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.6; cursor: not-allowed; }
+  button.secondary {
+    background: #fff; color: #5a67d8; border: 1px solid #cbd5e0;
+    padding: 9px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .msg { font-size: 13px; padding: 6px 10px; border-radius: 6px; margin-top: 6px; }
+  .msg.ok { background: #f0fff4; color: #22543d; border: 1px solid #9ae6b4; }
+  .msg.err { background: #fff5f5; color: #822727; border: 1px solid #feb2b2; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .col { flex: 1 1 140px; min-width: 120px; }
+  .col-2 { flex: 2 1 280px; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 8px; }
+  .stat {
+    background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .stat .label { font-size: 12px; color: #718096; }
+  .stat .val { font-size: 20px; font-weight: 800; color: #2d3748; margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #edf2f7; }
+  th { background: #f7fafc; text-align: left; color: #4a5568; font-weight: 700; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+  .badge.review { background: #ebf4ff; color: #5a67d8; }
+  .badge.done { background: #c6f6d5; color: #22543d; }
+  .badge.pending { background: #feebc8; color: #7b341e; }
+
+  .hidden { display: none; }
+
+  @media (max-width: 560px) {
+    .card { padding: 16px 14px; }
+    h1 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top-nav">
+  <a href="/">← 返回游戏</a>
+  <span id="navUser"></span>
+</div>
+
+<h1>👨‍👩‍👧 家长控制</h1>
+<div class="subtitle" id="subtitle">使用孩子账号的「家长密码」登录查看进度并布置作业</div>
+
+<!-- Login card -->
+<div class="card" id="loginCard">
+  <h2>家长登录</h2>
+  <div class="row">
+    <div class="col col-2">
+      <label for="pUsername">孩子的用户名</label>
+      <input id="pUsername" type="text" maxlength="50" placeholder="孩子注册的用户名" autocomplete="username">
+    </div>
+    <div class="col col-2">
+      <label for="pPassword">家长密码</label>
+      <input id="pPassword" type="password" placeholder="由孩子在设置中为家长创建" autocomplete="current-password">
+    </div>
+  </div>
+  <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
+    <button class="primary" onclick="doParentLogin()">登录</button>
+    <span style="font-size:12px;color:#718096">忘记密码？让孩子在游戏主页的「家长密码」中重新设置</span>
+  </div>
+  <div id="loginMsg" class="msg" style="display:none"></div>
+</div>
+
+<!-- Dashboard -->
+<div id="dashboard" class="hidden">
+  <div class="card">
+    <h2>孩子概况 <span id="childName" style="font-size:14px;color:#5a67d8;margin-left:6px"></span></h2>
+    <div class="stat-grid" id="statGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>布置 / 修改作业计划</h2>
+    <div class="row">
+      <div class="col">
+        <label for="planMode">模式</label>
+        <select id="planMode" onchange="onPlanModeChange()">
+          <option value="by_lesson">按课布置</option>
+          <option value="book_review">分册复习 (7天)</option>
+        </select>
+      </div>
+      <div class="col">
+        <label for="planGrade">年级册</label>
+        <select id="planGrade"></select>
+      </div>
+      <div class="col">
+        <label for="planRec">认字 <span id="recUnitLabel">课</span></label>
+        <input id="planRec" type="number" min="1" value="1">
+      </div>
+      <div class="col">
+        <label for="planWrt">写字 <span id="wrtUnitLabel">课</span></label>
+        <input id="planWrt" type="number" min="1" value="1">
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="primary" onclick="savePlan()">保存计划</button>
+      <span id="planMsg" style="font-size:13px;color:#4a5568"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>今日作业</h2>
+    <div id="todayBody">加载中...</div>
+  </div>
+
+  <div class="card">
+    <h2>近两周作业记录</h2>
+    <div id="historyBody">加载中...</div>
+  </div>
+</div>
+
+<script>
+const GRADES = {{ grades|tojson }};
+const BOOK_REVIEW_DAYS = {{ book_review_days }};
+
+let parentCsrf = "";
+
+async function api(path, opts = {}) {
+  opts.method = opts.method || "GET";
+  opts.headers = Object.assign({"Content-Type": "application/json"}, opts.headers || {});
+  if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
+  if (parentCsrf && opts.method !== "GET") opts.headers["X-CSRF-Token"] = parentCsrf;
+  const res = await fetch(path, opts);
+  let data = null;
+  try { data = await res.json(); } catch(e) {}
+  return { ok: res.ok, status: res.status, data: data || {} };
+}
+
+async function checkParentSession() {
+  const { data } = await api("/api/parent/me");
+  if (data.logged_in) {
+    showDashboard(data.child_username);
+    await loadOverview();
+  }
+}
+
+async function doParentLogin() {
+  const username = document.getElementById("pUsername").value.trim();
+  const password = document.getElementById("pPassword").value;
+  const msg = document.getElementById("loginMsg");
+  msg.style.display = "none";
+  if (!username || !password) {
+    msg.className = "msg err"; msg.textContent = "请输入用户名和家长密码"; msg.style.display = ""; return;
+  }
+  const { ok, data } = await api("/api/parent/login", { method: "POST", body: { username, password } });
+  if (!ok || data.error) {
+    msg.className = "msg err"; msg.textContent = data.error || "登录失败"; msg.style.display = ""; return;
+  }
+  parentCsrf = data.csrf_token || "";
+  showDashboard(data.child_username);
+  await loadOverview();
+}
+
+async function doParentLogout() {
+  await api("/api/parent/logout", { method: "POST" });
+  location.reload();
+}
+
+function showDashboard(childUsername) {
+  document.getElementById("loginCard").classList.add("hidden");
+  document.getElementById("dashboard").classList.remove("hidden");
+  document.getElementById("childName").textContent = childUsername || "";
+  document.getElementById("subtitle").textContent = "你正在以 " + childUsername + " 的家长身份查看";
+  document.getElementById("navUser").innerHTML =
+    `<button onclick="doParentLogout()">退出家长</button>`;
+  // Populate grade dropdown
+  const gSel = document.getElementById("planGrade");
+  gSel.innerHTML = GRADES.map(g => `<option value="${g}">${g}</option>`).join("");
+}
+
+function gradeShort(g) { return g ? g[0] + g[g.length-1] : ""; }
+function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+
+async function loadOverview() {
+  const { data } = await api("/api/parent/overview");
+  if (data.error) {
+    alert(data.error); return;
+  }
+  // Stats
+  const coin_by_src = {};
+  (data.coin_totals || []).forEach(t => coin_by_src[t.source] = t);
+  const coinGame = (coin_by_src.game && coin_by_src.game.earned) || 0;
+  const coinHw   = (coin_by_src.homework && coin_by_src.homework.earned) || 0;
+  const coinSpent = (coin_by_src.shop && coin_by_src.shop.spent) || 0;
+  const planStr = data.plan
+    ? `${data.plan.grade_short || ""} ${data.plan.mode === "book_review" ? "分册复习" : "按课布置"}`
+    : "未布置";
+  const recProgress = data.plan
+    ? `认 ${data.plan.recognition_lesson - 1}/${data.plan.rec_total_lessons}${data.plan.mode === "book_review" ? "天" : "课"}`
+    : "-";
+  const wrtProgress = data.plan
+    ? `写 ${data.plan.writing_lesson - 1}/${data.plan.wrt_total_lessons}${data.plan.mode === "book_review" ? "天" : "课"}`
+    : "-";
+
+  document.getElementById("statGrid").innerHTML = `
+    <div class="stat"><div class="label">金币余额</div><div class="val">${data.user.coins || 0}</div></div>
+    <div class="stat"><div class="label">已兑换游戏时间</div><div class="val">${data.user.game_minutes || 0} 分钟</div></div>
+    <div class="stat"><div class="label">金币来源</div><div class="val" style="font-size:14px">游戏+${coinGame} / 作业+${coinHw} / 消费-${coinSpent}</div></div>
+    <div class="stat"><div class="label">错题数</div><div class="val">${data.wrong_count}</div></div>
+    <div class="stat"><div class="label">已掌握</div><div class="val">${data.mastered_count}</div></div>
+    <div class="stat"><div class="label">作业计划</div><div class="val" style="font-size:14px">${planStr}</div></div>
+    <div class="stat"><div class="label">进度</div><div class="val" style="font-size:14px">${recProgress} · ${wrtProgress}</div></div>
+  `;
+
+  // Pre-fill plan form from current plan
+  if (data.plan) {
+    document.getElementById("planMode").value = data.plan.mode || "by_lesson";
+    document.getElementById("planGrade").value = data.plan.grade || (GRADES[0] || "");
+    document.getElementById("planRec").value = data.plan.recognition_lesson || 1;
+    document.getElementById("planWrt").value = data.plan.writing_lesson || 1;
+  }
+  onPlanModeChange();
+
+  // Today
+  const today = data.today_assignments || [];
+  const todayBody = document.getElementById("todayBody");
+  if (today.length === 0) {
+    todayBody.innerHTML = '<div style="color:#a0aec0;padding:8px 0">今日暂无作业</div>';
+  } else {
+    todayBody.innerHTML = `<table>
+      <tr><th>类型</th><th>内容</th><th>状态</th><th>成绩</th><th>用时</th></tr>
+      ${today.map(a => rowAssignment(a)).join("")}
+    </table>`;
+  }
+
+  // History
+  const hist = (data.recent_assignments || []).filter(a => a.status === "completed");
+  const histBody = document.getElementById("historyBody");
+  if (hist.length === 0) {
+    histBody.innerHTML = '<div style="color:#a0aec0;padding:8px 0">暂无完成记录</div>';
+  } else {
+    histBody.innerHTML = `<table>
+      <tr><th>日期</th><th>类型</th><th>内容</th><th>正确率</th><th>用时</th></tr>
+      ${hist.map(a => rowHistory(a)).join("")}
+    </table>`;
+  }
+}
+
+function rowAssignment(a) {
+  const tl = a.type === "recognition" ? "认字" : "写字";
+  const unit = a.mode === "book_review" ? "天" : "课";
+  const badge = a.mode === "book_review" ? '<span class="badge review">分册复习</span>' : '';
+  const status = a.status === "completed"
+    ? '<span class="badge done">✓ 已完成</span>'
+    : '<span class="badge pending">待完成</span>';
+  const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
+  const scoreCell = a.status === "completed" ? `${a.correct_answers}/${a.total_questions} (${acc}%)` : "-";
+  const mins = Math.floor(a.time_spent / 60), secs = a.time_spent % 60;
+  const timeCell = a.status === "completed" ? `${mins}分${secs}秒` : "-";
+  return `<tr>
+    <td>${tl} ${badge}</td>
+    <td>${gradeShort(a.grade)} 第${a.lesson_num}${unit}</td>
+    <td>${status}</td>
+    <td>${scoreCell}</td>
+    <td>${timeCell}</td>
+  </tr>`;
+}
+
+function rowHistory(a) {
+  const tl = a.type === "recognition" ? "认字" : "写字";
+  const unit = a.mode === "book_review" ? "天" : "课";
+  const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
+  const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
+  const mins = Math.floor(a.time_spent / 60), secs = a.time_spent % 60;
+  return `<tr>
+    <td>${a.date}</td>
+    <td>${tl}</td>
+    <td>${gradeShort(a.grade)} 第${a.lesson_num}${unit}</td>
+    <td style="color:${accColor};font-weight:700">${acc}% (${a.correct_answers}/${a.total_questions})</td>
+    <td>${mins}分${secs}秒</td>
+  </tr>`;
+}
+
+function onPlanModeChange() {
+  const mode = document.getElementById("planMode").value;
+  const unit = mode === "book_review" ? "天" : "课";
+  document.getElementById("recUnitLabel").textContent = unit;
+  document.getElementById("wrtUnitLabel").textContent = unit;
+  const rec = document.getElementById("planRec");
+  const wrt = document.getElementById("planWrt");
+  if (mode === "book_review") {
+    rec.min = 1; rec.max = BOOK_REVIEW_DAYS;
+    wrt.min = 1; wrt.max = BOOK_REVIEW_DAYS;
+    if (+rec.value > BOOK_REVIEW_DAYS) rec.value = 1;
+    if (+wrt.value > BOOK_REVIEW_DAYS) wrt.value = 1;
+  } else {
+    rec.min = 1; rec.removeAttribute("max");
+    wrt.min = 1; wrt.removeAttribute("max");
+  }
+}
+
+async function savePlan() {
+  const body = {
+    mode: document.getElementById("planMode").value,
+    grade: document.getElementById("planGrade").value,
+    recognition_lesson: +document.getElementById("planRec").value,
+    writing_lesson: +document.getElementById("planWrt").value,
+  };
+  const msg = document.getElementById("planMsg");
+  msg.textContent = "保存中...";
+  const { ok, data } = await api("/api/parent/homework/plan", { method: "POST", body });
+  if (!ok || data.error) {
+    msg.style.color = "#e53e3e"; msg.textContent = data.error || "保存失败"; return;
+  }
+  msg.style.color = "#38a169"; msg.textContent = "✓ 已保存，孩子下次打开作业即生效";
+  await loadOverview();
+  setTimeout(() => msg.textContent = "", 3000);
+}
+
+// Login on Enter
+["pUsername", "pPassword"].forEach(id => {
+  document.getElementById(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") doParentLogin();
+  });
+});
+
+checkParentSession();
+</script>
+
+</body>
+</html>

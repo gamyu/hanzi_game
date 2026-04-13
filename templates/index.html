@@ -1495,6 +1495,24 @@
   </div>
 </div>
 
+<!-- Parent password modal (user sets/changes the password that parents use) -->
+<div class="modal-overlay hidden" id="parentPwModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:420px">
+    <h2>家长密码</h2>
+    <div style="font-size:13px;color:#718096;margin-bottom:12px">
+      家长使用你的用户名 + 家长密码登录 <a href="/parent" target="_blank" style="color:#5a67d8">/parent</a> 页面，可以查看你的学习进度并布置作业。留空保存将关闭家长登录。
+    </div>
+    <div id="parentPwStatus" style="font-size:13px;margin-bottom:8px"></div>
+    <label style="font-size:13px;color:#4a5568;display:block;margin-bottom:4px">当前登录密码 <span style="color:#e53e3e">*</span></label>
+    <input type="password" id="parentPwCurrent" placeholder="验证身份用">
+    <label style="font-size:13px;color:#4a5568;display:block;margin:10px 0 4px">新的家长密码 <span style="color:#a0aec0;font-weight:400">(留空表示关闭家长登录)</span></label>
+    <input type="password" id="parentPwNew" placeholder="4位以上" onkeydown="if(event.key==='Enter')submitParentPassword()">
+    <div class="modal-error" id="parentPwMsg" style="margin-top:8px"></div>
+    <button class="modal-submit" onclick="submitParentPassword()">保存</button>
+    <button class="modal-close" onclick="document.getElementById('parentPwModal').classList.add('hidden')">关闭</button>
+  </div>
+</div>
+
 <!-- Admin login modal -->
 <div class="modal-overlay hidden" id="adminLoginModal" onclick="if(event.target===this)this.classList.add('hidden')">
   <div class="modal">
@@ -1773,12 +1791,14 @@ function renderUserBar() {
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
+      <button class="user-btn" onclick="showParentPasswordModal()">家长密码</button>
       <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
       ${adminBtn}
     `;
   } else {
     bar.innerHTML = `
+      <button class="user-btn" onclick="location.href='/parent'">家长登录</button>
       <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
       <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
     `;
@@ -1797,6 +1817,48 @@ function showAuthModal() {
 
 function hideAuthModal() {
   document.getElementById("authModal").classList.add("hidden");
+}
+
+async function showParentPasswordModal() {
+  document.getElementById("parentPwCurrent").value = "";
+  document.getElementById("parentPwNew").value = "";
+  document.getElementById("parentPwMsg").textContent = "";
+  const statusEl = document.getElementById("parentPwStatus");
+  statusEl.textContent = "加载中...";
+  statusEl.style.color = "#718096";
+  document.getElementById("parentPwModal").classList.remove("hidden");
+  try {
+    const res = await fetch("/api/user/parent_status");
+    const data = await res.json();
+    if (data.has_parent_password) {
+      statusEl.innerHTML = '✓ 家长密码已设置 — 重新输入新密码即可修改，留空即可关闭';
+      statusEl.style.color = "#38a169";
+    } else {
+      statusEl.innerHTML = '⚠ 尚未设置家长密码';
+      statusEl.style.color = "#d69e2e";
+    }
+  } catch (e) {
+    statusEl.textContent = "";
+  }
+  setTimeout(() => document.getElementById("parentPwCurrent").focus(), 50);
+}
+
+async function submitParentPassword() {
+  const current = document.getElementById("parentPwCurrent").value;
+  const next = document.getElementById("parentPwNew").value;
+  const msg = document.getElementById("parentPwMsg");
+  msg.style.color = "#e53e3e"; msg.textContent = "";
+  if (!current) { msg.textContent = "请输入当前登录密码"; return; }
+  const res = await fetch("/api/user/set_parent_password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: current, parent_password: next }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) { msg.textContent = data.error || "保存失败"; return; }
+  msg.style.color = "#38a169";
+  msg.textContent = data.cleared ? "✓ 家长登录已关闭" : "✓ 家长密码已保存";
+  setTimeout(() => document.getElementById("parentPwModal").classList.add("hidden"), 1200);
 }
 
 function switchTab(tab) {

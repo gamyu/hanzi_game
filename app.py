@@ -909,6 +909,10 @@ def init_db():
         db.execute("ALTER TABLE users ADD COLUMN recognition_coins_awarded INTEGER NOT NULL DEFAULT 0")
     if not _col_exists("users", "writing_coins_awarded"):
         db.execute("ALTER TABLE users ADD COLUMN writing_coins_awarded INTEGER NOT NULL DEFAULT 0")
+    # Parental control: each user can set a separate password that grants
+    # a read+plan-edit session scoped to just that user's data.
+    if not _col_exists("users", "parent_password_hash"):
+        db.execute("ALTER TABLE users ADD COLUMN parent_password_hash TEXT NOT NULL DEFAULT ''")
     # Migrate daily_assignments: add saved_progress for resume support
     if not _col_exists("daily_assignments", "saved_progress"):
         db.execute("ALTER TABLE daily_assignments ADD COLUMN saved_progress TEXT NOT NULL DEFAULT ''")
@@ -1345,6 +1349,251 @@ def me():
     if "user_id" not in session:
         return jsonify({"logged_in": False})
     return jsonify({"logged_in": True, "username": session["username"]})
+
+
+# ---------------------------------------------------------------------------
+# Parental control
+# ---------------------------------------------------------------------------
+
+def _current_parent_user_id():
+    """Return the child user_id this session is acting as a parent for, or None."""
+    return session.get("parent_user_id")
+
+
+@app.route("/api/user/set_parent_password", methods=["POST"])
+def set_parent_password():
+    """Logged-in user sets / changes their parent password. Empty string
+    clears it (disables parent login for this user)."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    new_pw = data.get("parent_password") or ""
+    current_pw = data.get("current_password") or ""
+
+    db = get_db()
+    row = db.execute(
+        "SELECT password_hash FROM users WHERE id = %s",
+        (session["user_id"],),
+    ).fetchone()
+    if not row or not verify_password(current_pw, row["password_hash"]):
+        return jsonify({"error": "当前登录密码错误"}), 403
+
+    if new_pw == "":
+        # Clear — disable parent login
+        db.execute(
+            "UPDATE users SET parent_password_hash = '' WHERE id = %s",
+            (session["user_id"],),
+        )
+        db.commit()
+        return jsonify({"ok": True, "cleared": True})
+
+    if len(new_pw) < 4:
+        return jsonify({"error": "家长密码至少需要4个字符"}), 400
+
+    db.execute(
+        "UPDATE users SET parent_password_hash = %s WHERE id = %s",
+        (hash_password(new_pw), session["user_id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/user/parent_status")
+def user_parent_status():
+    """Tell the logged-in user whether a parent password is set."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    row = db.execute(
+        "SELECT parent_password_hash FROM users WHERE id = %s",
+        (session["user_id"],),
+    ).fetchone()
+    return jsonify({"has_parent_password": bool(row and row["parent_password_hash"])})
+
+
+@app.route("/api/parent/login", methods=["POST"])
+def parent_login():
+    if _rate_limited(f"parent_login:{request.remote_addr}", 10, 60):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+    data = request.get_json(force=True, silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    if not username or not password:
+        return jsonify({"error": "用户名和家长密码不能为空"}), 400
+    db = get_db()
+    row = db.execute(
+        "SELECT id, username, parent_password_hash FROM users WHERE username = %s",
+        (username,),
+    ).fetchone()
+    if not row or not row["parent_password_hash"]:
+        return jsonify({"error": "该用户未设置家长密码"}), 401
+    if not verify_password(password, row["parent_password_hash"]):
+        return jsonify({"error": "家长密码错误"}), 401
+
+    # Parent session is separate from the child's login session — clear
+    # both sides to avoid any confusion between the two roles.
+    session.clear()
+    session.permanent = True
+    session["parent_user_id"] = row["id"]
+    session["parent_child_username"] = row["username"]
+    return jsonify({
+        "ok": True,
+        "child_id": row["id"],
+        "child_username": row["username"],
+        "csrf_token": _generate_csrf_token(),
+    })
+
+
+@app.route("/api/parent/logout", methods=["POST"])
+def parent_logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/parent/me")
+def parent_me():
+    uid = _current_parent_user_id()
+    if not uid:
+        return jsonify({"logged_in": False})
+    return jsonify({
+        "logged_in": True,
+        "child_id": uid,
+        "child_username": session.get("parent_child_username", ""),
+    })
+
+
+@app.route("/api/parent/overview")
+def parent_overview():
+    uid = _current_parent_user_id()
+    if not uid:
+        return jsonify({"error": "需要家长登录"}), 401
+    db = get_db()
+    user = db.execute(
+        "SELECT id, username, coins, game_minutes, created_at FROM users WHERE id = %s",
+        (uid,),
+    ).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+
+    plan = db.execute(
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
+        (uid,),
+    ).fetchone()
+    plan_dict = dict(plan) if plan else None
+    if plan_dict:
+        rec_grade = plan_dict.get("recognition_grade") or plan_dict.get("grade")
+        wrt_grade = plan_dict.get("writing_grade") or plan_dict.get("grade")
+        p_mode = plan_dict.get("mode", "by_lesson")
+        if p_mode == "book_review":
+            rec_total = BOOK_REVIEW_DAYS
+            wrt_total = BOOK_REVIEW_DAYS
+        else:
+            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        plan_dict["rec_total_lessons"] = rec_total
+        plan_dict["wrt_total_lessons"] = wrt_total
+        plan_dict["grade_short"] = grade_short_name(plan_dict["grade"])
+
+    today = date.today().isoformat()
+    today_assignments = db.execute(
+        """SELECT id, type, grade, lesson_num, mode, status,
+                  total_questions, correct_answers, time_spent
+           FROM daily_assignments
+           WHERE user_id = %s AND date = %s
+           ORDER BY type""",
+        (uid, today),
+    ).fetchall()
+
+    recent_assignments = db.execute(
+        """SELECT date, type, grade, lesson_num, mode, status,
+                  total_questions, correct_answers, time_spent
+           FROM daily_assignments
+           WHERE user_id = %s AND date >= %s
+           ORDER BY date DESC, type""",
+        (uid, (date.today() - timedelta(days=14)).isoformat()),
+    ).fetchall()
+
+    wrong_count_row = db.execute(
+        "SELECT COUNT(*) as cnt FROM wrong_answers WHERE user_id = %s",
+        (uid,),
+    ).fetchone()
+    mastered_count_row = db.execute(
+        "SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = %s",
+        (uid,),
+    ).fetchone()
+
+    coin_totals = db.execute(
+        """SELECT source,
+                  COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
+                  COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0) as spent
+           FROM coin_transactions WHERE user_id = %s GROUP BY source""",
+        (uid,),
+    ).fetchall()
+
+    return jsonify({
+        "user": dict(user),
+        "plan": plan_dict,
+        "today_assignments": [dict(r) for r in today_assignments],
+        "recent_assignments": [dict(r) for r in recent_assignments],
+        "wrong_count": wrong_count_row["cnt"] if wrong_count_row else 0,
+        "mastered_count": mastered_count_row["cnt"] if mastered_count_row else 0,
+        "coin_totals": [dict(r) for r in coin_totals],
+        "grades": list(CHARACTERS.keys()),
+        "book_review_days": BOOK_REVIEW_DAYS,
+    })
+
+
+@app.route("/api/parent/homework/plan", methods=["POST"])
+def parent_set_plan():
+    """Set/update the child's homework plan. Mirrors the admin endpoint but
+    scoped to the parent's own child."""
+    uid = _current_parent_user_id()
+    if not uid:
+        return jsonify({"error": "需要家长登录"}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    grade = data.get("grade", "")
+    rec_grade = data.get("recognition_grade") or grade
+    wrt_grade = data.get("writing_grade") or grade
+    rec_lesson = int(data.get("recognition_lesson", 1) or 1)
+    wrt_lesson = int(data.get("writing_lesson", 1) or 1)
+    mode = data.get("mode", "by_lesson")
+    if mode not in ("by_lesson", "book_review"):
+        mode = "by_lesson"
+    if grade not in CHARACTERS:
+        return jsonify({"error": "年级无效"}), 400
+    if mode == "book_review":
+        if not (1 <= rec_lesson <= BOOK_REVIEW_DAYS and 1 <= wrt_lesson <= BOOK_REVIEW_DAYS):
+            return jsonify({"error": f"分册复习天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
+
+    db = get_db()
+    # Deactivate existing plans
+    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s", (uid,))
+    # Insert new plan
+    db.execute(
+        """INSERT INTO homework_plans
+                (user_id, grade, recognition_grade, writing_grade,
+                 recognition_lesson, writing_lesson, mode, active)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, 1)""",
+        (uid, grade, rec_grade, wrt_grade, rec_lesson, wrt_lesson, mode),
+    )
+    # Clear today's pending assignments so new plan takes effect immediately
+    today = date.today().isoformat()
+    db.execute(
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending'",
+        (uid, today),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/parent")
+def parent_page():
+    return render_template(
+        "parent.html",
+        grades=list(CHARACTERS.keys()),
+        book_review_days=BOOK_REVIEW_DAYS,
+    )
 
 
 def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str) -> tuple[bool, str]:
