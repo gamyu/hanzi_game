@@ -1404,7 +1404,24 @@ def review_question():
 
     # Build a "correct" entry compatible with _pick_distractors
     correct = {"char": character, "pinyin": pinyin, "words": words.split("、") if words else []}
-    others = [c for c in char_list if c["char"] != character]
+    # For multi-char questions the single-char CHARACTERS pool has no
+    # length-matching candidates. Augment with multi-char 词语 from WORDS
+    # (and, failing that, from all grades) so _pick_distractors can satisfy
+    # the 字数匹配 constraint.
+    if len(character) > 1:
+        others = []
+        for w in WORDS.get(grade, []):
+            if w["word"] != character and len(w["word"]) == len(character):
+                others.append({"char": w["word"], "pinyin": w["pinyin"], "words": []})
+        if len(others) < 4:
+            for g, ws in WORDS.items():
+                if g == grade:
+                    continue
+                for w in ws:
+                    if w["word"] != character and len(w["word"]) == len(character):
+                        others.append({"char": w["word"], "pinyin": w["pinyin"], "words": []})
+    else:
+        others = [c for c in char_list if c["char"] != character]
 
     if mode == "char_to_pinyin":
         distractors = _pick_distractors(correct, others, key="pinyin")

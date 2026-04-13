@@ -5233,13 +5233,19 @@ function startHwReview() {
 
   if (questions.length === 0) { hwBackToToday(); return; }
 
-  // For char_to_pinyin, generate options
+  // For char_to_pinyin, generate options.
+  // 字数必须匹配: the pool for distractors is filtered so every option has the
+  // same syllable count as the correct answer (single-char ↔ single-char,
+  // 2-syllable ↔ 2-syllable, etc.). Mixing lengths produces obviously wrong
+  // options the student can rule out without knowing the answer.
+  const syllableCount = s => (s || "").trim().split(/\s+/).filter(Boolean).length;
   const allPinyins = hwReviewItems.map(i => i.pinyin).filter(Boolean);
   questions.forEach(q => {
     if (q.mode === "char_to_pinyin") {
+      const targetSylls = syllableCount(q.answer);
       const opts = new Set([q.answer]);
-      const pool = allPinyins.filter(p => p !== q.answer);
-      while (opts.size < Math.min(4, allPinyins.length) && pool.length > 0) {
+      const pool = allPinyins.filter(p => p !== q.answer && syllableCount(p) === targetSylls);
+      while (opts.size < Math.min(4, pool.length + 1) && pool.length > 0) {
         const idx = Math.floor(Math.random() * pool.length);
         opts.add(pool.splice(idx, 1)[0]);
       }
