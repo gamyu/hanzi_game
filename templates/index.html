@@ -2853,13 +2853,13 @@ function renderQuestion(q) {
     const cellsHTML = qChars.map((ch, i) => `
       <div class="game-pinyin-cell">
         <div class="game-pinyin-cell-char">${ch}</div>
-        <div class="pinyin-fourline-box" id="gamePyBox${i}" style="width:140px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+        <div class="pinyin-fourline-box" id="gamePyBox${i}" style="width:200px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
           <div class="pinyin-fourline-lines">
             <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
           </div>
           <canvas id="gamePyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
-        <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
+        <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:200px">
           <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="gamePyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
@@ -2891,6 +2891,7 @@ function renderQuestion(q) {
     gamePinyinCharCount = qChars.length;
     gamePinyinCellStrokes = Array.from({ length: qChars.length }, () => []);
     gamePinyinCellRecognized = Array.from({ length: qChars.length }, () => '');
+    gamePinyinCellCandidates = Array.from({ length: qChars.length }, () => []);
     gamePinyinToneSelections = Array.from({ length: qChars.length }, () => null);
     gamePinyinBaseInputs = Array.from({ length: qChars.length }, () => '');
     gamePinyinState = { recognized: '' };
@@ -3094,12 +3095,12 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    // Keep answering enabled — user can rewrite and re-submit via 确认.
-    // Clear the canvas so remaining old strokes don't combine with the
-    // retry strokes and get recognized as two separate characters.
+    // Keep answering enabled AND keep existing strokes — user can use the
+    // eraser to fix the mistake themselves instead of restarting. (Earlier
+    // we auto-cleared to avoid stroke overlap on re-recognition, but the
+    // user prefers to preserve their work.)
     state.answering = true;
     hwRecognizedResult = '';
-    clearCanvas();
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = false;
     state.combo = 0;
@@ -3119,7 +3120,7 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
     const recEl = document.getElementById("hwRecognized");
-    if (recEl) recEl.textContent = "画布已清空，请重写后点确认";
+    if (recEl) recEl.textContent = "请用橡皮擦修改后再点确认";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -3503,6 +3504,7 @@ let gamePinyinState = { recognized: '' };
 let gamePinyinCharCount = 0;
 let gamePinyinCellStrokes = [];
 let gamePinyinCellRecognized = [];
+let gamePinyinCellCandidates = [];  // top-N recognition candidates per cell
 let gamePinyinToneSelections = [];
 let gamePinyinBaseInputs = [];
 let gamePinyinDrawingState = []; // per-cell drawing state
@@ -3660,24 +3662,30 @@ async function recognizeGamePinyin() {
   if (recEl) recEl.textContent = "识别中...";
   try {
     const results = await Promise.all(gamePinyinCellStrokes.map(async (strokes, i) => {
-      if (strokes.length === 0) return '';
+      if (strokes.length === 0) return { top: '', candidates: [] };
       const box = document.getElementById(`gamePyBox${i}`);
-      const w = box ? box.clientWidth : 140;
+      const w = box ? box.clientWidth : 200;
       const h = box ? box.clientHeight : 180;
       const res = await fetch("/api/handwriting", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ strokes, width: w, height: h }),
       });
       const data = await res.json();
-      try { if (data[0] === "SUCCESS") return data[1][0][1][0]; } catch(e) {}
-      return '';
+      try {
+        if (data[0] === "SUCCESS") {
+          const cands = (data[1][0][1] || []).filter(Boolean);
+          return { top: cands[0] || '', candidates: cands };
+        }
+      } catch(e) {}
+      return { top: '', candidates: [] };
     }));
     for (let i = 0; i < gamePinyinCharCount; i++) {
-      gamePinyinCellRecognized[i] = results[i] || '';
+      gamePinyinCellRecognized[i] = results[i].top || '';
+      gamePinyinCellCandidates[i] = results[i].candidates || [];
       const resEl = document.getElementById(`gamePyResult${i}`);
-      if (resEl) resEl.textContent = results[i] || (gamePinyinCellStrokes[i].length > 0 ? '?' : '');
+      if (resEl) resEl.textContent = results[i].top || (gamePinyinCellStrokes[i].length > 0 ? '?' : '');
     }
-    const combined = results.join(' ').trim();
+    const combined = results.map(r => r.top).join(' ').trim();
     gamePinyinState.recognized = combined;
     if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
   } catch(e) {
@@ -3734,7 +3742,33 @@ async function submitGamePinyin() {
   const hint = document.getElementById("hintArea");
   const btn = document.getElementById("gamePinyinSubmitBtn");
 
-  const isCorrect = normalizePinyinGame(userAnswer) === normalizePinyinGame(q.answer);
+  let isCorrect = normalizePinyinGame(userAnswer) === normalizePinyinGame(q.answer);
+  // Touch-recognition can silently drop/add a stroke so the top candidate
+  // misses a tone or a final consonant even when the user wrote the right
+  // pinyin. If any per-cell candidate lines up with the expected syllable
+  // for every cell, trust that the user wrote it correctly.
+  if (!isCorrect && mode === 'handwrite' && Array.isArray(gamePinyinCellCandidates)) {
+    const targetSylls = normalizePinyinGame(q.answer).split(/\s+/);
+    if (targetSylls.length === gamePinyinCharCount) {
+      let allMatch = true;
+      const matched = [];
+      for (let i = 0; i < gamePinyinCharCount; i++) {
+        const cands = gamePinyinCellCandidates[i] || [];
+        const hit = cands.find(c => normalizePinyinGame(c) === targetSylls[i]);
+        if (!hit) { allMatch = false; break; }
+        matched.push(hit);
+      }
+      if (allMatch) {
+        isCorrect = true;
+        for (let i = 0; i < gamePinyinCharCount; i++) {
+          gamePinyinCellRecognized[i] = matched[i];
+          const resEl = document.getElementById(`gamePyResult${i}`);
+          if (resEl) resEl.textContent = matched[i];
+        }
+        gamePinyinState.recognized = matched.join(' ');
+      }
+    }
+  }
   state.totalQuestions += 1;
 
   if (isCorrect) {
@@ -4529,13 +4563,13 @@ function showHwQuizQuestion() {
     const cellsHTML = qChars.map((ch, i) => `
       <div class="game-pinyin-cell">
         <div class="game-pinyin-cell-char">${ch}</div>
-        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:140px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:200px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
           <div class="pinyin-fourline-lines">
             <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
           </div>
           <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
-        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:140px">
+        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:200px">
           <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
@@ -4567,6 +4601,7 @@ function showHwQuizQuestion() {
     hwPinyinCharCount = qChars.length;
     hwPinyinCellStrokes = Array.from({ length: qChars.length }, () => []);
     hwPinyinCellRecognized = Array.from({ length: qChars.length }, () => '');
+    hwPinyinCellCandidates = Array.from({ length: qChars.length }, () => []);
     hwPinyinToneSelections = Array.from({ length: qChars.length }, () => null);
     hwPinyinBaseInputs = Array.from({ length: qChars.length }, () => '');
     pinyinState = { recognized: '' };
@@ -4690,6 +4725,7 @@ let pinyinState = { recognized: '' };
 let hwPinyinCharCount = 0;
 let hwPinyinCellStrokes = [];
 let hwPinyinCellRecognized = [];
+let hwPinyinCellCandidates = [];  // top-N recognition candidates per cell
 let hwPinyinToneSelections = [];
 let hwPinyinBaseInputs = [];
 let hwPinyinDrawingState = [];
@@ -4808,24 +4844,30 @@ async function recognizePinyin() {
   if (recEl) recEl.textContent = "识别中...";
   try {
     const results = await Promise.all(hwPinyinCellStrokes.map(async (strokes, i) => {
-      if (strokes.length === 0) return '';
+      if (strokes.length === 0) return { top: '', candidates: [] };
       const box = document.getElementById(`hwPyBox${i}`);
-      const w = box ? box.clientWidth : 140;
+      const w = box ? box.clientWidth : 200;
       const h = box ? box.clientHeight : 180;
       const res = await fetch("/api/handwriting", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ strokes, width: w, height: h }),
       });
       const data = await res.json();
-      try { if (data[0] === "SUCCESS") return data[1][0][1][0]; } catch(e) {}
-      return '';
+      try {
+        if (data[0] === "SUCCESS") {
+          const cands = (data[1][0][1] || []).filter(Boolean);
+          return { top: cands[0] || '', candidates: cands };
+        }
+      } catch(e) {}
+      return { top: '', candidates: [] };
     }));
     for (let i = 0; i < hwPinyinCharCount; i++) {
-      hwPinyinCellRecognized[i] = results[i] || '';
+      hwPinyinCellRecognized[i] = results[i].top || '';
+      hwPinyinCellCandidates[i] = results[i].candidates || [];
       const resEl = document.getElementById(`hwPyResult${i}`);
-      if (resEl) resEl.textContent = results[i] || (hwPinyinCellStrokes[i].length > 0 ? '?' : '');
+      if (resEl) resEl.textContent = results[i].top || (hwPinyinCellStrokes[i].length > 0 ? '?' : '');
     }
-    const combined = results.join(' ').trim();
+    const combined = results.map(r => r.top).join(' ').trim();
     pinyinState.recognized = combined;
     if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
   } catch(e) {
@@ -4880,7 +4922,31 @@ async function hwPinyinSubmit() {
   const hint = document.getElementById("hwQuizHint");
   const btn = document.getElementById("pinyinSubmitBtn");
 
-  const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
+  let isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
+  // Touch-recognition noise: if any per-cell candidate matches the
+  // expected syllable for every cell, accept.
+  if (!isCorrect && mode === 'handwrite' && Array.isArray(hwPinyinCellCandidates)) {
+    const targetSylls = normalizePinyin(q.answer).split(/\s+/);
+    if (targetSylls.length === hwPinyinCharCount) {
+      let allMatch = true;
+      const matched = [];
+      for (let i = 0; i < hwPinyinCharCount; i++) {
+        const cands = hwPinyinCellCandidates[i] || [];
+        const hit = cands.find(c => normalizePinyin(c) === targetSylls[i]);
+        if (!hit) { allMatch = false; break; }
+        matched.push(hit);
+      }
+      if (allMatch) {
+        isCorrect = true;
+        for (let i = 0; i < hwPinyinCharCount; i++) {
+          hwPinyinCellRecognized[i] = matched[i];
+          const resEl = document.getElementById(`hwPyResult${i}`);
+          if (resEl) resEl.textContent = matched[i];
+        }
+        pinyinState.recognized = matched.join(' ');
+      }
+    }
+  }
   const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
 
   if (isCorrect) {
@@ -4993,12 +5059,10 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    // Keep answering enabled — user can rewrite and re-submit via 确认.
-    // Clear the canvas so remaining old strokes don't combine with the
-    // retry strokes and get recognized as two separate characters.
+    // Keep answering enabled AND keep existing strokes — user edits with
+    // the eraser.
     hwQuiz.answering = true;
     hwQuizRecognizedResult2 = '';
-    clearHwQuizCanvas2();
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
     if (submitBtn) submitBtn.disabled = false;
     reportHwStreak(false);
@@ -5021,7 +5085,7 @@ function hwHandleHwAnswer(userInput) {
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     playStrokeAnimation(q.answer, hint);
     const recEl = document.getElementById("hwQuizRecognized2");
-    if (recEl) recEl.textContent = "画布已清空，请重写后点确认";
+    if (recEl) recEl.textContent = "请用橡皮擦修改后再点确认";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -5481,19 +5545,17 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    // Keep answering enabled — user can rewrite and re-submit.
-    // Clear the canvas so remaining old strokes don't combine with the
-    // retry strokes and get recognized as two separate characters.
+    // Keep answering enabled AND keep existing strokes — user edits with
+    // the eraser.
     hwReview.answering = true;
     hwQuizRecognizedResult = '';
-    clearHwQuizCanvas();
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     const recEl = document.getElementById("hwQuizRecognized");
-    if (recEl) recEl.textContent = "画布已清空，请重写后点提交";
+    if (recEl) recEl.textContent = "请用橡皮擦修改后再点提交";
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";

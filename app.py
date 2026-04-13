@@ -155,6 +155,94 @@ _build_homework_lessons()
 # --- Multi-pronunciation character detection (多音字) ---
 MULTI_PINYIN = {}  # char -> set of pinyins (only true multi-pronunciation chars)
 
+# Curated primary-school 多音字 with canonical context word/phrase for every
+# reading. Used both to augment MULTI_PINYIN (so we detect polyphonic chars
+# that happen to appear with only one reading in our data) and as the final
+# fallback for _find_context_word when no compound word from the user's
+# lessons/grade contains the (char, pinyin) pair.
+MULTI_PINYIN_EXAMPLES: dict[str, dict[str, str]] = {
+    "行": {"xíng": "行走", "háng": "银行"},
+    "长": {"cháng": "长江", "zhǎng": "长大"},
+    "着": {"zhe": "看着", "zháo": "着急", "zhuó": "穿着", "zhāo": "着迷"},
+    "好": {"hǎo": "好人", "hào": "爱好"},
+    "了": {"le": "走了", "liǎo": "了解"},
+    "得": {"dé": "得到", "de": "跑得快", "děi": "我得走了"},
+    "地": {"dì": "大地", "de": "慢慢地走"},
+    "的": {"de": "我的", "dì": "目的", "dí": "的确"},
+    "假": {"jiǎ": "假装", "jià": "放假"},
+    "大": {"dà": "大人", "dài": "大夫"},
+    "发": {"fā": "发现", "fà": "头发"},
+    "少": {"shǎo": "多少", "shào": "少年"},
+    "重": {"zhòng": "重要", "chóng": "重新"},
+    "乐": {"lè": "快乐", "yuè": "音乐"},
+    "看": {"kàn": "看见", "kān": "看守"},
+    "处": {"chù": "到处", "chǔ": "相处"},
+    "背": {"bèi": "背后", "bēi": "背书包"},
+    "挨": {"ái": "挨打", "āi": "挨着"},
+    "鲜": {"xiān": "新鲜", "xiǎn": "鲜为人知"},
+    "弹": {"dàn": "子弹", "tán": "弹琴"},
+    "几": {"jǐ": "几个", "jī": "茶几"},
+    "只": {"zhǐ": "只是", "zhī": "一只"},
+    "数": {"shù": "数字", "shǔ": "数一数"},
+    "调": {"diào": "调动", "tiáo": "调皮"},
+    "都": {"dōu": "都是", "dū": "首都"},
+    "还": {"hái": "还有", "huán": "归还"},
+    "种": {"zhǒng": "种子", "zhòng": "种树"},
+    "难": {"nán": "困难", "nàn": "灾难"},
+    "分": {"fēn": "分开", "fèn": "过分"},
+    "相": {"xiāng": "相信", "xiàng": "相片"},
+    "尽": {"jìn": "尽头", "jǐn": "尽量"},
+    "便": {"biàn": "方便", "pián": "便宜"},
+    "传": {"chuán": "传话", "zhuàn": "自传"},
+    "载": {"zài": "载人", "zǎi": "记载"},
+    "为": {"wéi": "成为", "wèi": "因为"},
+    "朝": {"cháo": "朝向", "zhāo": "朝阳"},
+    "曾": {"céng": "曾经", "zēng": "曾孙"},
+    "卡": {"kǎ": "卡片", "qiǎ": "卡住"},
+    "薄": {"báo": "薄纸", "bó": "薄弱", "bò": "薄荷"},
+    "和": {"hé": "和平", "hè": "唱和", "huó": "和面", "huò": "和药", "hú": "和牌"},
+    "似": {"sì": "相似", "shì": "似的"},
+    "应": {"yīng": "应该", "yìng": "答应"},
+    "教": {"jiào": "教室", "jiāo": "教书"},
+    "处": {"chù": "到处", "chǔ": "相处"},
+    "喷": {"pēn": "喷水", "pèn": "喷香"},
+    "藏": {"cáng": "躲藏", "zàng": "宝藏"},
+    "划": {"huá": "划船", "huà": "计划"},
+    "倒": {"dào": "倒影", "dǎo": "摔倒"},
+    "磨": {"mó": "磨刀", "mò": "磨坊"},
+    "散": {"sàn": "散步", "sǎn": "散文"},
+    "缝": {"féng": "缝衣", "fèng": "门缝"},
+    "奔": {"bēn": "奔跑", "bèn": "投奔"},
+    "扎": {"zhā": "扎针", "zā": "包扎", "zhá": "挣扎"},
+    "泊": {"bó": "停泊", "pō": "湖泊"},
+    "吓": {"xià": "吓人", "hè": "恐吓"},
+    "扇": {"shàn": "扇子", "shān": "扇风"},
+    "空": {"kōng": "空气", "kòng": "空白"},
+    "降": {"jiàng": "下降", "xiáng": "投降"},
+    "兴": {"xīng": "兴奋", "xìng": "高兴"},
+    "结": {"jié": "结果", "jiē": "结实"},
+    "中": {"zhōng": "中间", "zhòng": "中奖"},
+    "间": {"jiān": "中间", "jiàn": "间隔"},
+    "尾": {"wěi": "尾巴", "yǐ": "马尾"},
+    "量": {"liàng": "数量", "liáng": "测量"},
+    "切": {"qiē": "切菜", "qiè": "一切"},
+    "参": {"cān": "参加", "shēn": "人参", "cēn": "参差"},
+    "差": {"chā": "差别", "chà": "很差", "chāi": "出差", "cī": "参差"},
+    "觉": {"jué": "感觉", "jiào": "睡觉"},
+    "藏": {"cáng": "躲藏", "zàng": "宝藏"},
+    "宿": {"sù": "宿舍", "xiǔ": "一宿", "xiù": "星宿"},
+    "累": {"lèi": "劳累", "lěi": "积累", "léi": "累赘"},
+    "便": {"biàn": "方便", "pián": "便宜"},
+    "脉": {"mài": "血脉", "mò": "脉脉"},
+    "没": {"méi": "没有", "mò": "淹没"},
+    "模": {"mó": "模型", "mú": "模样"},
+    "盛": {"shèng": "盛开", "chéng": "盛饭"},
+    "恶": {"è": "凶恶", "wù": "厌恶", "ě": "恶心"},
+    "干": {"gān": "干净", "gàn": "能干"},
+    "供": {"gōng": "提供", "gòng": "供品"},
+    "转": {"zhuǎn": "转身", "zhuàn": "转动"},
+}
+
 
 def _build_multi_pinyin():
     """Detect characters that have genuinely different pronunciations across the data."""
@@ -199,6 +287,15 @@ def _build_multi_pinyin():
 
 
 _build_multi_pinyin()
+
+# Merge curated examples into MULTI_PINYIN so every common primary-school
+# 多音字 is flagged as polyphonic even when our WORDS data only happens to
+# include one of its readings.
+for _ch, _readings in MULTI_PINYIN_EXAMPLES.items():
+    existing = MULTI_PINYIN.get(_ch, set())
+    existing.update(_readings.keys())
+    if len(existing) >= 2:
+        MULTI_PINYIN[_ch] = existing
 
 
 # --- 形近字 (visually similar characters) lookup ---
@@ -271,42 +368,67 @@ def _pinyin_final(pinyin_str: str) -> str:
 
 def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> str:
     """Find a context word for a multi-pronunciation character.
-    Searches: 1) lesson vocabulary, 2) lesson text entries, 3) grade WORDS."""
+
+    For a polyphonic char we must show a word whose pronunciation uses the
+    *specific* pinyin being asked — showing a word that uses a different
+    reading would mislead the student. Search order:
+
+      1) user's current lesson vocabulary (most relevant)
+      2) current lesson 识字 multi-char entries
+      3) WORDS[grade]  — grade-level 词语
+      4) WORDS across all grades
+      5) CHARACTERS[grade]["words"] — only if one of the example words
+         actually contains this char with this exact pinyin in our data
+      6) MULTI_PINYIN_EXAMPLES — curated fallback (word/phrase/sentence)
+    """
     lesson_data = HOMEWORK_LESSONS.get(grade, {}).get(lesson_num, {})
 
-    # 1. Search lesson 词语 entries
+    def _match_in_word(word: str, word_pinyin: str) -> bool:
+        """True if `char` appears in `word` with `pinyin` as its syllable."""
+        syllables = word_pinyin.split()
+        if len(word) != len(syllables):
+            return False
+        for ch, py in zip(word, syllables):
+            if ch == char and py == pinyin:
+                return True
+        return False
+
+    # 1. Current lesson 词语
     for entry in lesson_data.get("词语", []):
-        word = entry["word"]
-        syllables = entry["pinyin"].split()
-        if len(word) == len(syllables):
-            for i, (ch, py) in enumerate(zip(word, syllables)):
-                if ch == char and py == pinyin:
-                    return word
+        if _match_in_word(entry["word"], entry["pinyin"]):
+            return entry["word"]
 
-    # 2. Search lesson 识字 entries (multi-char words)
+    # 2. Current lesson 识字 (multi-char only)
     for entry in lesson_data.get("识字", []):
-        if len(entry["word"]) >= 2:
-            word = entry["word"]
-            syllables = entry["pinyin"].split()
-            if len(word) == len(syllables):
-                for ch, py in zip(word, syllables):
-                    if ch == char and py == pinyin:
-                        return word
+        if len(entry["word"]) >= 2 and _match_in_word(entry["word"], entry["pinyin"]):
+            return entry["word"]
 
-    # 3. Search CHARACTERS words hints for this grade
-    for c in CHARACTERS.get(grade, []):
-        if c["char"] == char and c["pinyin"] == pinyin:
-            if c.get("words"):
-                return c["words"][0]
-
-    # 4. Search all WORDS in this grade
+    # 3. Current grade's WORDS — multi-char only (skip 识字表 single chars)
     for w in WORDS.get(grade, []):
-        word = w["word"]
-        syllables = w["pinyin"].split()
-        if len(word) == len(syllables):
-            for ch, py in zip(word, syllables):
-                if ch == char and py == pinyin:
-                    return word
+        if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
+            return w["word"]
+
+    # 4. Multi-char WORDS across all other grades
+    for g, ws in WORDS.items():
+        if g == grade:
+            continue
+        for w in ws:
+            if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
+                return w["word"]
+
+    # 5. CHARACTERS example words — only if the pinyin matches in our data.
+    # (The `words` list on a CHARACTERS entry is tied to that entry's single
+    # pinyin, so only return it when the question's pinyin matches that
+    # canonical reading.)
+    for c in CHARACTERS.get(grade, []):
+        if c["char"] == char and c["pinyin"] == pinyin and c.get("words"):
+            return c["words"][0]
+
+    # 6. Curated fallback — guarantees every common 多音字 reading has
+    # at least a word / phrase / sentence to disambiguate.
+    ex = MULTI_PINYIN_EXAMPLES.get(char, {}).get(pinyin, "")
+    if ex:
+        return ex
 
     return ""
 
@@ -870,8 +992,6 @@ def _generate_question(grade: str, mode: str) -> dict:
         # For 多音字, show a context word so the reader knows which reading is asked
         if correct["char"] in MULTI_PINYIN:
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
-            if not cw and correct.get("words"):
-                cw = correct["words"][0]
             if cw:
                 q["context_word"] = cw
         return q
@@ -917,18 +1037,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "word_hint": "、".join(correct["words"]),
         }
         if correct["char"] in MULTI_PINYIN:
-            cw = ""
-            for w in WORDS.get(grade, []):
-                syllables = w["pinyin"].split()
-                if len(w["word"]) == len(syllables):
-                    for ch, py in zip(w["word"], syllables):
-                        if ch == correct["char"] and py == correct["pinyin"]:
-                            cw = w["word"]
-                            break
-                if cw:
-                    break
-            if not cw and correct["words"]:
-                cw = correct["words"][0]
+            cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
             if cw:
                 q["context_word"] = cw
         return q
@@ -944,19 +1053,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "display_pinyin": correct["pinyin"],
         }
         if correct["char"] in MULTI_PINYIN:
-            cw = ""
-            # Search grade WORDS for a context word
-            for w in WORDS.get(grade, []):
-                syllables = w["pinyin"].split()
-                if len(w["word"]) == len(syllables):
-                    for ch, py in zip(w["word"], syllables):
-                        if ch == correct["char"] and py == correct["pinyin"]:
-                            cw = w["word"]
-                            break
-                if cw:
-                    break
-            if not cw and correct["words"]:
-                cw = correct["words"][0]
+            cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
             if cw:
                 q["context_word"] = cw
         return q
@@ -1127,8 +1224,6 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
         if correct["char"] in MULTI_PINYIN:
             ln0 = lessons[0] if lessons else 0
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, ln0)
-            if not cw and correct.get("words"):
-                cw = correct["words"][0]
             if cw:
                 q["context_word"] = cw
         return q
@@ -1166,18 +1261,8 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "word_hint": "、".join(correct["words"]),
         }
         if correct["char"] in MULTI_PINYIN:
-            cw = ""
-            for w in WORDS.get(grade, []):
-                syllables = w["pinyin"].split()
-                if len(w["word"]) == len(syllables):
-                    for ch, py in zip(w["word"], syllables):
-                        if ch == correct["char"] and py == correct["pinyin"]:
-                            cw = w["word"]
-                            break
-                if cw:
-                    break
-            if not cw and correct["words"]:
-                cw = correct["words"][0]
+            ln0 = lessons[0] if lessons else 0
+            cw = _find_context_word(correct["char"], correct["pinyin"], grade, ln0)
             if cw:
                 q["context_word"] = cw
         return q
@@ -1559,8 +1644,6 @@ def review_question():
         }
         if character in MULTI_PINYIN:
             cw = _find_context_word(character, pinyin, grade, 0)
-            if not cw and correct.get("words"):
-                cw = correct["words"][0]
             if cw:
                 resp["context_word"] = cw
         return jsonify(resp)
