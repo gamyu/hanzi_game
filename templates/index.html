@@ -212,6 +212,12 @@
     line-height: 1.2;
   }
 
+  .question-homophone-hint {
+    font-size: 16px;
+    color: #718096;
+    margin-top: 6px;
+  }
+
   .question-label {
     font-size: 16px;
     color: #999;
@@ -1170,8 +1176,8 @@
     background: #f7fafc; font-size: 15px; font-weight: 700; cursor: pointer; color: #4a5568;
   }
   .game-pinyin-mode-toggle button.active { background: #667eea; color: #fff; border-color: #667eea; }
-  .game-pinyin-cells-row { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; }
-  .game-pinyin-cell { display: flex; flex-direction: column; align-items: center; }
+  .game-pinyin-cells-row { display: grid; gap: 4px; justify-content: center; width: 100%; }
+  .game-pinyin-cell { display: flex; flex-direction: column; align-items: center; min-width: 0; }
   .game-pinyin-cell-char { font-size: 28px; font-weight: 700; color: #2d3748; margin-bottom: 4px; }
   .game-pinyin-type-input {
     width: 100%; height: 36px; border: none; border-bottom: 2px solid #667eea; background: transparent;
@@ -2875,9 +2881,13 @@ function renderQuestion(q) {
       <div class="question-char">${q.question}${contextHint}</div>
     `;
   } else if (q.mode === "dictation_handwrite") {
+    const hintLine = q.homophone_hint
+      ? `<div class="question-homophone-hint">提示：${q.homophone_hint}</div>`
+      : '';
     area.innerHTML = `
       <div class="question-label">看拼音写词语</div>
       <div class="question-pinyin">${q.question}</div>
+      ${hintLine}
     `;
   }
 
@@ -2915,13 +2925,13 @@ function renderQuestion(q) {
     const cellsHTML = qChars.map((ch, i) => `
       <div class="game-pinyin-cell">
         <div class="game-pinyin-cell-char">${ch}</div>
-        <div class="pinyin-fourline-box" id="gamePyBox${i}" style="width:200px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+        <div class="pinyin-fourline-box" id="gamePyBox${i}" style="width:100%;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
           <div class="pinyin-fourline-lines">
             <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
           </div>
           <canvas id="gamePyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
-        <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:200px">
+        <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
           <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="gamePyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
@@ -2940,7 +2950,7 @@ function renderQuestion(q) {
           <button id="gamePyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchGamePinyinMode('handwrite')">手写</button>
           <button id="gamePyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchGamePinyinMode('type')">打字</button>
         </div>
-        <div class="game-pinyin-cells-row">${cellsHTML}</div>
+        <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
         <div id="gamePinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearGamePinyinCanvas()">清除</button>
@@ -4625,13 +4635,13 @@ function showHwQuizQuestion() {
     const cellsHTML = qChars.map((ch, i) => `
       <div class="game-pinyin-cell">
         <div class="game-pinyin-cell-char">${ch}</div>
-        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:200px;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:100%;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
           <div class="pinyin-fourline-lines">
             <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
           </div>
           <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
-        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:200px">
+        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
           <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
@@ -4650,7 +4660,7 @@ function showHwQuizQuestion() {
           <button id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
           <button id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
         </div>
-        <div class="game-pinyin-cells-row">${cellsHTML}</div>
+        <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
         <div id="pinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearPinyinCanvas()">清除</button>

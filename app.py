@@ -244,6 +244,32 @@ MULTI_PINYIN_EXAMPLES: dict[str, dict[str, str]] = {
 }
 
 
+# Curated short hints to disambiguate 看拼音写词语 homophones. Every word
+# inside a same-pinyin group in WORDS must appear here, or the word gets
+# filtered out at question-generation time so we never ask an ambiguous
+# question. Keep hints to a handful of characters — they replace, not
+# substitute for, the student's memory.
+HOMOPHONE_HINTS: dict[str, str] = {
+    "不料": "出乎意外",
+    "布料": "做衣服的布",
+    "朦胧": "月光/烟雾不清楚",
+    "蒙眬": "快睡着时眼睛半闭",
+    "登录": "用账号进入",
+    "登陆": "军队上岸",
+}
+
+
+def _pinyin_has_other_word(pinyin: str, target_word: str) -> bool:
+    """True if any other multi-char word in WORDS shares this pinyin."""
+    for ws in WORDS.values():
+        for w in ws:
+            if (len(w["word"]) >= 2
+                    and w["pinyin"] == pinyin
+                    and w["word"] != target_word):
+                return True
+    return False
+
+
 def _build_multi_pinyin():
     """Detect characters that have genuinely different pronunciations across the data."""
     tone_map = {
@@ -1064,16 +1090,29 @@ def _generate_question(grade: str, mode: str) -> dict:
 
     if mode == "dictation_handwrite":
         word_list = WORDS.get(grade, [])
-        # Only pick multi-character words (词语), exclude single characters (识字表)
-        ciyu_list = [w for w in word_list if len(w["word"]) >= 2]
+        # Only pick multi-character words (词语), exclude single characters (识字表).
+        # Also drop homophone words lacking a curated disambiguation hint — otherwise
+        # the same pinyin can map to multiple valid answers with no way for the
+        # student to tell which one to write.
+        ciyu_list = [
+            w for w in word_list
+            if len(w["word"]) >= 2
+            and (w["word"] in HOMOPHONE_HINTS
+                 or not _pinyin_has_other_word(w["pinyin"], w["word"]))
+        ]
         if not ciyu_list:
             return {"error": "该年级暂无词语数据"}
         word_entry = random.choice(ciyu_list)
-        return {
+        q = {
             "mode": mode,
             "question": word_entry["pinyin"],
             "answer": word_entry["word"],
         }
+        if _pinyin_has_other_word(word_entry["pinyin"], word_entry["word"]):
+            hint = HOMOPHONE_HINTS.get(word_entry["word"])
+            if hint:
+                q["homophone_hint"] = hint
+        return q
 
     return {"error": f"Unknown mode: {mode}"}
 
@@ -1187,12 +1226,24 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
     if mode == "dictation_handwrite":
         if not ciyu_entries:
             return {"error": "该课/单元暂无词语数据"}
-        word_entry = random.choice(ciyu_entries)
-        return {
+        eligible = [
+            w for w in ciyu_entries
+            if (w["word"] in HOMOPHONE_HINTS
+                or not _pinyin_has_other_word(w["pinyin"], w["word"]))
+        ]
+        if not eligible:
+            eligible = ciyu_entries
+        word_entry = random.choice(eligible)
+        q = {
             "mode": mode,
             "question": word_entry["pinyin"],
             "answer": word_entry["word"],
         }
+        if _pinyin_has_other_word(word_entry["pinyin"], word_entry["word"]):
+            hint = HOMOPHONE_HINTS.get(word_entry["word"])
+            if hint:
+                q["homophone_hint"] = hint
+        return q
 
     # For char modes, convert 识字 entries to CHARACTERS-compatible format
     if not shizi_entries:
@@ -1918,9 +1969,12 @@ def review_question():
         })
 
     if mode == "dictation_handwrite":
-        return jsonify({
-            "mode": mode, "question": pinyin, "answer": character,
-        })
+        payload = {"mode": mode, "question": pinyin, "answer": character}
+        if _pinyin_has_other_word(pinyin, character):
+            hint = HOMOPHONE_HINTS.get(character)
+            if hint:
+                payload["homophone_hint"] = hint
+        return jsonify(payload)
 
     if mode == "read_aloud":
         return jsonify({
@@ -2743,12 +2797,17 @@ def homework_start(assignment_id):
         random.shuffle(questions)
     elif hw_type == "writing":
         for entry in entries:
-            questions.append({
+            q = {
                 "mode": "dictation_handwrite",
                 "question": entry["pinyin"],
                 "answer": entry["word"],
                 "display_char": entry["word"], "display_pinyin": entry["pinyin"],
-            })
+            }
+            if _pinyin_has_other_word(entry["pinyin"], entry["word"]):
+                hint = HOMOPHONE_HINTS.get(entry["word"])
+                if hint:
+                    q["homophone_hint"] = hint
+            questions.append(q)
         random.shuffle(questions)
 
     # Check for saved progress
