@@ -155,92 +155,94 @@ _build_homework_lessons()
 # --- Multi-pronunciation character detection (多音字) ---
 MULTI_PINYIN = {}  # char -> set of pinyins (only true multi-pronunciation chars)
 
-# Curated primary-school 多音字 with canonical context word/phrase for every
-# reading. Used both to augment MULTI_PINYIN (so we detect polyphonic chars
-# that happen to appear with only one reading in our data) and as the final
-# fallback for _find_context_word when no compound word from the user's
-# lessons/grade contains the (char, pinyin) pair.
+# Curated primary-school 多音字 with a disambiguating hint for every
+# reading. Each hint is a short phrase that combines a reference word
+# (where one naturally forms) with a one-line meaning so students can
+# tell the readings apart — a bare word like "行走" doesn't teach which
+# reading it uses. Used both to augment MULTI_PINYIN (so we detect
+# polyphonic chars that happen to appear with only one reading in our
+# data) and as the *preferred* source for _find_context_word: for
+# polyphonic chars the gloss matters more than a lesson-specific word.
 MULTI_PINYIN_EXAMPLES: dict[str, dict[str, str]] = {
-    "行": {"xíng": "行走", "háng": "银行"},
-    "长": {"cháng": "长江", "zhǎng": "长大"},
-    "着": {"zhe": "看着", "zháo": "着急", "zhuó": "穿着", "zhāo": "着迷"},
-    "好": {"hǎo": "好人", "hào": "爱好"},
-    "了": {"le": "走了", "liǎo": "了解"},
-    "得": {"dé": "得到", "de": "跑得快", "děi": "我得走了"},
-    "地": {"dì": "大地", "de": "慢慢地走"},
-    "的": {"de": "我的", "dì": "目的", "dí": "的确"},
-    "假": {"jiǎ": "假装", "jià": "放假"},
-    "大": {"dà": "大人", "dài": "大夫"},
-    "发": {"fā": "发现", "fà": "头发"},
-    "少": {"shǎo": "多少", "shào": "少年"},
-    "重": {"zhòng": "重要", "chóng": "重新"},
-    "乐": {"lè": "快乐", "yuè": "音乐"},
-    "看": {"kàn": "看见", "kān": "看守"},
-    "处": {"chù": "到处", "chǔ": "相处"},
-    "背": {"bèi": "背后", "bēi": "背书包"},
-    "挨": {"ái": "挨打", "āi": "挨着"},
-    "鲜": {"xiān": "新鲜", "xiǎn": "鲜为人知"},
-    "弹": {"dàn": "子弹", "tán": "弹琴"},
-    "几": {"jǐ": "几个", "jī": "茶几"},
-    "只": {"zhǐ": "只是", "zhī": "一只"},
-    "数": {"shù": "数字", "shǔ": "数一数"},
-    "调": {"diào": "调动", "tiáo": "调皮"},
-    "都": {"dōu": "都是", "dū": "首都"},
-    "还": {"hái": "还有", "huán": "归还"},
-    "种": {"zhǒng": "种子", "zhòng": "种树"},
-    "难": {"nán": "困难", "nàn": "灾难"},
-    "分": {"fēn": "分开", "fèn": "过分"},
-    "相": {"xiāng": "相信", "xiàng": "相片"},
-    "尽": {"jìn": "尽头", "jǐn": "尽量"},
-    "便": {"biàn": "方便", "pián": "便宜"},
-    "传": {"chuán": "传话", "zhuàn": "自传"},
-    "载": {"zài": "载人", "zǎi": "记载"},
-    "为": {"wéi": "成为", "wèi": "因为"},
-    "朝": {"cháo": "朝向", "zhāo": "朝阳"},
-    "曾": {"céng": "曾经", "zēng": "曾孙"},
-    "卡": {"kǎ": "卡片", "qiǎ": "卡住"},
-    "薄": {"báo": "薄纸", "bó": "薄弱", "bò": "薄荷"},
-    "和": {"hé": "和平", "hè": "唱和", "huó": "和面", "huò": "和药", "hú": "和牌"},
-    "似": {"sì": "相似", "shì": "似的"},
-    "应": {"yīng": "应该", "yìng": "答应"},
-    "教": {"jiào": "教室", "jiāo": "教书"},
-    "处": {"chù": "到处", "chǔ": "相处"},
-    "喷": {"pēn": "喷水", "pèn": "喷香"},
-    "藏": {"cáng": "躲藏", "zàng": "宝藏"},
-    "划": {"huá": "划船", "huà": "计划"},
-    "倒": {"dào": "倒影", "dǎo": "摔倒"},
-    "磨": {"mó": "磨刀", "mò": "磨坊"},
-    "散": {"sàn": "散步", "sǎn": "散文"},
-    "缝": {"féng": "缝衣", "fèng": "门缝"},
-    "奔": {"bēn": "奔跑", "bèn": "投奔"},
-    "扎": {"zhā": "扎针", "zā": "包扎", "zhá": "挣扎"},
-    "泊": {"bó": "停泊", "pō": "湖泊"},
-    "吓": {"xià": "吓人", "hè": "恐吓"},
-    "扇": {"shàn": "扇子", "shān": "扇风"},
-    "空": {"kōng": "空气", "kòng": "空白"},
-    "降": {"jiàng": "下降", "xiáng": "投降"},
-    "兴": {"xīng": "兴奋", "xìng": "高兴"},
-    "结": {"jié": "结果", "jiē": "结实"},
-    "中": {"zhōng": "中间", "zhòng": "中奖"},
-    "间": {"jiān": "中间", "jiàn": "间隔"},
-    "尾": {"wěi": "尾巴", "yǐ": "马尾"},
-    "量": {"liàng": "数量", "liáng": "测量"},
-    "切": {"qiē": "切菜", "qiè": "一切"},
-    "参": {"cān": "参加", "shēn": "人参", "cēn": "参差"},
-    "差": {"chā": "差别", "chà": "很差", "chāi": "出差", "cī": "参差"},
-    "觉": {"jué": "感觉", "jiào": "睡觉"},
-    "藏": {"cáng": "躲藏", "zàng": "宝藏"},
-    "宿": {"sù": "宿舍", "xiǔ": "一宿", "xiù": "星宿"},
-    "累": {"lèi": "劳累", "lěi": "积累", "léi": "累赘"},
-    "便": {"biàn": "方便", "pián": "便宜"},
-    "脉": {"mài": "血脉", "mò": "脉脉"},
-    "没": {"méi": "没有", "mò": "淹没"},
-    "模": {"mó": "模型", "mú": "模样"},
-    "盛": {"shèng": "盛开", "chéng": "盛饭"},
-    "恶": {"è": "凶恶", "wù": "厌恶", "ě": "恶心"},
-    "干": {"gān": "干净", "gàn": "能干"},
-    "供": {"gōng": "提供", "gòng": "供品"},
-    "转": {"zhuǎn": "转身", "zhuàn": "转动"},
+    "行": {"xíng": "行走，走路的意思", "háng": "银行，一行字（量词）"},
+    "长": {"cháng": "长江，长度/时间久", "zhǎng": "长大，成长/年纪大"},
+    "着": {"zhe": "看着，放句中表动作进行", "zháo": "着急，感到/遇到", "zhuó": "穿着，穿戴/附着", "zhāo": "着迷，深深吸引"},
+    "好": {"hǎo": "好人，美好/不坏", "hào": "爱好，喜欢做"},
+    "了": {"le": "走了，放句尾表完成", "liǎo": "了解，明白/结束"},
+    "得": {"dé": "得到，获得", "de": "跑得快，放动词后补说", "děi": "我得走了，必须/需要"},
+    "地": {"dì": "大地，土地/地方", "de": "慢慢地走，放动词前修饰"},
+    "的": {"de": "我的，表所属", "dì": "目的，目标", "dí": "的确，确实"},
+    "假": {"jiǎ": "假装，不真实", "jià": "放假，休息日"},
+    "大": {"dà": "大人，高大", "dài": "大夫，医生"},
+    "发": {"fā": "发现，发出/生长", "fà": "头发（名词）"},
+    "少": {"shǎo": "多少，不多", "shào": "少年，年纪小"},
+    "重": {"zhòng": "重要，分量大/紧要", "chóng": "重新，再一次"},
+    "乐": {"lè": "快乐，开心", "yuè": "音乐，乐曲"},
+    "看": {"kàn": "看见，用眼睛", "kān": "看守，看管"},
+    "处": {"chù": "到处，地方/名词", "chǔ": "相处，对待/动词"},
+    "背": {"bèi": "背后，身体后面", "bēi": "背书包，用肩扛"},
+    "挨": {"ái": "挨打，受（不好的事）", "āi": "挨着，紧靠"},
+    "鲜": {"xiān": "新鲜，有活力", "xiǎn": "鲜为人知，很少"},
+    "弹": {"dàn": "子弹，圆形武器（名词）", "tán": "弹琴，拨动（动词）"},
+    "几": {"jǐ": "几个，问数量", "jī": "茶几，小桌子"},
+    "只": {"zhǐ": "只是，仅仅", "zhī": "一只鸡，量词"},
+    "数": {"shù": "数字，数量（名词）", "shǔ": "数一数，点算（动词）"},
+    "调": {"diào": "调动，换位置", "tiáo": "调皮/调和，顽皮或混合"},
+    "都": {"dōu": "都是，全部", "dū": "首都，大城市"},
+    "还": {"hái": "还有，仍然", "huán": "归还，还东西"},
+    "种": {"zhǒng": "种子，品种（名词）", "zhòng": "种树，栽（动词）"},
+    "难": {"nán": "困难，不容易", "nàn": "灾难，祸事"},
+    "分": {"fēn": "分开，分离", "fèn": "过分/本分，程度或名分"},
+    "相": {"xiāng": "相信，互相", "xiàng": "相片，样子"},
+    "尽": {"jìn": "尽头，完结", "jǐn": "尽量，尽可能"},
+    "便": {"biàn": "方便，顺利", "pián": "便宜，价钱不贵"},
+    "传": {"chuán": "传话，传递", "zhuàn": "自传，记载生平的文字"},
+    "载": {"zài": "载人，装运", "zǎi": "记载，写下/年"},
+    "为": {"wéi": "成为/作为，是/做", "wèi": "因为/为了，表原因"},
+    "朝": {"cháo": "朝向，面对/朝代", "zhāo": "朝阳，早晨"},
+    "曾": {"céng": "曾经，从前", "zēng": "曾孙，隔代亲属"},
+    "卡": {"kǎ": "卡片，硬纸片", "qiǎ": "卡住，堵住"},
+    "薄": {"báo": "薄纸，厚度小（口语）", "bó": "薄弱，不强（书面）", "bò": "薄荷（植物名）"},
+    "和": {"hé": "你和我，连接词/和平", "hè": "附和，跟着别人说/唱和", "huó": "和面，揉面的动作", "huò": "和药，搅拌/调和", "hú": "和牌，麻将赢了"},
+    "似": {"sì": "相似，像", "shì": "似的，放词后"},
+    "应": {"yīng": "应该，理当", "yìng": "答应/反应，回应"},
+    "教": {"jiào": "教室，教育（名词/泛称）", "jiāo": "教书，把知识传给别人（动词）"},
+    "喷": {"pēn": "喷水，射出", "pèn": "喷香，形容味道浓"},
+    "藏": {"cáng": "躲藏，隐匿", "zàng": "宝藏/西藏，宝物/地名"},
+    "划": {"huá": "划船，拨水前进", "huà": "计划，谋划/分划"},
+    "倒": {"dào": "倒影/倒立，颠倒", "dǎo": "摔倒，跌落"},
+    "磨": {"mó": "磨刀，摩擦（动词）", "mò": "磨坊，磨面粉的石器（名词）"},
+    "散": {"sàn": "散步/分散，分开", "sǎn": "散文，零散的/松散"},
+    "缝": {"féng": "缝衣，用针线（动词）", "fèng": "门缝，缝隙（名词）"},
+    "奔": {"bēn": "奔跑，快走", "bèn": "投奔，朝某处去"},
+    "扎": {"zhā": "扎针，刺入", "zā": "包扎，捆绑", "zhá": "挣扎，用力挣脱"},
+    "泊": {"bó": "停泊，船靠岸", "pō": "湖泊，水面（名词）"},
+    "吓": {"xià": "吓人，使害怕", "hè": "恐吓，威胁/吓唬（书面）"},
+    "扇": {"shàn": "扇子（名词）", "shān": "扇风，摇动（动词）"},
+    "空": {"kōng": "空气，没东西", "kòng": "空白/有空，闲暇"},
+    "降": {"jiàng": "下降，落下", "xiáng": "投降，屈服认输"},
+    "兴": {"xīng": "兴奋，兴起/举办", "xìng": "高兴，愉快"},
+    "结": {"jié": "结果/打结，结束或捆扎", "jiē": "结实，牢固"},
+    "中": {"zhōng": "中间，里面/中央", "zhòng": "中奖/击中，正对上"},
+    "间": {"jiān": "中间，之中（名词）", "jiàn": "间隔，缝隙（动词/名词）"},
+    "尾": {"wěi": "尾巴，末端", "yǐ": "马尾，辫子（口语）"},
+    "量": {"liàng": "数量，多少（名词）", "liáng": "测量，量一量（动词）"},
+    "切": {"qiē": "切菜，用刀（动词）", "qiè": "一切/亲切，全部/贴近"},
+    "参": {"cān": "参加，加入", "shēn": "人参，药材名", "cēn": "参差，长短不齐"},
+    "差": {"chā": "差别，不同（名词）", "chà": "很差，不好（形容词）", "chāi": "出差，派出办事", "cī": "参差，长短不齐"},
+    "觉": {"jué": "感觉/觉得，感受", "jiào": "睡觉，休息"},
+    "宿": {"sù": "宿舍，住处", "xiǔ": "一宿，过了一夜", "xiù": "星宿，星座"},
+    "累": {"lèi": "劳累，疲倦", "lěi": "积累，一点点堆积", "léi": "累赘，多余负担"},
+    "脉": {"mài": "血脉/脉搏，血管", "mò": "脉脉，含情的样子"},
+    "没": {"méi": "没有，不存在", "mò": "淹没/沉没，落到水下"},
+    "模": {"mó": "模型，样式（书面）", "mú": "模样，样子（口语）"},
+    "盛": {"shèng": "盛开，繁荣/旺盛", "chéng": "盛饭，装入容器"},
+    "恶": {"è": "凶恶，坏", "wù": "厌恶，讨厌", "ě": "恶心，想吐"},
+    "干": {"gān": "干净/干燥，没水", "gàn": "能干，做事/主体"},
+    "供": {"gōng": "提供，供给/供应", "gòng": "供品，祭祀用的东西"},
+    "转": {"zhuǎn": "转身，改变方向", "zhuàn": "转动，围绕着转"},
+    "喝": {"hē": "喝水，口渴了饮水", "hè": "喝彩，拍手叫好/大声喊"},
+    "血": {"xuè": "血液，书面读音", "xiě": "流血了，口语读音"},
 }
 
 
@@ -393,20 +395,30 @@ def _pinyin_final(pinyin_str: str) -> str:
 
 
 def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> str:
-    """Find a context word for a multi-pronunciation character.
+    """Find a context hint for a polyphonic character reading.
 
-    For a polyphonic char we must show a word whose pronunciation uses the
-    *specific* pinyin being asked — showing a word that uses a different
-    reading would mislead the student. Search order:
+    The hint must do two things: confirm the exact pinyin being asked, and
+    convey what that reading *means* so the student can tell it apart from
+    the char's other readings. A bare lesson word ("行走") does neither —
+    the student can't derive the meaning without already knowing the
+    reading. So when we have a curated gloss for this (char, pinyin), that
+    wins. Only for polyphonic chars we don't have curated data for do we
+    fall back to searching lesson / grade / CHARACTERS for a matching
+    word.
 
-      1) user's current lesson vocabulary (most relevant)
-      2) current lesson 识字 multi-char entries
-      3) WORDS[grade]  — grade-level 词语
-      4) WORDS across all grades
-      5) CHARACTERS[grade]["words"] — only if one of the example words
-         actually contains this char with this exact pinyin in our data
-      6) MULTI_PINYIN_EXAMPLES — curated fallback (word/phrase/sentence)
+    Search order:
+      1) MULTI_PINYIN_EXAMPLES — curated word + gloss per reading
+      2) current lesson 词语 (matching pinyin)
+      3) current lesson 识字 multi-char entries (matching pinyin)
+      4) WORDS[grade] — grade-level 词语
+      5) WORDS across all other grades
+      6) CHARACTERS[grade]["words"] — only if pinyin matches
     """
+    # 1. Curated hint wins — it's the only source with a disambiguating gloss.
+    ex = MULTI_PINYIN_EXAMPLES.get(char, {}).get(pinyin, "")
+    if ex:
+        return ex
+
     lesson_data = HOMEWORK_LESSONS.get(grade, {}).get(lesson_num, {})
 
     def _match_in_word(word: str, word_pinyin: str) -> bool:
@@ -419,22 +431,22 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
                 return True
         return False
 
-    # 1. Current lesson 词语
+    # 2. Current lesson 词语
     for entry in lesson_data.get("词语", []):
         if _match_in_word(entry["word"], entry["pinyin"]):
             return entry["word"]
 
-    # 2. Current lesson 识字 (multi-char only)
+    # 3. Current lesson 识字 (multi-char only)
     for entry in lesson_data.get("识字", []):
         if len(entry["word"]) >= 2 and _match_in_word(entry["word"], entry["pinyin"]):
             return entry["word"]
 
-    # 3. Current grade's WORDS — multi-char only (skip 识字表 single chars)
+    # 4. Current grade's WORDS — multi-char only (skip 识字表 single chars)
     for w in WORDS.get(grade, []):
         if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
             return w["word"]
 
-    # 4. Multi-char WORDS across all other grades
+    # 5. Multi-char WORDS across all other grades
     for g, ws in WORDS.items():
         if g == grade:
             continue
@@ -442,19 +454,13 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
             if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
                 return w["word"]
 
-    # 5. CHARACTERS example words — only if the pinyin matches in our data.
+    # 6. CHARACTERS example words — only if the pinyin matches in our data.
     # (The `words` list on a CHARACTERS entry is tied to that entry's single
     # pinyin, so only return it when the question's pinyin matches that
     # canonical reading.)
     for c in CHARACTERS.get(grade, []):
         if c["char"] == char and c["pinyin"] == pinyin and c.get("words"):
             return c["words"][0]
-
-    # 6. Curated fallback — guarantees every common 多音字 reading has
-    # at least a word / phrase / sentence to disambiguate.
-    ex = MULTI_PINYIN_EXAMPLES.get(char, {}).get(pinyin, "")
-    if ex:
-        return ex
 
     return ""
 
