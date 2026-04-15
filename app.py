@@ -227,6 +227,44 @@ for _ch, _readings in MULTI_PINYIN_EXAMPLES.items():
         MULTI_PINYIN[_ch] = existing
 
 
+# --- Toned-variant index (for synthesizing multi-char pinyin distractors) ---
+# base toneless syllable -> {toned pinyin forms actually seen in our corpus}.
+# Lets us build plausible wrong-tone distractors like huā -> huá.
+PINYIN_VARIANTS_BY_BASE: dict[str, set[str]] = {}
+
+
+def _build_pinyin_variants():
+    _tone_flat = {
+        "ā": "a", "á": "a", "ǎ": "a", "à": "a",
+        "ē": "e", "é": "e", "ě": "e", "è": "e",
+        "ī": "i", "í": "i", "ǐ": "i", "ì": "i",
+        "ō": "o", "ó": "o", "ǒ": "o", "ò": "o",
+        "ū": "u", "ú": "u", "ǔ": "u", "ù": "u",
+        "ǖ": "ü", "ǘ": "ü", "ǚ": "ü", "ǜ": "ü",
+    }
+    def base(p):
+        return "".join(_tone_flat.get(c, c) for c in p.lower())
+
+    def add(py):
+        if not py:
+            return
+        PINYIN_VARIANTS_BY_BASE.setdefault(base(py), set()).add(py)
+
+    for chars in CHARACTERS.values():
+        for c in chars:
+            add(c["pinyin"])
+    for words in WORDS.values():
+        for w in words:
+            for syl in w["pinyin"].split():
+                add(syl)
+    for readings in MULTI_PINYIN_EXAMPLES.values():
+        for py in readings:
+            add(py)
+
+
+_build_pinyin_variants()
+
+
 # --- 形近字 (visually similar characters) lookup ---
 # Hand-curated groups of characters that primary-school students easily confuse
 # because they share a radical / component or have very similar structure.
@@ -1113,7 +1151,71 @@ def _pick_distractors(correct: dict, others: list, key: str, count: int = 3,
         random.shuffle(remaining)
         result += remaining[:count - len(result)]
 
+    # For multi-char word pinyin questions the same-length 词语 pool is
+    # often too small (there are only ~40 3-char and ~60 4-char 词语 in
+    # the entire corpus). If we still don't have enough distractors, build
+    # synthetic ones by perturbing a single syllable of the correct pinyin
+    # — using another reading of a polyphonic char, or a different-tone
+    # variant of the same base syllable. These are also the exact
+    # misreadings students make, so they're pedagogically better than
+    # random same-length noise.
+    if key == "pinyin" and len(result) < count and len(correct_char) >= 2:
+        existing_vals = {correct_val} | {r[key] for r in result}
+        for syn in _synthesize_word_pinyin_distractors(
+                correct_char, correct_val, count - len(result)):
+            if syn in existing_vals:
+                continue
+            result.append({"char": correct_char, "pinyin": syn, "words": []})
+            existing_vals.add(syn)
+            if len(result) >= count:
+                break
+
     return result[:count]
+
+
+def _synthesize_word_pinyin_distractors(word: str, correct_pinyin: str,
+                                        count: int = 3) -> list[str]:
+    """Build multi-char distractor pinyins by swapping one syllable.
+
+    Sources of swap candidates, in order:
+      1) Other readings of the character when it's polyphonic — these are
+         the exact misreadings a student is prone to make.
+      2) Other toned variants of the same base syllable seen anywhere in
+         our corpus (e.g. huā/huá/huà for 花's syllable).
+
+    Positions are tried in random order so we don't always perturb the
+    first character. Returns up to `count` distinct pinyin strings, each
+    different from `correct_pinyin`.
+    """
+    syls = correct_pinyin.split()
+    if len(word) != len(syls):
+        return []
+    out: list[str] = []
+    seen = {correct_pinyin}
+    positions = list(range(len(word)))
+    random.shuffle(positions)
+    for pos in positions:
+        ch = word[pos]
+        cur = syls[pos]
+        swaps: list[str] = []
+        for alt in MULTI_PINYIN.get(ch, set()):
+            if alt != cur and alt not in swaps:
+                swaps.append(alt)
+        base = _strip_tone(cur)
+        for alt in PINYIN_VARIANTS_BY_BASE.get(base, set()):
+            if alt != cur and alt not in swaps:
+                swaps.append(alt)
+        random.shuffle(swaps)
+        for alt in swaps:
+            new_syls = syls[:pos] + [alt] + syls[pos+1:]
+            cand = " ".join(new_syls)
+            if cand in seen:
+                continue
+            out.append(cand)
+            seen.add(cand)
+            if len(out) >= count:
+                return out
+    return out
 
 
 def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
@@ -2468,12 +2570,24 @@ def _get_or_create_today_assignments(db, user_id):
         ).fetchall()
         return [dict(r) for r in existing]
 
+    # Carry any still-pending assignments from earlier days onto today so
+    # the student keeps their saved_progress and isn't handed a fresh
+    # assignment on top of unfinished work. Once they clear the carry-overs,
+    # the usual auto-advance below picks up the next lesson.
+    db.execute(
+        "UPDATE daily_assignments SET date = %s "
+        "WHERE user_id = %s AND date < %s AND status = 'pending'",
+        (today, user_id, today),
+    )
+    db.commit()
+
     existing = db.execute(
         "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
         (user_id, today),
     ).fetchall()
 
     plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+    has_pending = any(r["status"] == "pending" for r in existing)
 
     if not existing:
         if plan_mode == "book_review":
@@ -2506,25 +2620,24 @@ def _get_or_create_today_assignments(db, user_id):
                     (user_id, today, wrt_grade, wrt_ln),
                 )
             db.commit()
-    elif plan_mode != "book_review":
-        # Auto-create next lesson for each type if all of that type are completed
-        # (by_lesson only — book_review waits for admin to assign next day)
+    elif not has_pending and plan_mode != "book_review":
+        # No pending work today — either (a) everything's done and we should
+        # advance to the next lesson, or (b) one type was carried over and
+        # completed but the other type has nothing for today yet. Both cases
+        # call for creating a fresh assignment from the plan's current
+        # lesson pointer for any type that either has no rows today at all
+        # or only has completed rows.
         changed = False
         for hw_type, content_key in [("recognition", "识字"), ("writing", "词语")]:
             type_assignments = [dict(r) for r in existing if r["type"] == hw_type]
-            if not type_assignments:
-                continue
-            has_pending = any(a["status"] == "pending" for a in type_assignments)
-            if has_pending:
-                continue
-            # All completed — find next using cross-grade search
+            if any(a["status"] == "pending" for a in type_assignments):
+                continue  # should not happen — has_pending was False above
             plan_lesson = plan["recognition_lesson"] if hw_type == "recognition" else plan["writing_lesson"]
             base_grade = (plan["recognition_grade"] if hw_type == "recognition" else plan["writing_grade"]) or plan["grade"]
             next_grade, next_ln = find_next_lesson_across_grades(
                 base_grade, plan_lesson, content_key)
             if not next_grade:
                 continue
-            # Avoid duplicate
             dup = any(a["grade"] == next_grade and a["lesson_num"] == next_ln for a in type_assignments)
             if dup:
                 continue
