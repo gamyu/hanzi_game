@@ -2851,10 +2851,11 @@ function renderQuestion(q) {
 
   // Question display
   if (q.mode === "char_to_pinyin") {
-    const contextHint = q.context_word ? ` <span style="font-size:20px;color:#718096">(${q.context_word})</span>` : '';
+    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请选择正确的拼音</div>
-      <div class="question-char">${q.question}${contextHint}</div>
+      <div class="question-char">${charHtml}${contextHint}</div>
     `;
   } else if (q.mode === "pinyin_to_char") {
     area.innerHTML = `
@@ -2869,16 +2870,18 @@ function renderQuestion(q) {
     // Auto-play on load
     setTimeout(() => speakChar(q.question), 300);
   } else if (q.mode === "pinyin_typing") {
-    const contextHint = q.context_word ? ` (${q.context_word})` : '';
+    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请给汉字注音</div>
-      <div class="question-char">${q.question}${contextHint}</div>
+      <div class="question-char">${charHtml}${contextHint}</div>
     `;
   } else if (q.mode === "read_aloud") {
-    const contextHint = q.context_word ? ` <span style="font-size:20px;color:#718096">(${q.context_word})</span>` : '';
+    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请朗读这个字</div>
-      <div class="question-char">${q.question}${contextHint}</div>
+      <div class="question-char">${charHtml}${contextHint}</div>
     `;
   } else if (q.mode === "dictation_handwrite") {
     const hintLine = q.homophone_hint
@@ -4682,8 +4685,9 @@ function showHwQuizQuestion() {
       setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
-    const contextHint = q.context_word ? ` <span style="font-size:18px;color:#718096">(${q.context_word})</span>` : '';
-    area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}${contextHint}</div>`;
+    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const contextHint = q.context_word ? ` <span style="font-size:24px;color:#718096">(${q.context_word})</span>` : '';
+    area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${charHtml}${contextHint}</div>`;
     opts.style.display = "grid";
     // Re-shuffle options for retries
     let options = [...q.options];

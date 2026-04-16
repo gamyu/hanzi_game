@@ -537,9 +537,10 @@ function showQuizQuestion() {
   const opts = document.getElementById("quizOptionsArea");
 
   if (q.mode === "pinyin_typing") {
-    const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
+    const contextHint = q.context_word ? `<div style="font-size:22px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
     const chars = q.question.split('');
-    const charDisplay = chars.map(c => `<span style="margin:0 8px">${c}</span>`).join('');
+    const charColor = q.context_word ? 'color:#5a67d8' : '';
+    const charDisplay = chars.map(c => `<span style="margin:0 8px;${charColor}">${c}</span>`).join('');
     area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="quiz-char">${charDisplay}</div>${contextHint}`;
     opts.style.display = "block";
 
@@ -595,7 +596,9 @@ function showQuizQuestion() {
       setTimeout(() => { const el = document.getElementById('pyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
-    area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${q.question}</div>`;
+    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const contextHint = q.context_word ? ` <span style="font-size:22px;color:#718096">(${q.context_word})</span>` : '';
+    area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="quiz-char">${charHtml}${contextHint}</div>`;
     opts.style.display = "grid";
     opts.innerHTML = q.options.map((opt, i) =>
       `<button class="quiz-opt-btn" onclick="quizAnswer(${i})">${opt}</button>`
