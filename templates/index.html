@@ -2848,6 +2848,7 @@ async function loadQuestion(reuseCurrentQ) {
 function renderQuestion(q) {
   const area = document.getElementById("questionArea");
   const opts = document.getElementById("optionsArea");
+  mainCellLayout = null; // reset — only set for dictation_handwrite multi-char
 
   // Question display
   if (q.mode === "char_to_pinyin") {
@@ -2985,6 +2986,7 @@ function renderQuestion(q) {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+    mainCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -3382,6 +3384,29 @@ function initCanvas() {
 }
 
 let hwRecognizedResult = '';
+let mainCellLayout = null; // { cellSize, cols, rows, charCount } when multi-char dictation
+
+function splitStrokesByCellsMain(strokes, layout) {
+  const { cellSize, cols, rows, charCount } = layout;
+  const cellStrokes = Array.from({ length: charCount }, () => []);
+  for (const s of strokes) {
+    const avgX = s[0].reduce((a, b) => a + b, 0) / s[0].length;
+    const avgY = s[1].reduce((a, b) => a + b, 0) / s[1].length;
+    const col = Math.min(Math.floor(avgX / cellSize), cols - 1);
+    const row = Math.min(Math.floor(avgY / cellSize), rows - 1);
+    const cellIdx = row * cols + col;
+    if (cellIdx >= 0 && cellIdx < charCount) {
+      const offsetX = col * cellSize;
+      const offsetY = row * cellSize;
+      cellStrokes[cellIdx].push([
+        s[0].map(x => x - offsetX),
+        s[1].map(y => y - offsetY),
+        s[2],
+      ]);
+    }
+  }
+  return cellStrokes;
+}
 
 function clearCanvas() {
   canvasStrokes = [];
@@ -3408,19 +3433,49 @@ async function recognizeHandwriting() {
 
   if (recEl) recEl.textContent = "识别中...";
   try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-    if (topResult) {
-      hwRecognizedResult = topResult;
-      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+    if (mainCellLayout && mainCellLayout.charCount > 1) {
+      // Multi-char: split strokes by cell position then recognize each
+      // independently. This way writing order doesn't matter — a student
+      // who writes the right character before the left still gets each
+      // character recognized in the correct cell.
+      const cellStrokes = splitStrokesByCellsMain(canvasStrokes, mainCellLayout);
+      const sz = mainCellLayout.cellSize;
+      const results = await Promise.all(cellStrokes.map(async (strokes) => {
+        if (strokes.length === 0) return '?';
+        const res = await fetch("/api/handwriting", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ strokes, width: sz, height: sz }),
+        });
+        const data = await res.json();
+        try { if (data[0] === "SUCCESS") { const r = data[1][0][1][0]; return r ? r[0] : '?'; } } catch(e) {}
+        return '?';
+      }));
+      const combined = results.join('');
+      if (combined.includes('?')) {
+        const missing = results.map((r, i) => r === '?' ? (i + 1) : null).filter(Boolean);
+        if (recEl) recEl.textContent = `第${missing.join('、')}个字未能识别，请清除后重写`;
+        hwRecognizedResult = '';
+      } else {
+        hwRecognizedResult = combined;
+        if (recEl) recEl.textContent = `识别结果: ${combined}`;
+      }
     } else {
-      if (recEl) recEl.textContent = "未能识别，请清除后重写";
+      // Single char: send all strokes as one blob
+      const res = await fetch("/api/handwriting", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
+      });
+      const data = await res.json();
+      let topResult = null;
+      try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
+      if (topResult) {
+        hwRecognizedResult = topResult;
+        if (recEl) recEl.textContent = `识别结果: ${topResult}`;
+      } else {
+        if (recEl) recEl.textContent = "未能识别，请清除后重写";
+      }
     }
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
@@ -4558,13 +4613,29 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.answeredCorrectly = new Set();
   hwQuiz.retryMap = {};
 
-  // Restore saved progress if available
+  // Restore saved progress if available — use saved questions so the
+  // currentIndex still points at the same question (without this, the
+  // server regenerates and reshuffles, rendering the saved index wrong).
   const saved = data.saved_progress;
-  if (saved && saved.currentIndex > 0 && saved.currentIndex < hwQuiz.questions.length) {
-    hwQuiz.currentIndex = saved.currentIndex;
-    hwQuiz.correctCount = saved.correctCount || 0;
-    hwQuiz.wrongItems = saved.wrongItems || [];
-    hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+  if (saved && saved.currentIndex > 0) {
+    const savedQs = saved.questions || null;
+    const qs = savedQs || hwQuiz.questions;
+    if (saved.currentIndex < qs.length) {
+      if (savedQs) {
+        hwQuiz.originalQuestions = savedQs;
+        hwQuiz.totalOriginal = savedQs.length;
+        hwQuiz.questions = savedQs.map((q, i) => ({ ...q, _origIndex: i }));
+      }
+      hwQuiz.currentIndex = saved.currentIndex;
+      hwQuiz.correctCount = saved.correctCount || 0;
+      hwQuiz.wrongItems = saved.wrongItems || [];
+      hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+    } else {
+      hwQuiz.currentIndex = 0;
+      hwQuiz.correctCount = 0;
+      hwQuiz.wrongItems = [];
+      hwQuiz.startTime = Date.now();
+    }
   } else {
     hwQuiz.currentIndex = 0;
     hwQuiz.correctCount = 0;
@@ -5310,10 +5381,30 @@ async function confirmHwBackToList() {
             correctCount: hwQuiz.correctCount,
             wrongItems: hwQuiz.wrongItems,
             timeElapsed: timeElapsed,
+            questions: hwQuiz.questions,
           },
         }),
       });
     } catch (e) { /* ignore save errors */ }
+  }
+  hwBackToToday();
+}
+
+async function confirmHwReviewBack() {
+  const choice = await showHwExitDialog();
+  if (choice === 0) return;
+  clearInterval(hwReview.timerInterval);
+  if (choice === 1) {
+    const timeElapsed = Math.floor((Date.now() - hwReview.startTime) / 1000);
+    localStorage.setItem("hwReview_saved", JSON.stringify({
+      currentIndex: hwReview.currentIndex,
+      correctCount: hwReview.correctCount,
+      wrongItems: hwReview.wrongItems,
+      totalOriginal: hwReview.totalOriginal,
+      questions: hwReview.questions,
+      answeredCorrectly: [...hwReview.answeredCorrectly],
+      timeElapsed: timeElapsed,
+    }));
   }
   hwBackToToday();
 }
@@ -5475,6 +5566,27 @@ function startHwReview() {
   hwReview.answeredCorrectly = new Set();
   hwReview.retryMap = {};
 
+  // Check for saved review progress
+  const savedReview = localStorage.getItem("hwReview_saved");
+  if (savedReview) {
+    try {
+      const sr = JSON.parse(savedReview);
+      if (sr.currentIndex > 0 && sr.currentIndex < questions.length && sr.questions) {
+        const resumeOk = confirm(`上次复习到第 ${sr.currentIndex}/${sr.questions.length} 题，是否继续？\n选"取消"将从头开始。`);
+        if (resumeOk) {
+          hwReview.questions = sr.questions;
+          hwReview.totalOriginal = sr.totalOriginal || sr.questions.length;
+          hwReview.currentIndex = sr.currentIndex;
+          hwReview.correctCount = sr.correctCount || 0;
+          hwReview.wrongItems = sr.wrongItems || [];
+          hwReview.answeredCorrectly = new Set(sr.answeredCorrectly || []);
+          hwReview.startTime = Date.now() - (sr.timeElapsed || 0) * 1000;
+        }
+      }
+    } catch (e) { /* ignore corrupt saved data */ }
+    localStorage.removeItem("hwReview_saved");
+  }
+
   // Show quiz section, hide everything else
   document.getElementById("hwReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "none";
@@ -5483,6 +5595,10 @@ function startHwReview() {
   document.getElementById("hwHistorySection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "";
+  // Replace the nav button so save goes to localStorage, not the homework API
+  document.getElementById("hwQuizNav").innerHTML = `
+    <button onclick="confirmHwReviewBack()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回</button>
+  `;
   clearInterval(hwReview.timerInterval);
   hwReview.timerInterval = setInterval(() => {
     const s = Math.floor((Date.now() - hwReview.startTime) / 1000);

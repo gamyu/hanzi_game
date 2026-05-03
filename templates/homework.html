@@ -481,15 +481,27 @@ async function startQuiz(assignmentId) {
   quiz.questions = data.questions;
   quiz.answering = false;
 
-  // Restore saved progress if available
+  // Restore saved progress if available — use the saved questions so the
+  // currentIndex matches the original order (the server reshuffles on
+  // every regeneration, which would invalidate the saved index).
   const saved = data.saved_progress;
-  if (saved && saved.currentIndex > 0 && saved.currentIndex < data.questions.length) {
-    const resumeOk = confirm(`上次做到第 ${saved.currentIndex}/${data.questions.length} 题，是否继续？\n选"取消"将从头开始。`);
-    if (resumeOk) {
-      quiz.currentIndex = saved.currentIndex;
-      quiz.correctCount = saved.correctCount || 0;
-      quiz.wrongItems = saved.wrongItems || [];
-      quiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+  if (saved && saved.currentIndex > 0) {
+    const savedQs = saved.questions || null;
+    const qs = savedQs || data.questions;
+    if (saved.currentIndex < qs.length) {
+      const resumeOk = confirm(`上次做到第 ${saved.currentIndex}/${qs.length} 题，是否继续？\n选"取消"将从头开始。`);
+      if (resumeOk) {
+        if (savedQs) quiz.questions = savedQs;
+        quiz.currentIndex = saved.currentIndex;
+        quiz.correctCount = saved.correctCount || 0;
+        quiz.wrongItems = saved.wrongItems || [];
+        quiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+      } else {
+        quiz.currentIndex = 0;
+        quiz.correctCount = 0;
+        quiz.wrongItems = [];
+        quiz.startTime = Date.now();
+      }
     } else {
       quiz.currentIndex = 0;
       quiz.correctCount = 0;
@@ -1251,6 +1263,7 @@ async function confirmBackToList() {
             correctCount: quiz.correctCount,
             wrongItems: quiz.wrongItems,
             timeElapsed: timeElapsed,
+            questions: quiz.questions,
           },
         }),
       });
