@@ -4613,18 +4613,18 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.answeredCorrectly = new Set();
   hwQuiz.retryMap = {};
 
-  // Restore saved progress — check both server-side saved_progress AND
-  // localStorage backup, preferring whichever has more progress.
-  let saved = data.saved_progress || null;
+  // Restore saved progress from localStorage (auto-saved after every
+  // question) or the server response. localStorage is the primary source
+  // because it's always up-to-date and doesn't depend on the server
+  // round-trip. It's only cleared on completion or explicit discard.
+  let saved = null;
   try {
     const lsRaw = localStorage.getItem(`hwQuiz_saved_${assignmentId}`);
-    if (lsRaw) {
-      const ls = JSON.parse(lsRaw);
-      if (ls && ls.currentIndex > 0 && (!saved || ls.currentIndex > (saved.currentIndex || 0))) {
-        saved = ls;
-      }
-    }
+    if (lsRaw) saved = JSON.parse(lsRaw);
   } catch (e) {}
+  if (!saved || !(saved.currentIndex > 0)) {
+    saved = data.saved_progress || null;
+  }
   if (saved && saved.currentIndex > 0) {
     const savedQs = saved.questions || null;
     const qs = savedQs || hwQuiz.questions;
@@ -4640,24 +4640,8 @@ async function startHwQuiz(assignmentId) {
       hwQuiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
       hwQuiz.retryMap = saved.retryMap || {};
       hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
-    } else {
-      hwQuiz.currentIndex = 0;
-      hwQuiz.correctCount = 0;
-      hwQuiz.wrongItems = [];
-      hwQuiz.answeredCorrectly = new Set();
-      hwQuiz.retryMap = {};
-      hwQuiz.startTime = Date.now();
     }
-  } else {
-    hwQuiz.currentIndex = 0;
-    hwQuiz.correctCount = 0;
-    hwQuiz.wrongItems = [];
-    hwQuiz.answeredCorrectly = new Set();
-    hwQuiz.retryMap = {};
-    hwQuiz.startTime = Date.now();
   }
-  // Clear localStorage after restore (either used or not needed)
-  try { localStorage.removeItem(`hwQuiz_saved_${assignmentId}`); } catch(e) {}
 
   // Show quiz, hide others
   document.getElementById("hwTodaySection").style.display = "none";
@@ -5257,8 +5241,25 @@ function hwHandleHwAnswer(userInput) {
   }
 }
 
+function autoSaveHwQuiz() {
+  if (!hwQuiz.assignmentId) return;
+  try {
+    const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
+    localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify({
+      currentIndex: hwQuiz.currentIndex,
+      correctCount: hwQuiz.correctCount,
+      wrongItems: hwQuiz.wrongItems,
+      timeElapsed: timeElapsed,
+      questions: hwQuiz.questions,
+      answeredCorrectly: [...hwQuiz.answeredCorrectly],
+      retryMap: hwQuiz.retryMap,
+    }));
+  } catch(e) {}
+}
+
 function nextHwQuestion() {
   hwQuiz.currentIndex++;
+  autoSaveHwQuiz();
   if (hwQuiz.currentIndex >= hwQuiz.questions.length) {
     finishHwQuiz();
     return;
@@ -5386,29 +5387,27 @@ async function confirmHwBackToList() {
   if (choice === 0) return; // cancelled
   clearInterval(hwQuiz.timerInterval);
   if (choice === 1) {
-    // Save progress to server + localStorage (belt-and-suspenders)
+    // Auto-save already wrote to localStorage; also push to server as backup
+    autoSaveHwQuiz();
     const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
-    const progress = {
-      currentIndex: hwQuiz.currentIndex,
-      correctCount: hwQuiz.correctCount,
-      wrongItems: hwQuiz.wrongItems,
-      timeElapsed: timeElapsed,
-      questions: hwQuiz.questions,
-      answeredCorrectly: [...hwQuiz.answeredCorrectly],
-      retryMap: hwQuiz.retryMap,
-    };
-    try {
-      localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify(progress));
-    } catch (e) {}
     try {
       await fetch("/api/homework/save_progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignment_id: hwQuiz.assignmentId, progress }),
+        body: JSON.stringify({
+          assignment_id: hwQuiz.assignmentId,
+          progress: {
+            currentIndex: hwQuiz.currentIndex,
+            correctCount: hwQuiz.correctCount,
+            wrongItems: hwQuiz.wrongItems,
+            timeElapsed: timeElapsed,
+            questions: hwQuiz.questions,
+          },
+        }),
       });
-    } catch (e) { /* ignore save errors */ }
+    } catch (e) {}
   } else {
-    // Discarded — clear any localStorage backup
+    // Discarded — clear localStorage
     try { localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`); } catch(e) {}
   }
   hwBackToToday();
