@@ -1079,17 +1079,18 @@ async function pinyinSubmit() {
     }
     return;
   }
-  quiz.answering = false;
   const q = quiz.questions[quiz.currentIndex];
   const hint = document.getElementById("quizHint");
   const btn = document.getElementById("pinyinSubmitBtn");
-  if (btn) btn.disabled = true;
   const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
   if (isCorrect) {
+    quiz.answering = false;
+    if (btn) btn.disabled = true;
     quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextQuestion, 800);
   } else {
+    quiz.answering = true;
     if (!q._isRetry) {
       quiz.wrongItems.push({
         character: q.display_char || q.question,
@@ -1101,8 +1102,12 @@ async function pinyinSubmit() {
     scheduleRetry(q);
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <strong style="font-size:28px;color:#38a169;font-family:'Times New Roman','STSong',serif">${q.answer}</strong>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
-      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -1155,13 +1160,10 @@ function handleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextQuestion, 800);
   } else {
-    // Advance past this question and re-queue a copy near the end so the
-    // student doesn't get stuck on the same question — they'll see it
-    // again later for reinforcement instead of being forced to rewrite it
-    // immediately.
-    quiz.answering = false;
+    quiz.answering = true;
+    hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
-    if (submitBtn) submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = false;
     if (!q._isRetry) {
       quiz.wrongItems.push({
         character: q.answer,
@@ -1172,8 +1174,12 @@ function handleHwAnswer(userInput) {
     }
     scheduleRetry(q);
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
-      <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 

@@ -3158,10 +3158,10 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    state.answering = false;
+    state.answering = true;
     hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
-    if (submitBtn) submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = false;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
@@ -3173,10 +3173,11 @@ function handleDictationAnswer(userInput, q) {
     }
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "继续"; okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => loadQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -3913,8 +3914,7 @@ async function submitGamePinyin() {
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    state.answering = false;
-    if (btn) btn.disabled = true;
+    state.answering = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}<br>
@@ -3926,10 +3926,11 @@ async function submitGamePinyin() {
       state.retryQueue.push(Object.assign({}, q, { _gap: 3, _retryAttempt: retryAttempt + 1 }));
     }
     updateScoreboard();
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "继续"; okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => loadQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -5071,8 +5072,7 @@ async function hwPinyinSubmit() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    hwQuiz.answering = false;
-    if (btn) btn.disabled = true;
+    hwQuiz.answering = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -5091,8 +5091,12 @@ async function hwPinyinSubmit() {
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
-      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -5166,9 +5170,10 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    hwQuiz.answering = false;
+    hwQuiz.answering = true;
+    hwQuizRecognizedResult2 = '';
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
-    if (submitBtn) submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = false;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -5186,9 +5191,13 @@ function hwHandleHwAnswer(userInput) {
       hwQuiz.questions.push(retryQ);
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
-      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     playStrokeAnimation(q.answer, hint);
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
@@ -5711,14 +5720,18 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    hwReview.answering = false;
+    hwReview.answering = true;
     hwQuizRecognizedResult = '';
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
-      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwReviewQuestion();
+    hint.appendChild(skipBtn);
   }
 }
 
