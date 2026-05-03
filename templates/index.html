@@ -4613,10 +4613,18 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.answeredCorrectly = new Set();
   hwQuiz.retryMap = {};
 
-  // Restore saved progress if available — use saved questions so the
-  // currentIndex still points at the same question (without this, the
-  // server regenerates and reshuffles, rendering the saved index wrong).
-  const saved = data.saved_progress;
+  // Restore saved progress — check both server-side saved_progress AND
+  // localStorage backup, preferring whichever has more progress.
+  let saved = data.saved_progress || null;
+  try {
+    const lsRaw = localStorage.getItem(`hwQuiz_saved_${assignmentId}`);
+    if (lsRaw) {
+      const ls = JSON.parse(lsRaw);
+      if (ls && ls.currentIndex > 0 && (!saved || ls.currentIndex > (saved.currentIndex || 0))) {
+        saved = ls;
+      }
+    }
+  } catch (e) {}
   if (saved && saved.currentIndex > 0) {
     const savedQs = saved.questions || null;
     const qs = savedQs || hwQuiz.questions;
@@ -4642,6 +4650,8 @@ async function startHwQuiz(assignmentId) {
     hwQuiz.wrongItems = [];
     hwQuiz.startTime = Date.now();
   }
+  // Clear localStorage after restore (either used or not needed)
+  try { localStorage.removeItem(`hwQuiz_saved_${assignmentId}`); } catch(e) {}
 
   // Show quiz, hide others
   document.getElementById("hwTodaySection").style.display = "none";
@@ -5253,6 +5263,8 @@ function nextHwQuestion() {
 async function finishHwQuiz() {
   clearInterval(hwQuiz.timerInterval);
   const timeSpent = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
+  // Clear any saved progress since the quiz is now complete
+  try { localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`); } catch(e) {}
 
   // Preview mode: no server submission
   if (hwQuiz.isPreview) {
@@ -5368,24 +5380,28 @@ async function confirmHwBackToList() {
   if (choice === 0) return; // cancelled
   clearInterval(hwQuiz.timerInterval);
   if (choice === 1) {
-    // Save progress
+    // Save progress to server + localStorage (belt-and-suspenders)
     const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
+    const progress = {
+      currentIndex: hwQuiz.currentIndex,
+      correctCount: hwQuiz.correctCount,
+      wrongItems: hwQuiz.wrongItems,
+      timeElapsed: timeElapsed,
+      questions: hwQuiz.questions,
+    };
+    try {
+      localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify(progress));
+    } catch (e) {}
     try {
       await fetch("/api/homework/save_progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assignment_id: hwQuiz.assignmentId,
-          progress: {
-            currentIndex: hwQuiz.currentIndex,
-            correctCount: hwQuiz.correctCount,
-            wrongItems: hwQuiz.wrongItems,
-            timeElapsed: timeElapsed,
-            questions: hwQuiz.questions,
-          },
-        }),
+        body: JSON.stringify({ assignment_id: hwQuiz.assignmentId, progress }),
       });
     } catch (e) { /* ignore save errors */ }
+  } else {
+    // Discarded — clear any localStorage backup
+    try { localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`); } catch(e) {}
   }
   hwBackToToday();
 }

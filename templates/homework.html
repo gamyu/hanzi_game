@@ -481,10 +481,18 @@ async function startQuiz(assignmentId) {
   quiz.questions = data.questions;
   quiz.answering = false;
 
-  // Restore saved progress if available — use the saved questions so the
-  // currentIndex matches the original order (the server reshuffles on
-  // every regeneration, which would invalidate the saved index).
-  const saved = data.saved_progress;
+  // Restore saved progress — check both server + localStorage, prefer
+  // whichever has more progress (higher currentIndex).
+  let saved = data.saved_progress || null;
+  try {
+    const lsRaw = localStorage.getItem(`quiz_saved_${assignmentId}`);
+    if (lsRaw) {
+      const ls = JSON.parse(lsRaw);
+      if (ls && ls.currentIndex > 0 && (!saved || ls.currentIndex > (saved.currentIndex || 0))) {
+        saved = ls;
+      }
+    }
+  } catch (e) {}
   if (saved && saved.currentIndex > 0) {
     const savedQs = saved.questions || null;
     const qs = savedQs || data.questions;
@@ -514,6 +522,7 @@ async function startQuiz(assignmentId) {
     quiz.wrongItems = [];
     quiz.startTime = Date.now();
   }
+  try { localStorage.removeItem(`quiz_saved_${assignmentId}`); } catch(e) {}
 
   // Show quiz, hide others
   document.getElementById("todaySection").style.display = "none";
@@ -1193,6 +1202,7 @@ function nextQuestion() {
 async function finishQuiz() {
   clearInterval(quiz.timerInterval);
   const timeSpent = Math.floor((Date.now() - quiz.startTime) / 1000);
+  try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
 
   // Submit to server
   const res = await fetch("/api/homework/submit", {
@@ -1250,24 +1260,25 @@ async function confirmBackToList() {
   clearInterval(quiz.timerInterval);
 
   if (choice === 1) {
-    // Save progress
+    // Save progress to server + localStorage (belt-and-suspenders)
     const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
+    const progress = {
+      currentIndex: quiz.currentIndex,
+      correctCount: quiz.correctCount,
+      wrongItems: quiz.wrongItems,
+      timeElapsed: timeElapsed,
+      questions: quiz.questions,
+    };
+    try { localStorage.setItem(`quiz_saved_${quiz.assignmentId}`, JSON.stringify(progress)); } catch(e) {}
     try {
       await fetch("/api/homework/save_progress", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assignment_id: quiz.assignmentId,
-          progress: {
-            currentIndex: quiz.currentIndex,
-            correctCount: quiz.correctCount,
-            wrongItems: quiz.wrongItems,
-            timeElapsed: timeElapsed,
-            questions: quiz.questions,
-          },
-        }),
+        body: JSON.stringify({ assignment_id: quiz.assignmentId, progress }),
       });
     } catch (e) { /* ignore save errors */ }
+  } else {
+    try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
   }
 
   document.getElementById("quizSection").style.display = "none";
