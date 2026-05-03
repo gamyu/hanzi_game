@@ -4697,11 +4697,11 @@ function updateHwTimer() {
 
 function showHwQuizQuestion() {
   const q = hwQuiz.questions[hwQuiz.currentIndex];
-  const answeredCount = hwQuiz.answeredCorrectly.size;
+  const idx = hwQuiz.currentIndex + 1;
   const total = hwQuiz.totalOriginal;
 
-  document.getElementById("hwQuizProgress").textContent = `${answeredCount + 1}/${total}`;
-  document.getElementById("hwQuizBarFill").style.width = `${(answeredCount / total) * 100}%`;
+  document.getElementById("hwQuizProgress").textContent = `${idx}/${total}`;
+  document.getElementById("hwQuizBarFill").style.width = `${(hwQuiz.currentIndex / total) * 100}%`;
   document.getElementById("hwQuizHint").innerHTML = "";
 
   const area = document.getElementById("hwQuizQuestionArea");
