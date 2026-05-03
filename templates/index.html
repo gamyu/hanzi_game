@@ -2796,17 +2796,20 @@ async function loadQuestion(reuseCurrentQ) {
     return;
   }
 
-  // Check retry queue first (wrong answer to repeat immediately)
-  if (state.retryQueue.length > 0) {
-    const retryQ = state.retryQueue[0];
+  // Check deferred retries — wrong answers replay after a gap of 3 questions
+  for (let i = 0; i < state.retryQueue.length; i++) {
+    state.retryQueue[i]._gap = (state.retryQueue[i]._gap || 0) - 1;
+  }
+  const readyIdx = state.retryQueue.findIndex(r => r._gap <= 0);
+  if (readyIdx >= 0) {
+    const retryQ = state.retryQueue.splice(readyIdx, 1)[0];
+    state.retryCount = (retryQ._retryAttempt || 0);
     if (retryQ.mode === "dictation_handwrite" || retryQ.mode === "pinyin_typing" || retryQ.mode === "read_aloud") {
       renderQuestion(retryQ);
       return;
     }
-    // For multiple choice, reshuffle the options
     const reshuffled = Object.assign({}, retryQ);
     const opts = [...reshuffled.options];
-    // Shuffle options
     for (let i = opts.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [opts[i], opts[j]] = [opts[j], opts[i]];
@@ -3104,30 +3107,17 @@ function handleAnswer(selected, q, btn) {
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span><br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span><br><span style="color:#718096">组词: ${q.word_hint}</span>`;
-    // Only record and queue retry for first attempt (not retries)
-    if (state.retryQueue.length === 0) {
-      recordWrongAnswer(q);
-      state.retryQueue.push(q);
-      state.retryCount = 0;
-    } else {
-      // This is a retry attempt
-      state.retryCount += 1;
-      if (state.retryCount >= 2) {
-        // Max 2 retries, move on
-        state.retryQueue.shift();
-        state.retryCount = 0;
-      }
+    const retryAttempt = q._retryAttempt || 0;
+    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt < 2) {
+      const retryQ = Object.assign({}, q, { _gap: 3, _retryAttempt: retryAttempt + 1 });
+      state.retryQueue.push(retryQ);
     }
   }
 
   updateScoreboard();
 
   if (isCorrect) {
-    // If this was a retry and answered correctly, remove from queue
-    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
-      state.retryQueue.shift();
-      state.retryCount = 0;
-    }
     setTimeout(loadQuestion, 100);
   } else {
     // Show OK button and wait for user to click
@@ -3165,44 +3155,28 @@ function handleDictationAnswer(userInput, q) {
     comboEl.classList.remove("hot");
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
-    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
-      state.retryQueue.shift();
-      state.retryCount = 0;
-    }
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    // Keep answering enabled AND keep existing strokes — user can use the
-    // eraser to fix the mistake themselves instead of restarting. (Earlier
-    // we auto-cleared to avoid stroke overlap on re-recognition, but the
-    // user prefers to preserve their work.)
-    state.answering = true;
+    state.answering = false;
     hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) submitBtn.disabled = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
-    if (state.retryQueue.length === 0) {
-      recordWrongAnswer(q);
-      state.retryQueue.push(q);
-      state.retryCount = 0;
-    } else {
-      state.retryCount += 1;
-      if (state.retryCount >= 2) {
-        state.retryQueue.shift();
-        state.retryCount = 0;
-      }
+    const retryAttempt = q._retryAttempt || 0;
+    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt < 2) {
+      const retryQ = Object.assign({}, q, { _gap: 3, _retryAttempt: retryAttempt + 1 });
+      state.retryQueue.push(retryQ);
     }
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
-    const recEl = document.getElementById("hwRecognized");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后再点确认";
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => loadQuestion();
-    hint.appendChild(skipBtn);
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "继续"; okBtn.className = "ok-btn";
+    okBtn.onclick = () => loadQuestion();
+    hint.appendChild(okBtn);
   }
 }
 
@@ -3936,33 +3910,26 @@ async function submitGamePinyin() {
     reportStreak(true);
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot"); void comboEl.offsetWidth; comboEl.classList.add("hot");
-    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
-      state.retryQueue.shift(); state.retryCount = 0;
-    }
     updateScoreboard();
     setTimeout(loadQuestion, 100);
   } else {
-    // Keep answering enabled — user can edit and re-submit via 确认
-    state.answering = true;
+    state.answering = false;
+    if (btn) btn.disabled = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}<br>
       <span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>
       <br><span style="color:#718096">${q.word_hint ? '组词: ' + q.word_hint : ''}</span>`;
-    if (state.retryQueue.length === 0) {
-      recordWrongAnswer(q);
-      state.retryQueue.push(q);
-      state.retryCount = 0;
-    } else {
-      state.retryCount += 1;
-      if (state.retryCount >= 2) { state.retryQueue.shift(); state.retryCount = 0; }
+    const retryAttempt = q._retryAttempt || 0;
+    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt < 2) {
+      state.retryQueue.push(Object.assign({}, q, { _gap: 3, _retryAttempt: retryAttempt + 1 }));
     }
     updateScoreboard();
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => loadQuestion();
-    hint.appendChild(skipBtn);
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "继续"; okBtn.className = "ok-btn";
+    okBtn.onclick = () => loadQuestion();
+    hint.appendChild(okBtn);
   }
 }
 
@@ -4231,10 +4198,6 @@ async function handleReadAloudAnswer(alternatives) {
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
 
-    if (state.retryQueue.length > 0 && state.retryQueue[0].answer === q.answer) {
-      state.retryQueue.shift();
-      state.retryCount = 0;
-    }
     setTimeout(loadQuestion, 800);
   } else {
     state.combo = 0;
@@ -4252,37 +4215,17 @@ async function handleReadAloudAnswer(alternatives) {
 
     setTimeout(() => speakChar(targetChar), 300);
 
-    if (state.retryQueue.length === 0) {
-      recordWrongAnswer(q);
-      state.retryQueue.push(q);
-      state.retryCount = 0;
-    } else {
-      state.retryCount += 1;
-      if (state.retryCount >= 2) {
-        state.retryQueue.shift();
-        state.retryCount = 0;
-      }
+    const retryAttempt = q._retryAttempt || 0;
+    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt < 2) {
+      state.retryQueue.push(Object.assign({}, q, { _gap: 3, _retryAttempt: retryAttempt + 1 }));
     }
 
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:10px;justify-content:center;margin-top:8px";
-    const retryBtn = document.createElement("button");
-    retryBtn.textContent = "重新朗读";
-    retryBtn.className = "ok-btn";
-    retryBtn.style.background = "#667eea";
-    retryBtn.onclick = () => {
-      hint.innerHTML = "";
-      micResult.textContent = "";
-      state.answering = true;
-      startRecording();
-    };
-    btnRow.appendChild(retryBtn);
     const okBtn = document.createElement("button");
-    okBtn.textContent = "下一题";
+    okBtn.textContent = "继续";
     okBtn.className = "ok-btn";
     okBtn.onclick = () => loadQuestion();
-    btnRow.appendChild(okBtn);
-    hint.appendChild(btnRow);
+    hint.appendChild(okBtn);
   }
 
   updateScoreboard();
@@ -5128,8 +5071,8 @@ async function hwPinyinSubmit() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    // Keep answering enabled — user can edit and re-submit via 确认
-    hwQuiz.answering = true;
+    hwQuiz.answering = false;
+    if (btn) btn.disabled = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -5144,16 +5087,12 @@ async function hwPinyinSubmit() {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     if (retryCount + 1 <= 2) {
       const retryQ = { ...q, _isRetry: true };
-      hwQuiz.questions.splice(hwQuiz.currentIndex + 1, 0, retryQ);
+      hwQuiz.questions.push(retryQ);
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwQuestion();
-    hint.appendChild(skipBtn);
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
+      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
   }
 }
 
@@ -5199,7 +5138,7 @@ function hwQuizAnswer(selected, correctIdx) {
     if (retryCount + 1 <= 2) {
       // Insert retry question after current position
       const retryQ = { ...q, _isRetry: true };
-      hwQuiz.questions.splice(hwQuiz.currentIndex + 1, 0, retryQ);
+      hwQuiz.questions.push(retryQ);
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
@@ -5227,12 +5166,9 @@ function hwHandleHwAnswer(userInput) {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
-    // Keep answering enabled AND keep existing strokes — user edits with
-    // the eraser.
-    hwQuiz.answering = true;
-    hwQuizRecognizedResult2 = '';
+    hwQuiz.answering = false;
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) submitBtn.disabled = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -5247,18 +5183,12 @@ function hwHandleHwAnswer(userInput) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     if (retryCount + 1 < 2) {
       const retryQ = { ...q, _isRetry: true };
-      hwQuiz.questions.splice(hwQuiz.currentIndex + 1, 0, retryQ);
+      hwQuiz.questions.push(retryQ);
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
+      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
     playStrokeAnimation(q.answer, hint);
-    const recEl = document.getElementById("hwQuizRecognized2");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后再点确认";
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwQuestion();
-    hint.appendChild(skipBtn);
   }
 }
 
@@ -5781,22 +5711,14 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwReviewQuestion, 800);
   } else {
-    // Keep answering enabled AND keep existing strokes — user edits with
-    // the eraser.
-    hwReview.answering = true;
+    hwReview.answering = false;
     hwQuizRecognizedResult = '';
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.questions.push({ ...q });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
-    const recEl = document.getElementById("hwQuizRecognized");
-    if (recEl) recEl.textContent = "请用橡皮擦修改后再点提交";
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "跳过"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwReviewQuestion();
-    hint.appendChild(skipBtn);
+      <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>
+      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
   }
 }
 
