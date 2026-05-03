@@ -235,6 +235,16 @@
     .quiz-pinyin { font-size: 32px; }
   }
 
+  @media (max-width: 420px) {
+    .quiz-char { font-size: 56px; }
+    .quiz-pinyin { font-size: 28px; }
+    .quiz-section { padding: 12px; }
+    .canvas-controls { flex-wrap: wrap; justify-content: center; }
+    .canvas-btn { padding: 8px 16px; font-size: 14px; }
+    .quiz-canvas-btns { flex-wrap: wrap; justify-content: center; gap: 6px; }
+    .quiz-canvas-btns button { padding: 8px 16px; font-size: 14px; }
+  }
+
   /* Stroke order toggle */
   .stroke-toggle-wrap {
     display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 14px; color: #4a5568;
@@ -632,9 +642,9 @@ function showQuizQuestion() {
     area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="quiz-pinyin">${q.question}</div>`;
     opts.style.display = "block";
     const charCount = q.answer.length;
-    const cellSize = 168;
-    const isMobile = window.innerWidth <= 500;
-    const cols = (isMobile && charCount >= 3) ? 2 : charCount;
+    const cols = charCount >= 3 ? 2 : charCount;
+    const availW = Math.min(window.innerWidth - 32, 500);
+    const cellSize = Math.min(168, Math.floor(availW / cols));
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;

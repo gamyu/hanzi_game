@@ -456,10 +456,29 @@
 
   /* Responsive */
   @media (max-width: 420px) {
-    .question-char { font-size: 96px; }
-    .question-pinyin { font-size: 36px; }
-    .option-btn { font-size: 22px; padding: 14px 8px; }
-    .card { padding: 24px 16px; }
+    .question-char { font-size: 80px; }
+    .question-pinyin { font-size: 32px; }
+    .option-btn { font-size: 20px; padding: 12px 6px; }
+    .card { padding: 20px 12px; }
+    .user-bar { gap: 4px; padding: 0 8px; }
+    .user-btn { padding: 4px 10px; font-size: 12px; }
+    .canvas-btn { padding: 8px 16px; font-size: 14px; }
+    .canvas-controls { gap: 6px; flex-wrap: wrap; justify-content: center; }
+    .pinyin-fourline-box { max-width: 100% !important; }
+    .game-pinyin-cell-char { font-size: 22px; }
+    .game-pinyin-tone-btn { width: 26px; height: 32px; font-size: 11px; }
+    .game-pinyin-tone-row { gap: 2px; }
+    .question-homophone-hint { font-size: 14px; }
+    .hw-quiz-char { font-size: 48px; }
+    .hw-quiz-pinyin { font-size: 28px; }
+    .title { font-size: 24px; }
+  }
+
+  @media (max-width: 375px) {
+    .question-char { font-size: 64px; }
+    .card { padding: 16px 8px; width: 95%; }
+    .user-btn { padding: 3px 8px; font-size: 11px; border-width: 1px; }
+    .canvas-btn { padding: 6px 12px; font-size: 13px; }
   }
 
   .title {
@@ -476,8 +495,9 @@
     width: 100%;
     max-width: 600px;
     display: flex;
-    justify-content: flex-end;
+    justify-content: center;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 0 20px;
     color: #fff;
@@ -1125,7 +1145,7 @@
     display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;
   }
   .pinyin-fourline-box {
-    position: relative; width: 100%; max-width: 420px; height: 180px;
+    position: relative; width: 100%; max-width: 100%; height: 180px;
     border: 2px solid #e2e8f0; border-radius: 12px; overflow: hidden;
     background: #fafafa;
   }
@@ -2983,10 +3003,9 @@ function renderQuestion(q) {
     return;
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
-    const cellSize = 168;
-    // For 3+ chars, use 2-column layout
     const cols = charCount >= 3 ? 2 : charCount;
     const rows = Math.ceil(charCount / cols);
+    const cellSize = getResponsiveCellSize(cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
     mainCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
@@ -3379,6 +3398,12 @@ function initCanvas() {
   canvas.addEventListener("touchend", endStroke);
 }
 
+function getResponsiveCellSize(cols, maxDesired) {
+  const vw = window.innerWidth;
+  const available = Math.min(vw - 32, 500);
+  return Math.min(maxDesired || 168, Math.floor(available / cols));
+}
+
 let hwRecognizedResult = '';
 let mainCellLayout = null; // { cellSize, cols, rows, charCount } when multi-char dictation
 
@@ -3508,8 +3533,8 @@ async function checkCanvasStrokeOrderGeneric(answer, strokes, canvasW, canvasH, 
   const chars = answer.split("");
   if (chars.length === 0 || strokes.length === 0) return true;
 
-  const cellSize = 168;
   const cols = chars.length >= 3 ? 2 : chars.length;
+  const cellSize = getResponsiveCellSize(cols);
   const rows = Math.ceil(chars.length / cols);
 
   // Assign each stroke to a cell based on its centroid position
@@ -4772,9 +4797,8 @@ function showHwQuizQuestion() {
     area.innerHTML = `<div class="hw-quiz-label">看拼音写字</div><div class="hw-quiz-pinyin">${q.question}</div>`;
     opts.style.display = "block";
     const charCount = q.answer.length;
-    const cellSize = 168;
-    // For 3+ chars, use 2-column layout
     const cols = charCount >= 3 ? 2 : charCount;
+    const cellSize = getResponsiveCellSize(cols);
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
@@ -5610,8 +5634,8 @@ function showHwReviewQuestion() {
     ).join("");
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
-    const cellSize = 140;
     const cols = charCount >= 3 ? 2 : charCount;
+    const cellSize = getResponsiveCellSize(cols, 140);
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
