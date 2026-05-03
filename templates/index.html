@@ -4637,17 +4637,23 @@ async function startHwQuiz(assignmentId) {
       hwQuiz.currentIndex = saved.currentIndex;
       hwQuiz.correctCount = saved.correctCount || 0;
       hwQuiz.wrongItems = saved.wrongItems || [];
+      hwQuiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
+      hwQuiz.retryMap = saved.retryMap || {};
       hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
     } else {
       hwQuiz.currentIndex = 0;
       hwQuiz.correctCount = 0;
       hwQuiz.wrongItems = [];
+      hwQuiz.answeredCorrectly = new Set();
+      hwQuiz.retryMap = {};
       hwQuiz.startTime = Date.now();
     }
   } else {
     hwQuiz.currentIndex = 0;
     hwQuiz.correctCount = 0;
     hwQuiz.wrongItems = [];
+    hwQuiz.answeredCorrectly = new Set();
+    hwQuiz.retryMap = {};
     hwQuiz.startTime = Date.now();
   }
   // Clear localStorage after restore (either used or not needed)
@@ -5388,6 +5394,8 @@ async function confirmHwBackToList() {
       wrongItems: hwQuiz.wrongItems,
       timeElapsed: timeElapsed,
       questions: hwQuiz.questions,
+      answeredCorrectly: [...hwQuiz.answeredCorrectly],
+      retryMap: hwQuiz.retryMap,
     };
     try {
       localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify(progress));
