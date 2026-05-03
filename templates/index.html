@@ -3307,6 +3307,20 @@ let currentStroke = null;
 let isDrawing = false;
 let eraserMode = false;
 
+function eraseStrokesAt(strokesArray, ex, ey, radius) {
+  for (let i = strokesArray.length - 1; i >= 0; i--) {
+    const s = strokesArray[i];
+    for (let j = 0; j < s[0].length; j++) {
+      const dx = s[0][j] - ex;
+      const dy = s[1][j] - ey;
+      if (dx * dx + dy * dy <= radius * radius) {
+        strokesArray.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
 function toggleEraser(canvasId) {
   eraserMode = !eraserMode;
   // Update all eraser buttons
@@ -3354,6 +3368,9 @@ function initCanvas() {
     if (!isDrawing) return;
     e.preventDefault();
     const [x, y] = getPos(e);
+    if (eraserMode) {
+      eraseStrokesAt(canvasStrokes, x, y, 10);
+    }
     if (currentStroke) {
       currentStroke[0].push(x);
       currentStroke[1].push(y);
@@ -3368,6 +3385,10 @@ function initCanvas() {
     e.preventDefault();
     isDrawing = false;
     ctx.globalCompositeOperation = "source-over";
+    if (eraserMode) {
+      const [x, y] = getPos(e);
+      eraseStrokesAt(canvasStrokes, x, y, 10);
+    }
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
     }
@@ -5851,6 +5872,9 @@ function initHwQuizCanvas() {
     if (!hwIsDrawing) return;
     e.preventDefault();
     const [x, y] = getPos(e);
+    if (eraserMode) {
+      eraseStrokesAt(hwCanvasStrokes, x, y, 10);
+    }
     if (hwCurrentStroke) {
       hwCurrentStroke[0].push(x);
       hwCurrentStroke[1].push(y);
@@ -5865,6 +5889,10 @@ function initHwQuizCanvas() {
     e.preventDefault();
     hwIsDrawing = false;
     ctx.globalCompositeOperation = "source-over";
+    if (eraserMode) {
+      const [x, y] = getPos(e);
+      eraseStrokesAt(hwCanvasStrokes, x, y, 10);
+    }
     if (hwCurrentStroke && hwCurrentStroke[0].length > 0) {
       hwCanvasStrokes.push(hwCurrentStroke);
     }
