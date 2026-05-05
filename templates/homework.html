@@ -157,6 +157,7 @@
     background: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   .quiz-canvas-btns button:hover { border-color: #667eea; }
+  .quiz-canvas-btns button.active { background: #667eea; color: #fff; border-color: #667eea; }
   .hw-submit-btn { background: #667eea !important; color: #fff !important; border-color: #667eea !important; }
   .quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
 
@@ -607,6 +608,7 @@ function showQuizQuestion() {
       <div id="pinyinRecognized2" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px"></div>
       <div class="quiz-canvas-btns">
         <button onclick="clearPinyinCanvas2()">清除</button>
+        <button id="pyEraserBtn" onclick="togglePyEraser()" style="display:${savedMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
         <button id="pyRecBtn" onclick="recognizePinyin2()" style="display:${savedMode === 'handwrite' ? '' : 'none'}">识别</button>
         <button onclick="pinyinSubmit()" id="pinyinSubmitBtn" class="hw-submit-btn">确认</button>
       </div>
@@ -683,6 +685,7 @@ function showQuizQuestion() {
       <div id="hwRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px"></div>
       <div class="quiz-canvas-btns">
         <button onclick="clearHwCanvas()">清除</button>
+        <button id="hwEraserBtn2" onclick="toggleHwEraser()">橡皮擦</button>
         <button onclick="recognizeHw()">识别</button>
         <button id="hwSubmitBtn" class="hw-submit-btn" onclick="submitHw()">确认</button>
       </div>
@@ -873,6 +876,13 @@ function drawPinyinFourLines(idx) {
   ).join('');
 }
 
+let pyEraserMode = false;
+function togglePyEraser() {
+  pyEraserMode = !pyEraserMode;
+  const btn = document.getElementById("pyEraserBtn");
+  if (btn) { btn.classList.toggle("active", pyEraserMode); btn.textContent = pyEraserMode ? "画笔" : "橡皮擦"; }
+}
+
 function initPinyinCellCanvas(idx) {
   const box = document.getElementById(`pyBox${idx}`);
   const canvas = document.getElementById(`pyCanvas${idx}`);
@@ -890,18 +900,25 @@ function initPinyinCellCanvas(idx) {
   function startStroke(e) {
     e.preventDefault(); _pyDrawingCell = idx;
     const [x, y] = getPos(e);
-    _pyCurrentStroke = [[x], [y], [Date.now()]];
-    ctx.beginPath(); ctx.moveTo(x, y);
+    ctx.beginPath();
+    if (pyEraserMode) { ctx.globalCompositeOperation = "destination-out"; ctx.lineWidth = 16; }
+    else { ctx.globalCompositeOperation = "source-over"; ctx.lineWidth = 3; }
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+    _pyCurrentStroke = pyEraserMode ? null : [[x], [y], [Date.now()]];
+    ctx.moveTo(x, y);
   }
   function moveStroke(e) {
     if (_pyDrawingCell !== idx) return; e.preventDefault();
     const [x, y] = getPos(e);
-    _pyCurrentStroke[0].push(x); _pyCurrentStroke[1].push(y); _pyCurrentStroke[2].push(Date.now());
+    if (pyEraserMode) eraseStrokesAt(pinyinCellStrokes[idx], x, y, 8);
+    if (_pyCurrentStroke) { _pyCurrentStroke[0].push(x); _pyCurrentStroke[1].push(y); _pyCurrentStroke[2].push(Date.now()); }
     ctx.lineTo(x, y); ctx.stroke();
   }
   function endStroke(e) {
     if (_pyDrawingCell !== idx) return; e.preventDefault();
     _pyDrawingCell = -1;
+    ctx.globalCompositeOperation = "source-over";
+    if (pyEraserMode) { const [x, y] = getPos(e); eraseStrokesAt(pinyinCellStrokes[idx], x, y, 8); }
     if (_pyCurrentStroke && _pyCurrentStroke[0].length > 0) {
       pinyinCellStrokes[idx].push(_pyCurrentStroke);
     }
@@ -919,8 +936,12 @@ function switchPinyinMode(mode) {
   document.getElementById("pyModeType").className = mode === 'type' ? 'active' : '';
   const recBtn = document.getElementById("pyRecBtn");
   const hwHint = document.getElementById("pyHwHint");
+  const erBtn = document.getElementById("pyEraserBtn");
   if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  if (erBtn) erBtn.style.display = mode === 'handwrite' ? '' : 'none';
   if (hwHint) hwHint.style.display = mode === 'handwrite' ? '' : 'none';
+  pyEraserMode = false;
+  if (erBtn) { erBtn.classList.remove("active"); erBtn.textContent = "橡皮擦"; }
   for (let i = 0; i < pinyinCharCount; i++) {
     const canvas = document.getElementById(`pyCanvas${i}`);
     const typeArea = document.getElementById(`pyTypeArea${i}`);
@@ -1348,9 +1369,29 @@ function backToToday() {
   loadProgress();
 }
 
+// --- Eraser support ---
+let hwEraserMode = false;
+function eraseStrokesAt(arr, ex, ey, radius) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const s = arr[i];
+    for (let j = 0; j < s[0].length; j++) {
+      const dx = s[0][j] - ex, dy = s[1][j] - ey;
+      if (dx * dx + dy * dy <= radius * radius) { arr.splice(i, 1); break; }
+    }
+  }
+}
+function toggleHwEraser() {
+  hwEraserMode = !hwEraserMode;
+  const btn = document.getElementById("hwEraserBtn2");
+  if (btn) { btn.classList.toggle("active", hwEraserMode); btn.textContent = hwEraserMode ? "画笔" : "橡皮擦"; }
+  const canvas = document.getElementById("hwCanvas");
+  if (canvas) canvas.style.cursor = hwEraserMode ? "cell" : "crosshair";
+}
+
 // --- Handwriting Canvas ---
 function initHwCanvas() {
   canvasStrokes = [];
+  hwEraserMode = false;
   const canvas = document.getElementById("hwCanvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -1369,8 +1410,11 @@ function initHwCanvas() {
     e.preventDefault();
     isDrawing = true;
     const [x, y] = getPos(e);
-    currentStroke = [[x], [y], [Date.now()]];
     ctx.beginPath();
+    if (hwEraserMode) { ctx.globalCompositeOperation = "destination-out"; ctx.lineWidth = 20; }
+    else { ctx.globalCompositeOperation = "source-over"; ctx.lineWidth = 5; }
+    ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+    currentStroke = hwEraserMode ? null : [[x], [y], [Date.now()]];
     ctx.moveTo(x, y);
   }
 
@@ -1378,9 +1422,8 @@ function initHwCanvas() {
     if (!isDrawing) return;
     e.preventDefault();
     const [x, y] = getPos(e);
-    currentStroke[0].push(x);
-    currentStroke[1].push(y);
-    currentStroke[2].push(Date.now());
+    if (hwEraserMode) eraseStrokesAt(canvasStrokes, x, y, 10);
+    if (currentStroke) { currentStroke[0].push(x); currentStroke[1].push(y); currentStroke[2].push(Date.now()); }
     ctx.lineTo(x, y);
     ctx.stroke();
   }
@@ -1389,6 +1432,8 @@ function initHwCanvas() {
     if (!isDrawing) return;
     e.preventDefault();
     isDrawing = false;
+    ctx.globalCompositeOperation = "source-over";
+    if (hwEraserMode) { const [x, y] = getPos(e); eraseStrokesAt(canvasStrokes, x, y, 10); }
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
     }
@@ -1410,6 +1455,9 @@ let hwCellLayout = null; // {cellSize, cols, rows, charCount}
 function clearHwCanvas() {
   canvasStrokes = [];
   hwRecognizedResult = '';
+  hwEraserMode = false;
+  const eBtn = document.getElementById("hwEraserBtn2");
+  if (eBtn) { eBtn.classList.remove("active"); eBtn.textContent = "橡皮擦"; }
   const canvas = document.getElementById("hwCanvas");
   if (!canvas) return;
   canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);

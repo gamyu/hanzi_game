@@ -2958,6 +2958,7 @@ function renderQuestion(q) {
         <div id="gamePinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearGamePinyinCanvas()">清除</button>
+          <button class="canvas-btn" id="gamePyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
         </div>
@@ -3668,8 +3669,22 @@ function parseNumberTonePinyin(input) {
   return input;
 }
 
+let pinyinEraserMode = false;
+function togglePinyinEraser() {
+  pinyinEraserMode = !pinyinEraserMode;
+  const btn = document.getElementById("gamePyEraserBtn") || document.getElementById("hwPyEraserBtn");
+  if (btn) { btn.classList.toggle("active", pinyinEraserMode); btn.textContent = pinyinEraserMode ? "画笔" : "橡皮擦"; }
+  for (let i = 0; i < gamePinyinCharCount; i++) {
+    const c = document.getElementById(`gamePyCanvas${i}`);
+    if (c) c.style.cursor = pinyinEraserMode ? "cell" : "crosshair";
+  }
+}
+
 function initGamePinyinCanvases() {
   gamePinyinDrawingState = [];
+  pinyinEraserMode = false;
+  const eBtn = document.getElementById("gamePyEraserBtn");
+  if (eBtn) { eBtn.classList.remove("active"); eBtn.textContent = "橡皮擦"; }
   for (let i = 0; i < gamePinyinCharCount; i++) {
     const box = document.getElementById(`gamePyBox${i}`);
     const canvas = document.getElementById(`gamePyCanvas${i}`);
@@ -3686,9 +3701,28 @@ function initGamePinyinCanvases() {
       return [t.clientX - rect.left, t.clientY - rect.top];
     }
     const idx = i;
-    function startStroke(e) { e.preventDefault(); ds.isDrawing = true; const [x,y] = getPos(e); ds.currentStroke = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
-    function moveStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); const [x,y] = getPos(e); ds.currentStroke[0].push(x); ds.currentStroke[1].push(y); ds.currentStroke[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
-    function endStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); ds.isDrawing = false; if (ds.currentStroke && ds.currentStroke[0].length > 0) gamePinyinCellStrokes[idx].push(ds.currentStroke); ds.currentStroke = null; }
+    function startStroke(e) {
+      e.preventDefault(); ds.isDrawing = true; const [x,y] = getPos(e);
+      ctx.beginPath();
+      if (pinyinEraserMode) { ctx.globalCompositeOperation = "destination-out"; ctx.lineWidth = 20; }
+      else { ctx.globalCompositeOperation = "source-over"; ctx.lineWidth = 4; }
+      ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+      ds.currentStroke = pinyinEraserMode ? null : [[x],[y],[Date.now()]];
+      ctx.moveTo(x,y);
+    }
+    function moveStroke(e) {
+      if (!ds.isDrawing) return; e.preventDefault(); const [x,y] = getPos(e);
+      if (pinyinEraserMode) eraseStrokesAt(gamePinyinCellStrokes[idx], x, y, 10);
+      if (ds.currentStroke) { ds.currentStroke[0].push(x); ds.currentStroke[1].push(y); ds.currentStroke[2].push(Date.now()); }
+      ctx.lineTo(x,y); ctx.stroke();
+    }
+    function endStroke(e) {
+      if (!ds.isDrawing) return; e.preventDefault(); ds.isDrawing = false;
+      ctx.globalCompositeOperation = "source-over";
+      if (pinyinEraserMode) { const [x,y] = getPos(e); eraseStrokesAt(gamePinyinCellStrokes[idx], x, y, 10); }
+      if (ds.currentStroke && ds.currentStroke[0].length > 0) gamePinyinCellStrokes[idx].push(ds.currentStroke);
+      ds.currentStroke = null;
+    }
     canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
     canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
     canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
@@ -3701,6 +3735,10 @@ function switchGamePinyinMode(mode) {
   document.getElementById("gamePyModeType").className = mode === 'type' ? 'active' : '';
   const recBtn = document.getElementById("gamePyRecBtn");
   if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  const erBtn = document.getElementById("gamePyEraserBtn");
+  if (erBtn) erBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  pinyinEraserMode = false;
+  if (erBtn) { erBtn.classList.remove("active"); erBtn.textContent = "橡皮擦"; }
   const hintEl = document.getElementById("gamePyNumToneHint");
   if (hintEl) hintEl.style.display = mode === 'type' ? 'block' : 'none';
   for (let i = 0; i < gamePinyinCharCount; i++) {
@@ -4700,6 +4738,7 @@ function showHwQuizQuestion() {
         <div id="pinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
         <div class="canvas-controls">
           <button class="canvas-btn" onclick="clearPinyinCanvas()">清除</button>
+          <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
         </div>
@@ -4840,6 +4879,9 @@ let hwPinyinDrawingState = [];
 
 function initHwPinyinCanvases() {
   hwPinyinDrawingState = [];
+  pinyinEraserMode = false;
+  const eBtn = document.getElementById("hwPyEraserBtn");
+  if (eBtn) { eBtn.classList.remove("active"); eBtn.textContent = "橡皮擦"; }
   for (let i = 0; i < hwPinyinCharCount; i++) {
     const box = document.getElementById(`hwPyBox${i}`);
     const canvas = document.getElementById(`hwPyCanvas${i}`);
@@ -4856,9 +4898,28 @@ function initHwPinyinCanvases() {
       return [t.clientX - rect.left, t.clientY - rect.top];
     }
     const idx = i;
-    function startStroke(e) { e.preventDefault(); ds.isDrawing = true; const [x,y] = getPos(e); ds.currentStroke = [[x],[y],[Date.now()]]; ctx.beginPath(); ctx.moveTo(x,y); }
-    function moveStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); const [x,y] = getPos(e); ds.currentStroke[0].push(x); ds.currentStroke[1].push(y); ds.currentStroke[2].push(Date.now()); ctx.lineTo(x,y); ctx.stroke(); }
-    function endStroke(e) { if (!ds.isDrawing) return; e.preventDefault(); ds.isDrawing = false; if (ds.currentStroke && ds.currentStroke[0].length > 0) hwPinyinCellStrokes[idx].push(ds.currentStroke); ds.currentStroke = null; }
+    function startStroke(e) {
+      e.preventDefault(); ds.isDrawing = true; const [x,y] = getPos(e);
+      ctx.beginPath();
+      if (pinyinEraserMode) { ctx.globalCompositeOperation = "destination-out"; ctx.lineWidth = 20; }
+      else { ctx.globalCompositeOperation = "source-over"; ctx.lineWidth = 4; }
+      ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#2d3748";
+      ds.currentStroke = pinyinEraserMode ? null : [[x],[y],[Date.now()]];
+      ctx.moveTo(x,y);
+    }
+    function moveStroke(e) {
+      if (!ds.isDrawing) return; e.preventDefault(); const [x,y] = getPos(e);
+      if (pinyinEraserMode) eraseStrokesAt(hwPinyinCellStrokes[idx], x, y, 10);
+      if (ds.currentStroke) { ds.currentStroke[0].push(x); ds.currentStroke[1].push(y); ds.currentStroke[2].push(Date.now()); }
+      ctx.lineTo(x,y); ctx.stroke();
+    }
+    function endStroke(e) {
+      if (!ds.isDrawing) return; e.preventDefault(); ds.isDrawing = false;
+      ctx.globalCompositeOperation = "source-over";
+      if (pinyinEraserMode) { const [x,y] = getPos(e); eraseStrokesAt(hwPinyinCellStrokes[idx], x, y, 10); }
+      if (ds.currentStroke && ds.currentStroke[0].length > 0) hwPinyinCellStrokes[idx].push(ds.currentStroke);
+      ds.currentStroke = null;
+    }
     canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
     canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
     canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
@@ -4871,6 +4932,10 @@ function switchHwPinyinMode(mode) {
   document.getElementById("hwPyModeType").className = mode === 'type' ? 'active' : '';
   const recBtn = document.getElementById("hwPyRecBtn");
   if (recBtn) recBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  const erBtn = document.getElementById("hwPyEraserBtn");
+  if (erBtn) erBtn.style.display = mode === 'handwrite' ? '' : 'none';
+  pinyinEraserMode = false;
+  if (erBtn) { erBtn.classList.remove("active"); erBtn.textContent = "橡皮擦"; }
   const hintEl = document.getElementById("hwPyNumToneHint");
   if (hintEl) hintEl.style.display = mode === 'type' ? 'block' : 'none';
   for (let i = 0; i < hwPinyinCharCount; i++) {
