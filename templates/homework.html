@@ -502,16 +502,19 @@ async function startQuiz(assignmentId) {
     saved = data.saved_progress || null;
   }
   if (saved && saved.currentIndex > 0) {
-    const savedQs = saved.questions || null;
+    let savedQs = saved.questions || null;
+    if (savedQs) savedQs = savedQs.filter(q => !q._isRetry);
     const qs = savedQs || data.questions;
-    if (saved.currentIndex < qs.length) {
-      const resumeOk = confirm(`上次做到第 ${saved.currentIndex}/${qs.length} 题，是否继续？\n选"取消"将从头开始。`);
+    const ci = Math.min(saved.currentIndex, qs.length);
+    if (ci > 0 && ci < qs.length) {
+      const resumeOk = confirm(`上次做到第 ${ci}/${qs.length} 题，是否继续？\n选"取消"将从头开始。`);
       if (resumeOk) {
         if (savedQs) quiz.questions = savedQs;
-        quiz.currentIndex = saved.currentIndex;
+        quiz.currentIndex = ci;
         quiz.correctCount = saved.correctCount || 0;
         quiz.wrongItems = saved.wrongItems || [];
-        quiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+        const te = Math.min(saved.timeElapsed || 0, 86400);
+        quiz.startTime = Date.now() - te * 1000;
       } else {
         quiz.currentIndex = 0;
         quiz.correctCount = 0;

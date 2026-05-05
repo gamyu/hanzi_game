@@ -4571,9 +4571,7 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.retryMap = {};
 
   // Restore saved progress from localStorage (auto-saved after every
-  // question) or the server response. localStorage is the primary source
-  // because it's always up-to-date and doesn't depend on the server
-  // round-trip. It's only cleared on completion or explicit discard.
+  // question) or the server response.
   let saved = null;
   try {
     const lsRaw = localStorage.getItem(`hwQuiz_saved_${assignmentId}`);
@@ -4583,20 +4581,27 @@ async function startHwQuiz(assignmentId) {
     saved = data.saved_progress || null;
   }
   if (saved && saved.currentIndex > 0) {
-    const savedQs = saved.questions || null;
+    let savedQs = saved.questions || null;
+    // Strip old retry copies that inflated the question array
+    if (savedQs) savedQs = savedQs.filter(q => !q._isRetry);
     const qs = savedQs || hwQuiz.questions;
-    if (saved.currentIndex < qs.length) {
+    const ci = Math.min(saved.currentIndex, qs.length);
+    if (ci > 0 && ci < qs.length) {
       if (savedQs) {
         hwQuiz.originalQuestions = savedQs;
         hwQuiz.totalOriginal = savedQs.length;
         hwQuiz.questions = savedQs.map((q, i) => ({ ...q, _origIndex: i }));
       }
-      hwQuiz.currentIndex = saved.currentIndex;
+      hwQuiz.currentIndex = ci;
       hwQuiz.correctCount = saved.correctCount || 0;
       hwQuiz.wrongItems = saved.wrongItems || [];
       hwQuiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
       hwQuiz.retryMap = saved.retryMap || {};
-      hwQuiz.startTime = Date.now() - (saved.timeElapsed || 0) * 1000;
+      const te = Math.min(saved.timeElapsed || 0, 86400);
+      hwQuiz.startTime = Date.now() - te * 1000;
+    } else {
+      // Saved index exceeds cleaned questions — stale save, start fresh
+      try { localStorage.removeItem(`hwQuiz_saved_${assignmentId}`); } catch(e) {}
     }
   }
 
@@ -4639,7 +4644,7 @@ function updateHwTimer() {
 function showHwQuizQuestion() {
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const idx = hwQuiz.currentIndex + 1;
-  const total = hwQuiz.totalOriginal;
+  const total = hwQuiz.questions.length;
 
   document.getElementById("hwQuizProgress").textContent = `${idx}/${total}`;
   document.getElementById("hwQuizBarFill").style.width = `${(hwQuiz.currentIndex / total) * 100}%`;
@@ -5214,7 +5219,7 @@ async function finishHwQuiz() {
   if (hwQuiz.isPreview) {
     document.getElementById("hwQuizSection").style.display = "none";
     document.getElementById("hwResultSection").style.display = "";
-    const total = hwQuiz.totalOriginal;
+    const total = hwQuiz.questions.length;
     const correct = hwQuiz.correctCount;
     const acc = Math.round(correct / total * 100);
     const mins = Math.floor(timeSpent / 60);
@@ -5243,7 +5248,7 @@ async function finishHwQuiz() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       assignment_id: hwQuiz.assignmentId,
-      total_questions: hwQuiz.totalOriginal,
+      total_questions: hwQuiz.questions.length,
       correct_answers: hwQuiz.correctCount,
       time_spent: timeSpent,
       wrong_items: hwQuiz.wrongItems,
@@ -5377,7 +5382,7 @@ function showHwExitDialog() {
     box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
     box.innerHTML = `
       <div style="font-size:18px;font-weight:700;margin-bottom:8px">退出作业</div>
-      <div style="font-size:14px;color:#718096;margin-bottom:20px">当前进度: ${hwQuiz.currentIndex}/${hwQuiz.totalOriginal} 题</div>
+      <div style="font-size:14px;color:#718096;margin-bottom:20px">当前进度: ${hwQuiz.currentIndex}/${hwQuiz.questions.length} 题</div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">保存进度并退出</button>
         <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">不保存，直接退出</button>
