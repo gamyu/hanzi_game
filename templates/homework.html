@@ -359,6 +359,7 @@ let quiz = {
   startTime: null,
   timerInterval: null,
   answering: false,
+  firstAttemptWrong: new Set(),
 };
 
 // Canvas state
@@ -519,6 +520,7 @@ async function startQuiz(assignmentId) {
       } else {
         quiz.currentIndex = 0;
         quiz.correctCount = 0;
+      quiz.firstAttemptWrong = new Set();
         quiz.wrongItems = [];
         quiz.startTime = Date.now();
         try { localStorage.removeItem(`quiz_saved_${assignmentId}`); } catch(e) {}
@@ -526,6 +528,7 @@ async function startQuiz(assignmentId) {
     } else {
       quiz.currentIndex = 0;
       quiz.correctCount = 0;
+      quiz.firstAttemptWrong = new Set();
       quiz.wrongItems = [];
       quiz.startTime = Date.now();
     }
@@ -1116,16 +1119,18 @@ async function pinyinSubmit() {
   const q = quiz.questions[quiz.currentIndex];
   const hint = document.getElementById("quizHint");
   const btn = document.getElementById("pinyinSubmitBtn");
+  const qKey = quiz.currentIndex;
   const isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
   if (isCorrect) {
     quiz.answering = false;
     if (btn) btn.disabled = true;
-    quiz.correctCount++;
+    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextQuestion, 800);
   } else {
     quiz.answering = true;
-    if (!q._isRetry) {
+    if (!quiz.firstAttemptWrong.has(qKey)) {
+      quiz.firstAttemptWrong.add(qKey);
       quiz.wrongItems.push({
         character: q.display_char || q.question,
         pinyin: q.display_pinyin || q.answer,
@@ -1154,16 +1159,18 @@ function quizAnswer(selected) {
 
   const isCorrect = selected === q.correct_index;
   const hint = document.getElementById("quizHint");
+  const qKey = quiz.currentIndex;
 
   if (isCorrect) {
     btns[selected].classList.add("correct");
-    quiz.correctCount++;
+    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextQuestion, 800);
   } else {
     btns[selected].classList.add("wrong");
     btns[q.correct_index].classList.add("reveal");
-    if (!q._isRetry) {
+    if (!quiz.firstAttemptWrong.has(qKey)) {
+      quiz.firstAttemptWrong.add(qKey);
       quiz.wrongItems.push({
         character: q.display_char || q.answer,
         pinyin: q.display_pinyin || q.question,
@@ -1183,12 +1190,13 @@ function handleHwAnswer(userInput) {
   const q = quiz.questions[quiz.currentIndex];
   const isCorrect = userInput === q.answer;
   const hint = document.getElementById("quizHint");
+  const qKey = quiz.currentIndex;
 
   if (isCorrect) {
     quiz.answering = false;
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
-    quiz.correctCount++;
+    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextQuestion, 800);
   } else {
@@ -1196,7 +1204,8 @@ function handleHwAnswer(userInput) {
     hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = false;
-    if (!q._isRetry) {
+    if (!quiz.firstAttemptWrong.has(qKey)) {
+      quiz.firstAttemptWrong.add(qKey);
       quiz.wrongItems.push({
         character: q.answer,
         pinyin: q.question,

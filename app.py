@@ -2593,19 +2593,28 @@ def _get_or_create_today_assignments(db, user_id):
     plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
     has_pending = any(r["status"] == "pending" for r in existing)
 
-    if not existing:
-        if plan_mode == "book_review":
-            # Day-of-7 schedule: recognition_lesson / writing_lesson store day 1..7
+    if plan_mode == "book_review":
+        # Ensure both recognition and writing assignments exist for today.
+        # One type might be missing if the other was carried forward from
+        # a prior day while this type was already completed (and stayed
+        # on its old date).
+        existing_types = {r["type"] for r in existing}
+        changed = False
+        if "recognition" not in existing_types:
             db.execute(
                 "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'book_review')",
                 (user_id, today, plan["grade"], plan["recognition_lesson"]),
             )
+            changed = True
+        if "writing" not in existing_types:
             db.execute(
                 "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'book_review')",
                 (user_id, today, plan["grade"], plan["writing_lesson"]),
             )
+            changed = True
+        if changed:
             db.commit()
-        else:
+    elif not existing:
             # First visit today: create initial assignments using cross-grade search
             rec_base_grade = plan["recognition_grade"] or plan["grade"]
             wrt_base_grade = plan["writing_grade"] or plan["grade"]

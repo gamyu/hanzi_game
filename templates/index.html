@@ -4341,7 +4341,8 @@ let hwQuiz = {
   timerInterval: null,
   answering: false,
   totalOriginal: 0,      // total unique questions
-  answeredCorrectly: new Set(), // track which questions answered correctly
+  answeredCorrectly: new Set(),
+  firstAttemptWrong: new Set(),
   retryMap: {},           // question_key -> retry count
 };
 
@@ -4569,6 +4570,7 @@ async function doStartPreview(mode) {
   hwQuiz.startTime = Date.now();
   hwQuiz.answering = false;
   hwQuiz.answeredCorrectly = new Set();
+  hwQuiz.firstAttemptWrong = new Set();
   hwQuiz.retryMap = {};
   hwQuiz.isPreview = true;
 
@@ -4606,6 +4608,7 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.questions = data.questions.map((q, i) => ({ ...q, _origIndex: i }));
   hwQuiz.answering = false;
   hwQuiz.answeredCorrectly = new Set();
+  hwQuiz.firstAttemptWrong = new Set();
   hwQuiz.retryMap = {};
 
   // Restore saved progress from localStorage (auto-saved after every
@@ -5126,13 +5129,14 @@ async function hwPinyinSubmit() {
     hwQuiz.answering = false;
     if (btn) btn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
-      hwQuiz.correctCount++;
+      if (!hwQuiz.firstAttemptWrong.has(qKey)) hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
@@ -5172,20 +5176,19 @@ function hwQuizAnswer(selected, correctIdx) {
   if (isCorrect) {
     btns[selected].classList.add("correct");
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
-      hwQuiz.correctCount++;
+      if (!hwQuiz.firstAttemptWrong.has(qKey)) hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    hwQuiz.firstAttemptWrong.add(qKey);
     btns[selected].classList.add("wrong");
     btns[correctIdx].classList.add("reveal");
     reportHwStreak(false);
-    // Track retry count for this question
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
-      // First time wrong: record it
       hwQuiz.wrongItems.push({
         character: q.display_char || q.answer,
         pinyin: q.display_pinyin || q.question,
@@ -5214,13 +5217,14 @@ function hwHandleHwAnswer(userInput) {
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
-      hwQuiz.correctCount++;
+      if (!hwQuiz.firstAttemptWrong.has(qKey)) hwQuiz.correctCount++;
       hwQuiz.answeredCorrectly.add(qKey);
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     setTimeout(nextHwQuestion, 800);
   } else {
+    hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = true;
     hwQuizRecognizedResult2 = '';
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
