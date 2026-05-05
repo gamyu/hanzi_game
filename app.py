@@ -1901,7 +1901,11 @@ def wrong_answers_api():
             "SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s ORDER BY character, mode, created_at DESC",
             (session["user_id"],),
         ).fetchall()
-    return jsonify({"wrong_answers": [dict(r) for r in rows]})
+    results = [dict(r) for r in rows]
+    writing_chars = {r["character"] for r in results if r["mode"] == "dictation_handwrite"}
+    results = [r for r in results
+               if r["mode"] == "dictation_handwrite" or r["character"] not in writing_chars]
+    return jsonify({"wrong_answers": results})
 
 
 @app.route("/api/review_question", methods=["POST"])
@@ -2700,6 +2704,9 @@ def homework_today():
         (session["user_id"], today),
     ).fetchall()
     review_needed = [dict(r) for r in review_items]
+    writing_chars = {r["character"] for r in review_needed if r["mode"] == "dictation_handwrite"}
+    review_needed = [r for r in review_needed
+                     if r["mode"] == "dictation_handwrite" or r["character"] not in writing_chars]
 
     return jsonify({
         "assignments": assignments,
