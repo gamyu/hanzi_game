@@ -1109,7 +1109,6 @@ async function pinyinSubmit() {
         mode: q.mode,
       });
     }
-    scheduleRetry(q);
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <strong style="font-size:28px;color:#38a169;font-family:'Times New Roman','STSong',serif">${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
@@ -1148,7 +1147,6 @@ function quizAnswer(selected) {
         mode: q.mode,
       });
     }
-    scheduleRetry(q);
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
       <br><button class="ok-btn" onclick="nextQuestion()">继续</button>`;
@@ -1182,7 +1180,6 @@ function handleHwAnswer(userInput) {
         mode: q.mode,
       });
     }
-    scheduleRetry(q);
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     const skipBtn = document.createElement("button");
