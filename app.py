@@ -1237,8 +1237,9 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             return {"error": "该课/单元暂无词语数据"}
         eligible = [
             w for w in ciyu_entries
-            if (w["word"] in HOMOPHONE_HINTS
-                or not _pinyin_has_other_word(w["pinyin"], w["word"]))
+            if len(w["word"]) >= 2
+            and (w["word"] in HOMOPHONE_HINTS
+                 or not _pinyin_has_other_word(w["pinyin"], w["word"]))
         ]
         if not eligible:
             eligible = ciyu_entries
@@ -2794,7 +2795,7 @@ def homework_start(assignment_id):
             if not entries:
                 return jsonify({"error": "该课暂无识字数据"}), 400
         elif hw_type == "writing":
-            entries = lesson_data.get("词语", [])
+            entries = [e for e in lesson_data.get("词语", []) if len(e.get("word", "")) >= 2]
             if not entries:
                 return jsonify({"error": "该课暂无词语数据"}), 400
         else:
@@ -2833,6 +2834,8 @@ def homework_start(assignment_id):
         random.shuffle(questions)
     elif hw_type == "writing":
         for entry in entries:
+            if len(entry["word"]) < 2:
+                continue
             q = {
                 "mode": "dictation_handwrite",
                 "question": entry["pinyin"],
