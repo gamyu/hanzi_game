@@ -1132,13 +1132,24 @@
   .hw-quiz-canvas-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
   .hw-quiz-hw-box { position: relative; }
   .hw-quiz-hw-box canvas { border: 2px solid #e2e8f0; border-radius: 12px; background: #fafafa; touch-action: none; }
-  .hw-quiz-canvas-btns { display: flex; gap: 12px; }
+  .hw-quiz-canvas-btns { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
   .hw-quiz-canvas-btns button {
-    padding: 8px 24px; border: 2px solid #e2e8f0; border-radius: 8px;
-    background: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    padding: 10px 28px; border: 2px solid #e2e8f0; border-radius: 10px;
+    background: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+    color: #2d3748; transition: all 0.2s;
   }
-  .hw-quiz-canvas-btns button:hover { border-color: #667eea; }
+  .hw-quiz-canvas-btns button:hover { border-color: #5a67d8; background: #ebf4ff; }
+  .hw-quiz-canvas-btns button.active { background: #667eea; color: #fff; border-color: #667eea; }
+  .hw-quiz-canvas-btns button.hw-submit-btn { background: #667eea; color: #fff; border-color: #667eea; }
+  .hw-quiz-canvas-btns button.hw-submit-btn:hover { background: #5a67d8; border-color: #5a67d8; }
   .hw-quiz-hw-status { font-size: 14px; color: #999; min-height: 20px; }
+  .hw-canvas-clear {
+    padding: 10px 28px; border: 2px solid #e2e8f0; border-radius: 10px;
+    background: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+    color: #2d3748; transition: all 0.2s;
+  }
+  .hw-canvas-clear:hover { border-color: #5a67d8; background: #ebf4ff; }
+  .hw-canvas-clear.active { background: #667eea; color: #fff; border-color: #667eea; }
 
   /* Pinyin handwriting area (拼音四线格 + 手写) */
   .pinyin-hw-wrap {
@@ -1290,10 +1301,11 @@
   .hw-progress-ring .fg.inactive { stroke: #a0aec0; }
   .hw-progress-pct {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    font-size: 14px; font-weight: 700; color: #2d3748;
+    font-size: 12px; font-weight: 700; color: #2d3748; white-space: nowrap;
   }
   .hw-progress-label { font-size: 13px; font-weight: 600; color: #4a5568; }
-  .hw-progress-sub { font-size: 10px; color: #a0aec0; }
+  .hw-progress-sub { font-size: 11px; color: #4a5568; text-align: center; line-height: 1.3; }
+  .hw-progress-item { width: auto !important; min-width: 100px; }
 
   /* History table */
   .hw-history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -1342,6 +1354,18 @@
   }
   .stroke-toggle input:checked + .slider { background: #5a67d8; }
   .stroke-toggle input:checked + .slider:before { transform: translateX(18px); }
+
+  .auto-next-control {
+    display: flex; align-items: center; justify-content: center;
+    margin: 8px 0 4px; font-size: 14px; color: #4a5568;
+  }
+  .auto-next-control.compact {
+    justify-content: flex-end; margin: 0 0 8px; width: 100%;
+  }
+  .auto-next-control label {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  }
+  .auto-next-control .auto-next-text { white-space: nowrap; font-weight: 600; }
 
   /* Hanzi Writer containers */
   .hz-writer-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -1400,6 +1424,15 @@
   <div class="hw-quiz-section" id="hwQuizSection" style="display:none">
     <div class="hw-quiz-nav" id="hwQuizNav" style="display:flex;gap:8px;margin-bottom:8px">
       <button onclick="confirmHwBackToList()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回作业列表</button>
+    </div>
+    <div class="auto-next-control compact">
+      <label>
+        <span class="stroke-toggle">
+          <input type="checkbox" class="auto-next-toggle" onchange="setAutoNext(this.checked)">
+          <span class="slider"></span>
+        </span>
+        <span class="auto-next-text">自动下一题</span>
+      </label>
     </div>
     <div class="hw-quiz-header">
       <div class="hw-quiz-progress" id="hwQuizProgress">1/10</div>
@@ -1479,6 +1512,15 @@
     <div class="control-row" id="gradeRow"></div>
     <div class="section-label">游戏模式</div>
     <div class="control-row" id="modeRow"></div>
+    <div class="auto-next-control">
+      <label>
+        <span class="stroke-toggle">
+          <input type="checkbox" class="auto-next-toggle" onchange="setAutoNext(this.checked)">
+          <span class="slider"></span>
+        </span>
+        <span class="auto-next-text">自动下一题</span>
+      </label>
+    </div>
   </div>
 </div>
 
@@ -1494,7 +1536,28 @@
     <input type="password" id="authPassword" placeholder="密码" onkeydown="if(event.key==='Enter')submitAuth()">
     <button class="modal-submit" id="authSubmit" onclick="submitAuth()">登录</button>
     <button class="modal-close" id="authCancelBtn" onclick="hideAuthModal()">取消</button>
-    <div style="text-align:right;margin-top:12px"><a href="#" style="font-size:12px;color:#a0aec0;text-decoration:none" onclick="event.preventDefault();hideAuthModal();document.getElementById('adminLoginModal').classList.remove('hidden')">管理员登录</a></div>
+    <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:12px">
+      <a href="#" id="authForgotLink" style="color:#5a67d8;text-decoration:none" onclick="event.preventDefault();hideAuthModal();showForgotPasswordModal()">忘记密码？</a>
+      <a href="#" style="color:#a0aec0;text-decoration:none" onclick="event.preventDefault();hideAuthModal();document.getElementById('adminLoginModal').classList.remove('hidden')">管理员登录</a>
+    </div>
+  </div>
+</div>
+
+<!-- Forgot password modal (sends reset code to user's recovery email) -->
+<div class="modal-overlay hidden" id="forgotPwModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:420px">
+    <h2>忘记密码</h2>
+    <div style="font-size:12px;color:#718096;margin-bottom:10px">输入用户名，验证码会发送到该账号设置过的找回邮箱。如果还未设置过，请联系管理员。</div>
+    <label style="font-size:13px;color:#4a5568;display:block;margin-bottom:4px">用户名</label>
+    <input type="text" id="fpwUsername" placeholder="你的用户名">
+    <button class="modal-submit" id="fpwSendBtn" onclick="forgotSendCode()" style="margin-top:8px">发送验证码到邮箱</button>
+    <label style="font-size:13px;color:#4a5568;display:block;margin:12px 0 4px">6 位验证码</label>
+    <input type="text" id="fpwCode" placeholder="例如 123456" inputmode="numeric" maxlength="6">
+    <label style="font-size:13px;color:#4a5568;display:block;margin:10px 0 4px">新登录密码</label>
+    <input type="password" id="fpwNew" placeholder="4位以上" onkeydown="if(event.key==='Enter')forgotSubmit()">
+    <div class="modal-error" id="fpwMsg" style="margin-top:8px"></div>
+    <button class="modal-submit" onclick="forgotSubmit()">设置新密码并登录</button>
+    <button class="modal-close" onclick="document.getElementById('forgotPwModal').classList.add('hidden')">关闭</button>
   </div>
 </div>
 
@@ -1521,21 +1584,41 @@
   </div>
 </div>
 
-<!-- Parent password modal (user sets/changes the password that parents use) -->
-<div class="modal-overlay hidden" id="parentPwModal" onclick="if(event.target===this)this.classList.add('hidden')">
-  <div class="modal" style="max-width:420px">
-    <h2>家长密码</h2>
-    <div style="font-size:13px;color:#718096;margin-bottom:12px">
-      家长使用你的用户名 + 家长密码登录 <a href="/parent" target="_blank" style="color:#5a67d8">/parent</a> 页面，可以查看你的学习进度并布置作业。留空保存将关闭家长登录。
+<!-- Change password modal (login password; uses email verification code or current password) -->
+<div class="modal-overlay hidden" id="changePwModal" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal" style="max-width:440px">
+    <h2>修改登录密码</h2>
+    <div id="cpwEmailRow" style="font-size:13px;color:#4a5568;margin-bottom:10px;padding:10px;background:#f7fafc;border-radius:8px">
+      <div id="cpwEmailStatus">加载中...</div>
+      <div style="margin-top:8px;display:none" id="cpwEmailEditRow">
+        <label style="font-size:12px;color:#4a5568;display:block;margin-bottom:4px">找回邮箱 <span style="color:#a0aec0">(用于忘记密码时发送验证码)</span></label>
+        <input type="email" id="cpwEmailInput" placeholder="example@domain.com" style="margin-bottom:6px">
+        <label style="font-size:12px;color:#4a5568;display:block;margin-bottom:4px">当前登录密码</label>
+        <input type="password" id="cpwEmailCurrent" placeholder="验证身份用" style="margin-bottom:6px">
+        <button class="modal-submit" onclick="submitSetEmail()" style="margin-top:4px">保存邮箱</button>
+        <div id="cpwEmailMsg" style="font-size:12px;margin-top:6px"></div>
+      </div>
     </div>
-    <div id="parentPwStatus" style="font-size:13px;margin-bottom:8px"></div>
-    <label style="font-size:13px;color:#4a5568;display:block;margin-bottom:4px">当前登录密码 <span style="color:#e53e3e">*</span></label>
-    <input type="password" id="parentPwCurrent" placeholder="验证身份用">
-    <label style="font-size:13px;color:#4a5568;display:block;margin:10px 0 4px">新的家长密码 <span style="color:#a0aec0;font-weight:400">(留空表示关闭家长登录)</span></label>
-    <input type="password" id="parentPwNew" placeholder="4位以上" onkeydown="if(event.key==='Enter')submitParentPassword()">
-    <div class="modal-error" id="parentPwMsg" style="margin-top:8px"></div>
-    <button class="modal-submit" onclick="submitParentPassword()">保存</button>
-    <button class="modal-close" onclick="document.getElementById('parentPwModal').classList.add('hidden')">关闭</button>
+    <div class="modal-tabs" style="margin-bottom:12px">
+      <button class="modal-tab active" id="cpwTabCurrent" onclick="switchCpwTab('current')">用当前密码修改</button>
+      <button class="modal-tab" id="cpwTabCode" onclick="switchCpwTab('code')">用邮箱验证码</button>
+    </div>
+    <div id="cpwSectionCurrent">
+      <label style="font-size:13px;color:#4a5568;display:block;margin-bottom:4px">当前登录密码</label>
+      <input type="password" id="cpwCurrent" placeholder="当前密码">
+      <label style="font-size:13px;color:#4a5568;display:block;margin:10px 0 4px">新登录密码</label>
+      <input type="password" id="cpwNew1" placeholder="4位以上" onkeydown="if(event.key==='Enter')submitChangePasswordCurrent()">
+    </div>
+    <div id="cpwSectionCode" style="display:none">
+      <button class="modal-submit" id="cpwSendCodeBtn" onclick="sendResetCode('login')" style="margin-bottom:8px;background:#a0aec0">发送验证码到邮箱</button>
+      <label style="font-size:13px;color:#4a5568;display:block;margin-bottom:4px">6 位邮箱验证码</label>
+      <input type="text" id="cpwCode" placeholder="例如 123456" inputmode="numeric" maxlength="6">
+      <label style="font-size:13px;color:#4a5568;display:block;margin:10px 0 4px">新登录密码</label>
+      <input type="password" id="cpwNew2" placeholder="4位以上" onkeydown="if(event.key==='Enter')submitChangePasswordCode()">
+    </div>
+    <div class="modal-error" id="cpwMsg" style="margin-top:8px"></div>
+    <button class="modal-submit" id="cpwSubmitBtn" onclick="submitChangePasswordCurrent()">保存新密码</button>
+    <button class="modal-close" onclick="document.getElementById('changePwModal').classList.add('hidden')">关闭</button>
   </div>
 </div>
 
@@ -1675,6 +1758,37 @@ const MODES = [
   { id: "dictation_handwrite", label: "看拼音写词语" },
   { id: "read_aloud", label: "看字读音" },
 ];
+
+function isAutoNext() {
+  return localStorage.getItem('autoNextQuestion') !== 'false';
+}
+function setAutoNext(on) {
+  localStorage.setItem('autoNextQuestion', on ? 'true' : 'false');
+  syncAutoNextToggles();
+}
+function toggleAutoNext() {
+  setAutoNext(!isAutoNext());
+}
+function syncAutoNextToggles() {
+  const on = isAutoNext();
+  document.querySelectorAll('.auto-next-toggle').forEach(el => {
+    el.checked = on;
+  });
+}
+function advanceOrWait(nextFn, hintEl, delay) {
+  if (isAutoNext()) {
+    setTimeout(nextFn, delay || 800);
+  } else {
+    const btn = document.createElement("button");
+    btn.textContent = "继续"; btn.className = "ok-btn";
+    btn.style.cssText = "margin-top:8px";
+    btn.onclick = () => {
+      btn.disabled = true;
+      nextFn();
+    };
+    if (hintEl) hintEl.appendChild(btn);
+  }
+}
 
 let state = {
   grade: localStorage.getItem("hanzi_grade") || "一年级上",
@@ -1817,7 +1931,8 @@ function renderUserBar() {
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
-      <button class="user-btn" onclick="showParentPasswordModal()">家长密码</button>
+      <button class="user-btn" onclick="showChangePasswordModal()">修改密码</button>
+      <button class="user-btn" onclick="location.href='/parent'">家长登录</button>
       <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
       ${adminBtn}
@@ -1845,46 +1960,201 @@ function hideAuthModal() {
   document.getElementById("authModal").classList.add("hidden");
 }
 
-async function showParentPasswordModal() {
-  document.getElementById("parentPwCurrent").value = "";
-  document.getElementById("parentPwNew").value = "";
-  document.getElementById("parentPwMsg").textContent = "";
-  const statusEl = document.getElementById("parentPwStatus");
-  statusEl.textContent = "加载中...";
-  statusEl.style.color = "#718096";
-  document.getElementById("parentPwModal").classList.remove("hidden");
-  try {
-    const res = await fetch("/api/user/parent_status");
-    const data = await res.json();
-    if (data.has_parent_password) {
-      statusEl.innerHTML = '✓ 家长密码已设置 — 重新输入新密码即可修改，留空即可关闭';
-      statusEl.style.color = "#38a169";
-    } else {
-      statusEl.innerHTML = '⚠ 尚未设置家长密码';
-      statusEl.style.color = "#d69e2e";
-    }
-  } catch (e) {
-    statusEl.textContent = "";
-  }
-  setTimeout(() => document.getElementById("parentPwCurrent").focus(), 50);
+// --- Change-password modal (login password) ---
+let _cpwTab = "current"; // "current" or "code"
+
+async function showChangePasswordModal() {
+  // Reset fields
+  ["cpwCurrent","cpwNew1","cpwNew2","cpwCode","cpwEmailInput","cpwEmailCurrent"].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = "";
+  });
+  document.getElementById("cpwMsg").textContent = "";
+  document.getElementById("cpwEmailMsg").textContent = "";
+  document.getElementById("cpwEmailEditRow").style.display = "none";
+  document.getElementById("changePwModal").classList.remove("hidden");
+  await refreshCpwEmailStatus();
+  switchCpwTab("current");
+  setTimeout(() => document.getElementById("cpwCurrent").focus(), 50);
 }
 
-async function submitParentPassword() {
-  const current = document.getElementById("parentPwCurrent").value;
-  const next = document.getElementById("parentPwNew").value;
-  const msg = document.getElementById("parentPwMsg");
+async function refreshCpwEmailStatus() {
+  const statusEl = document.getElementById("cpwEmailStatus");
+  statusEl.textContent = "加载中...";
+  try {
+    const res = await fetch("/api/user/security_status");
+    const data = await res.json();
+    if (data.has_email) {
+      statusEl.innerHTML = `✓ 找回邮箱: <strong>${data.email_masked}</strong> · <a href="#" onclick="event.preventDefault();toggleCpwEmailEdit(true)" style="color:#5a67d8">修改</a>`;
+    } else {
+      statusEl.innerHTML = `⚠ 尚未设置找回邮箱 · <a href="#" onclick="event.preventDefault();toggleCpwEmailEdit(true)" style="color:#5a67d8">立即设置</a>`;
+    }
+    document.getElementById("cpwSendCodeBtn").disabled = !data.has_email;
+    document.getElementById("cpwSendCodeBtn").style.background = data.has_email ? "#667eea" : "#a0aec0";
+    return data;
+  } catch (e) {
+    statusEl.textContent = "(无法加载)";
+    return null;
+  }
+}
+
+function toggleCpwEmailEdit(show) {
+  document.getElementById("cpwEmailEditRow").style.display = show ? "block" : "none";
+  if (show) setTimeout(() => document.getElementById("cpwEmailInput").focus(), 50);
+}
+
+async function submitSetEmail() {
+  const email = document.getElementById("cpwEmailInput").value.trim();
+  const current = document.getElementById("cpwEmailCurrent").value;
+  const msg = document.getElementById("cpwEmailMsg");
   msg.style.color = "#e53e3e"; msg.textContent = "";
+  if (!email || !email.includes("@")) { msg.textContent = "请输入有效邮箱"; return; }
   if (!current) { msg.textContent = "请输入当前登录密码"; return; }
-  const res = await fetch("/api/user/set_parent_password", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ current_password: current, parent_password: next }),
+  const res = await fetch("/api/user/set_email", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, current_password: current }),
   });
   const data = await res.json();
   if (!res.ok || data.error) { msg.textContent = data.error || "保存失败"; return; }
-  msg.style.color = "#38a169";
-  msg.textContent = data.cleared ? "✓ 家长登录已关闭" : "✓ 家长密码已保存";
-  setTimeout(() => document.getElementById("parentPwModal").classList.add("hidden"), 1200);
+  msg.style.color = "#38a169"; msg.textContent = "✓ 邮箱已保存";
+  await refreshCpwEmailStatus();
+  setTimeout(() => toggleCpwEmailEdit(false), 800);
+}
+
+function switchCpwTab(tab) {
+  _cpwTab = tab;
+  document.getElementById("cpwTabCurrent").classList.toggle("active", tab === "current");
+  document.getElementById("cpwTabCode").classList.toggle("active", tab === "code");
+  document.getElementById("cpwSectionCurrent").style.display = tab === "current" ? "" : "none";
+  document.getElementById("cpwSectionCode").style.display = tab === "code" ? "" : "none";
+  const submitBtn = document.getElementById("cpwSubmitBtn");
+  submitBtn.onclick = tab === "current" ? submitChangePasswordCurrent : submitChangePasswordCode;
+  document.getElementById("cpwMsg").textContent = "";
+}
+
+async function sendResetCode(target) {
+  const btn = document.getElementById("cpwSendCodeBtn");
+  const msg = document.getElementById("cpwMsg");
+  msg.style.color = "#4a5568"; msg.textContent = "发送中...";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/user/send_reset_code", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      msg.style.color = "#e53e3e"; msg.textContent = data.error || "发送失败";
+      btn.disabled = false;
+      return;
+    }
+    msg.style.color = "#38a169";
+    msg.textContent = `✓ 验证码已发送至 ${data.email_masked || "邮箱"}，15 分钟内有效`;
+    let s = 60;
+    btn.textContent = `(${s}s) 重新发送`;
+    const timer = setInterval(() => {
+      s--;
+      if (s <= 0) { clearInterval(timer); btn.disabled = false; btn.textContent = "重新发送验证码"; return; }
+      btn.textContent = `(${s}s) 重新发送`;
+    }, 1000);
+  } catch (e) {
+    msg.style.color = "#e53e3e"; msg.textContent = "网络错误";
+    btn.disabled = false;
+  }
+}
+
+async function submitChangePasswordCurrent() {
+  const current = document.getElementById("cpwCurrent").value;
+  const next = document.getElementById("cpwNew1").value;
+  const msg = document.getElementById("cpwMsg");
+  msg.style.color = "#e53e3e"; msg.textContent = "";
+  if (!current) { msg.textContent = "请输入当前密码"; return; }
+  if (next.length < 4) { msg.textContent = "新密码至少 4 位"; return; }
+  const res = await fetch("/api/user/change_password", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "login", mode: "current", current_password: current, new_password: next }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) { msg.textContent = data.error || "修改失败"; return; }
+  msg.style.color = "#38a169"; msg.textContent = "✓ 密码已修改";
+  setTimeout(() => document.getElementById("changePwModal").classList.add("hidden"), 1200);
+}
+
+async function submitChangePasswordCode() {
+  const code = document.getElementById("cpwCode").value.trim();
+  const next = document.getElementById("cpwNew2").value;
+  const msg = document.getElementById("cpwMsg");
+  msg.style.color = "#e53e3e"; msg.textContent = "";
+  if (!code) { msg.textContent = "请输入验证码"; return; }
+  if (next.length < 4) { msg.textContent = "新密码至少 4 位"; return; }
+  const res = await fetch("/api/user/change_password", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "login", mode: "code", code, new_password: next }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) { msg.textContent = data.error || "修改失败"; return; }
+  msg.style.color = "#38a169"; msg.textContent = "✓ 密码已修改";
+  setTimeout(() => document.getElementById("changePwModal").classList.add("hidden"), 1200);
+}
+
+// --- Forgot-password (not logged in) ---
+function showForgotPasswordModal() {
+  ["fpwUsername","fpwCode","fpwNew"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("fpwMsg").textContent = "";
+  document.getElementById("fpwSendBtn").disabled = false;
+  document.getElementById("fpwSendBtn").textContent = "发送验证码到邮箱";
+  document.getElementById("forgotPwModal").classList.remove("hidden");
+  setTimeout(() => document.getElementById("fpwUsername").focus(), 50);
+}
+
+async function forgotSendCode() {
+  const username = document.getElementById("fpwUsername").value.trim();
+  const msg = document.getElementById("fpwMsg");
+  const btn = document.getElementById("fpwSendBtn");
+  msg.style.color = "#4a5568";
+  if (!username) { msg.style.color = "#e53e3e"; msg.textContent = "请输入用户名"; return; }
+  msg.textContent = "发送中..."; btn.disabled = true;
+  try {
+    const res = await fetch("/api/user/send_reset_code", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "login", username }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      msg.style.color = "#e53e3e"; msg.textContent = data.error || "发送失败";
+      btn.disabled = false; return;
+    }
+    msg.style.color = "#38a169";
+    msg.textContent = data.email_masked ? `✓ 验证码已发送至 ${data.email_masked}` : (data.message || "✓ 已发送");
+    let s = 60;
+    btn.textContent = `(${s}s) 重新发送`;
+    const timer = setInterval(() => {
+      s--;
+      if (s <= 0) { clearInterval(timer); btn.disabled = false; btn.textContent = "重新发送验证码"; return; }
+      btn.textContent = `(${s}s) 重新发送`;
+    }, 1000);
+  } catch (e) {
+    msg.style.color = "#e53e3e"; msg.textContent = "网络错误";
+    btn.disabled = false;
+  }
+}
+
+async function forgotSubmit() {
+  const username = document.getElementById("fpwUsername").value.trim();
+  const code = document.getElementById("fpwCode").value.trim();
+  const next = document.getElementById("fpwNew").value;
+  const msg = document.getElementById("fpwMsg");
+  msg.style.color = "#e53e3e";
+  if (!username) { msg.textContent = "请输入用户名"; return; }
+  if (!code) { msg.textContent = "请输入验证码"; return; }
+  if (next.length < 4) { msg.textContent = "新密码至少 4 位"; return; }
+  const res = await fetch("/api/user/change_password", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: "login", mode: "code", username, code, new_password: next }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) { msg.textContent = data.error || "修改失败"; return; }
+  msg.style.color = "#38a169"; msg.textContent = "✓ 密码已重设，正在登录...";
+  setTimeout(() => location.reload(), 1000);
 }
 
 function switchTab(tab) {
@@ -2728,6 +2998,7 @@ async function loadDailyLog() {
 
 // --- Init ---
 async function init() {
+  syncAutoNextToggles();
   await checkLogin();
 
   if (state.user) {
@@ -3111,14 +3382,9 @@ function handleAnswer(selected, q, btn) {
   updateScoreboard();
 
   if (isCorrect) {
-    setTimeout(loadQuestion, 100);
+    advanceOrWait(loadQuestion, hint, 800);
   } else {
-    // Show OK button and wait for user to click
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "OK";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    advanceOrWait(loadQuestion, hint, 1600);
   }
 }
 
@@ -3149,7 +3415,7 @@ function handleDictationAnswer(userInput, q) {
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
     updateScoreboard();
-    setTimeout(loadQuestion, 100);
+    advanceOrWait(loadQuestion, hint, 800);
   } else {
     state.answering = true;
     hwRecognizedResult = '';
@@ -3193,6 +3459,60 @@ function checkStrokeQuality(strokes, canvas) {
   return null; // OK
 }
 
+// --- Expected stroke count check ---
+// Google's handwriting API can match a character even with extra scribbled
+// strokes, so we double-check that the user's stroke count is in the right
+// ballpark. Caches per-character lookup since loadCharacterData hits the CDN.
+const _expectedStrokeCache = {};
+async function getExpectedStrokeCountForChars(chars) {
+  let total = 0;
+  for (const ch of chars) {
+    if (_expectedStrokeCache[ch] === undefined) {
+      try {
+        const charData = await HanziWriter.loadCharacterData(ch);
+        _expectedStrokeCache[ch] = (charData.strokes || []).length;
+      } catch(e) {
+        _expectedStrokeCache[ch] = null;
+      }
+    }
+    const n = _expectedStrokeCache[ch];
+    if (n === null) return null; // unknown for at least one char — skip check
+    total += n;
+  }
+  return total;
+}
+
+// Returns an error message if user's stroke count is outside the acceptable
+// range vs the expected character(s), else null. Tolerance is intentionally
+// loose on the low side (kids may simplify) but tight on the high side
+// (extra strokes signal scribbling).
+function strokeCountErrorMessage(userCount, expected) {
+  if (expected === null || expected === 0) return null;
+  if (userCount > expected * 1.6) {
+    return `笔画过多 (写了${userCount}笔，应为${expected}笔)，请清除后重写`;
+  }
+  if (userCount < Math.max(2, Math.floor(expected * 0.5))) {
+    return `笔画过少 (写了${userCount}笔，应为${expected}笔)`;
+  }
+  return null;
+}
+
+// Per-cell stroke count validation for multi-char canvases.
+async function validateCellStrokeCounts(strokes, layout, answer) {
+  if (!layout || !answer) return null;
+  const chars = answer.split("");
+  if (chars.length === 0) return null;
+  const cellStrokes = splitStrokesByCellsMain(strokes, layout);
+  for (let i = 0; i < chars.length; i++) {
+    const expected = await getExpectedStrokeCountForChars([chars[i]]);
+    const userCount = cellStrokes[i] ? cellStrokes[i].length : 0;
+    if (userCount === 0) continue; // empty cell handled elsewhere
+    const err = strokeCountErrorMessage(userCount, expected);
+    if (err) return `第${i + 1}个字: ${err}`;
+  }
+  return null;
+}
+
 // --- Stroke order mode (Hanzi Writer) ---
 let strokeOrderEnabled = localStorage.getItem("hanzi_stroke_order") === "true";
 let strokeAnimEnabled = localStorage.getItem("hanzi_stroke_anim") !== "false"; // default on
@@ -3213,6 +3533,13 @@ function getStrokeToggleHTML() {
         <span class="slider"></span>
       </span>
       严格笔顺
+    </label>
+    <label>
+      <span class="stroke-toggle">
+        <input type="checkbox" class="auto-next-toggle" ${isAutoNext() ? 'checked' : ''} onchange="setAutoNext(this.checked)">
+        <span class="slider"></span>
+      </span>
+      自动下一题
     </label>
   </div>
   <div id="strokeOrderHint" style="display:${strokeOrderEnabled ? 'block' : 'none'};font-size:12px;color:#e53e3e;text-align:center;margin-top:2px">开启严格笔顺：将追踪书写顺序，笔顺有误将视为错误，需要重新写</div>`;
@@ -3483,6 +3810,25 @@ async function submitHandwriting() {
     const recEl = document.getElementById("hwRecognized");
     if (recEl) recEl.textContent = "请先写字";
     return;
+  }
+
+  // Stroke-count sanity check: only enforced when Google's recognition matched
+  // the answer. If it didn't match, the answer is wrong anyway and the count
+  // doesn't add information.
+  if (state.currentQ && hwRecognizedResult === state.currentQ.answer) {
+    const statusEl = document.getElementById("hwStatus");
+    let countErr = null;
+    if (mainCellLayout && mainCellLayout.charCount > 1) {
+      countErr = await validateCellStrokeCounts(canvasStrokes, mainCellLayout, state.currentQ.answer);
+    } else {
+      const expected = await getExpectedStrokeCountForChars(state.currentQ.answer.split(""));
+      countErr = strokeCountErrorMessage(canvasStrokes.length, expected);
+    }
+    if (countErr) {
+      if (statusEl) statusEl.textContent = countErr;
+      hwRecognizedResult = ''; // force re-recognition next submit
+      return;
+    }
   }
 
   // If stroke order checking is enabled and answer is correct, check stroke order
@@ -3944,7 +4290,7 @@ async function submitGamePinyin() {
     const comboEl = document.getElementById("comboBox");
     comboEl.classList.remove("hot"); void comboEl.offsetWidth; comboEl.classList.add("hot");
     updateScoreboard();
-    setTimeout(loadQuestion, 100);
+    advanceOrWait(loadQuestion, hint, 800);
   } else {
     state.answering = true;
     state.combo = 0;
@@ -4230,7 +4576,7 @@ async function handleReadAloudAnswer(alternatives) {
     void comboEl.offsetWidth;
     comboEl.classList.add("hot");
 
-    setTimeout(loadQuestion, 800);
+    advanceOrWait(loadQuestion, hint, 800);
   } else {
     state.combo = 0;
     reportStreak(false);
@@ -4245,18 +4591,14 @@ async function handleReadAloudAnswer(alternatives) {
     }
     hint.innerHTML = hintHTML;
 
-    setTimeout(() => speakChar(targetChar), 300);
+    if (!isAutoNext()) setTimeout(() => speakChar(targetChar), 300);
 
     const retryAttempt = q._retryAttempt || 0;
     if (retryAttempt === 0) recordWrongAnswer(q);
     if (retryAttempt < 2) {
     }
 
-    const okBtn = document.createElement("button");
-    okBtn.textContent = "继续";
-    okBtn.className = "ok-btn";
-    okBtn.onclick = () => loadQuestion();
-    hint.appendChild(okBtn);
+    advanceOrWait(loadQuestion, hint, 1800);
   }
 
   updateScoreboard();
@@ -4497,14 +4839,24 @@ async function loadHomeworkProgress() {
     return;
   }
 
-  document.getElementById("hwProgressSection").style.display = "";
+  if (!data.progress || data.progress.length === 0) {
+    document.getElementById("hwProgressSection").style.display = "none";
+  } else {
+    document.getElementById("hwProgressSection").style.display = "";
+  }
   const grid = document.getElementById("hwProgressGrid");
   const circumference = 2 * Math.PI * 25;
 
-  grid.innerHTML = data.progress.map(p => {
-    const pct = p.overall_pct;
-    const offset = circumference - (pct / 100) * circumference;
-    const cls = !p.active ? "inactive" : pct >= 100 ? "done" : "active";
+  grid.innerHTML = (data.progress || []).map(p => {
+    // Use the further-along of the two lesson tracks for the visual arc;
+    // the detailed 认/写 numbers are shown below the circle.
+    const recDone = Math.max(0, (p.recognition_lesson || 1) - 1);
+    const wrtDone = Math.max(0, (p.writing_lesson || 1) - 1);
+    const totalLessons = p.total_lessons || 1;
+    const lessonsDone = Math.max(recDone, wrtDone);
+    const pct = totalLessons > 0 ? lessonsDone / totalLessons : 0;
+    const offset = circumference - pct * circumference;
+    const cls = !p.active ? "inactive" : pct >= 1 ? "done" : "active";
     return `<div class="hw-progress-item">
       <div class="hw-progress-ring">
         <svg width="60" height="60">
@@ -4512,10 +4864,10 @@ async function loadHomeworkProgress() {
           <circle class="fg ${cls}" cx="30" cy="30" r="25"
             stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"/>
         </svg>
-        <div class="hw-progress-pct">${pct}%</div>
+        <div class="hw-progress-pct">${lessonsDone}/${totalLessons}</div>
       </div>
       <div class="hw-progress-label">${p.grade_short}</div>
-      <div class="hw-progress-sub">认${p.recognition_lesson - 1}/${p.total_lessons} 写${p.writing_lesson - 1}/${p.total_lessons}</div>
+      <div class="hw-progress-sub">认 第${recDone}/${totalLessons}课 · 写 第${wrtDone}/${totalLessons}课</div>
     </div>`;
   }).join("");
 
@@ -4828,7 +5180,7 @@ function showHwQuizQuestion() {
         <button onclick="clearHwQuizCanvas2()">清除</button>
         <button id="hwEraserBtn" onclick="toggleEraser('hwQuizCanvas')">橡皮擦</button>
         <button onclick="recognizeHwQuiz2()">识别</button>
-        <button id="hwQuizSubmitBtn" onclick="submitHwQuiz()">确认</button>
+        <button id="hwQuizSubmitBtn" class="hw-submit-btn" onclick="submitHwQuiz()">确认</button>
       </div>
       <div class="hw-quiz-hw-status" id="hwQuizStatus"></div>
     </div>`;
@@ -5134,7 +5486,7 @@ async function hwPinyinSubmit() {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
-    setTimeout(nextHwQuestion, 800);
+    advanceOrWait(nextHwQuestion, hint, 800);
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = true;
@@ -5181,7 +5533,7 @@ function hwQuizAnswer(selected, correctIdx) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
-    setTimeout(nextHwQuestion, 800);
+    advanceOrWait(nextHwQuestion, hint, 800);
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     btns[selected].classList.add("wrong");
@@ -5199,8 +5551,8 @@ function hwQuizAnswer(selected, correctIdx) {
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
-      <br><button class="ok-btn" onclick="nextHwQuestion()">继续</button>`;
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    advanceOrWait(nextHwQuestion, hint, 1600);
   }
 }
 
@@ -5222,7 +5574,7 @@ function hwHandleHwAnswer(userInput) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
-    setTimeout(nextHwQuestion, 800);
+    advanceOrWait(nextHwQuestion, hint, 800);
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = true;
@@ -5732,11 +6084,11 @@ function hwReviewAnswer(selected) {
       hwReview.answeredCorrectly.add(qKey);
     }
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
-    setTimeout(nextHwReviewQuestion, 800);
+    advanceOrWait(nextHwReviewQuestion, hint, 800);
   } else {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}
-      <br><button class="ok-btn" onclick="nextHwReviewQuestion()">继续</button>`;
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    advanceOrWait(nextHwReviewQuestion, hint, 1600);
   }
 }
 
@@ -5759,13 +6111,22 @@ async function submitHwReviewHandwrite() {
 
   const qKey = `${q.question}_${q.mode}`;
   if (userInput === q.answer) {
+    // Stroke-count sanity check (catches scribbling around a correct shape).
+    const expected = await getExpectedStrokeCountForChars(q.answer.split(""));
+    const countErr = strokeCountErrorMessage(hwCanvasStrokes.length, expected);
+    if (countErr) {
+      const recEl = document.getElementById("hwQuizRecognized");
+      if (recEl) recEl.textContent = countErr;
+      hwQuizRecognizedResult = '';
+      return;
+    }
     hwReview.answering = false;
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
     }
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
-    setTimeout(nextHwReviewQuestion, 800);
+    advanceOrWait(nextHwReviewQuestion, hint, 800);
   } else {
     hwReview.answering = true;
     hwQuizRecognizedResult = '';
@@ -5973,6 +6334,19 @@ async function submitHwQuiz() {
   }
   // Check stroke order if enabled and answer is correct
   const q = hwQuiz.questions[hwQuiz.currentIndex];
+  // Stroke-count sanity check (only when claiming correct).
+  if (q && hwQuizRecognizedResult2 === q.answer) {
+    const expected = await getExpectedStrokeCountForChars(q.answer.split(""));
+    const countErr = strokeCountErrorMessage(hwCanvasStrokes.length, expected);
+    if (countErr) {
+      const statusEl = document.getElementById("hwQuizStatus");
+      if (statusEl) statusEl.textContent = countErr;
+      const recEl = document.getElementById("hwQuizRecognized2");
+      if (recEl) recEl.textContent = countErr;
+      hwQuizRecognizedResult2 = '';
+      return;
+    }
+  }
   if (strokeOrderEnabled && q && hwQuizRecognizedResult2 === q.answer) {
     const canvas = document.getElementById("hwQuizCanvas");
     if (canvas && hwCanvasStrokes.length > 0) {

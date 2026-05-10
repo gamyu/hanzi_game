@@ -89,6 +89,11 @@
   .accuracy-mid { color: #d69e2e; font-weight: 700; }
   .accuracy-low { color: #e53e3e; font-weight: 700; }
 
+  .wrong-chars {
+    margin-top: 4px; font-size: 16px; font-weight: 700; color: #2d3748;
+    word-break: break-all; line-height: 1.4; max-width: 220px;
+  }
+
   .empty {
     text-align: center;
     padding: 40px 20px;
@@ -165,9 +170,16 @@ async function loadScores() {
     if (pct >= 80) cls = "accuracy-high";
     else if (pct >= 60) cls = "accuracy-mid";
     const wrongCount = s.wrong_count || 0;
-    const wrongCell = wrongCount > 0
-      ? `<a href="/review?date=${s.date}" target="_blank" style="color:#e53e3e;font-weight:600;text-decoration:underline;cursor:pointer">${wrongCount}字</a>`
-      : '<span style="color:#a0aec0">-</span>';
+    const wrongChars = s.wrong_chars || [];
+    let wrongCell;
+    if (wrongCount > 0) {
+      const charsHtml = wrongChars.length > 0
+        ? `<div class="wrong-chars">${wrongChars.map(c => esc(c)).join(" ")}</div>`
+        : '';
+      wrongCell = `<a href="/review?date=${s.date}" target="_blank" style="color:#e53e3e;font-weight:600;text-decoration:underline;cursor:pointer">${wrongCount}字</a>${charsHtml}`;
+    } else {
+      wrongCell = '<span style="color:#a0aec0">-</span>';
+    }
 
     tr.innerHTML = `
       <td>${esc(s.date || "")}</td>

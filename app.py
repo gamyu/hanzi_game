@@ -884,6 +884,21 @@ def init_db():
     # a read+plan-edit session scoped to just that user's data.
     if not _col_exists("users", "parent_password_hash"):
         db.execute("ALTER TABLE users ADD COLUMN parent_password_hash TEXT NOT NULL DEFAULT ''")
+    # Recovery email for password reset codes.
+    if not _col_exists("users", "email"):
+        db.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_codes (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            target TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
     # Migrate daily_assignments: add saved_progress for resume support
     if not _col_exists("daily_assignments", "saved_progress"):
         db.execute("ALTER TABLE daily_assignments ADD COLUMN saved_progress TEXT NOT NULL DEFAULT ''")
@@ -1472,6 +1487,167 @@ def user_parent_status():
     return jsonify({"has_parent_password": bool(row and row["parent_password_hash"])})
 
 
+# ---------------------------------------------------------------------------
+# Password change & email-based recovery
+# ---------------------------------------------------------------------------
+
+@app.route("/api/user/security_status")
+def user_security_status():
+    """Return the logged-in user's recovery email status + parent password flag."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    row = db.execute(
+        "SELECT email, parent_password_hash FROM users WHERE id = %s",
+        (session["user_id"],),
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "用户不存在"}), 404
+    return jsonify({
+        "email": row["email"] or "",
+        "email_masked": _mask_email(row["email"] or ""),
+        "has_email": bool(row["email"]),
+        "has_parent_password": bool(row["parent_password_hash"]),
+    })
+
+
+@app.route("/api/user/set_email", methods=["POST"])
+def user_set_email():
+    """Set or update the logged-in user's recovery email. Requires current login password."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    email = (data.get("email") or "").strip()
+    current_pw = data.get("current_password") or ""
+    if not _looks_like_email(email):
+        return jsonify({"error": "请输入有效的邮箱地址"}), 400
+    db = get_db()
+    row = db.execute(
+        "SELECT password_hash FROM users WHERE id = %s",
+        (session["user_id"],),
+    ).fetchone()
+    if not row or not verify_password(current_pw, row["password_hash"]):
+        return jsonify({"error": "当前登录密码错误"}), 403
+    db.execute("UPDATE users SET email = %s WHERE id = %s", (email, session["user_id"]))
+    db.commit()
+    return jsonify({"ok": True, "email_masked": _mask_email(email)})
+
+
+@app.route("/api/user/send_reset_code", methods=["POST"])
+def user_send_reset_code():
+    """Send a reset code to the user's recovery email.
+
+    For "login" target the user does NOT need to be logged in (this is the
+    forgot-password flow); username + email-on-record must match. For "parent"
+    target the user must be logged in (only the child sets the parent pw).
+    """
+    if _rate_limited(f"send_reset_code:{request.remote_addr}", 5, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+    data = request.get_json(force=True, silent=True) or {}
+    target = data.get("target") or ""
+    if target not in ("login", "parent"):
+        return jsonify({"error": "无效请求"}), 400
+
+    db = get_db()
+    if target == "parent":
+        if "user_id" not in session:
+            return jsonify({"error": "未登录"}), 401
+        user = db.execute(
+            "SELECT id, username, email FROM users WHERE id = %s",
+            (session["user_id"],),
+        ).fetchone()
+    else:
+        username = (data.get("username") or "").strip()
+        if not username:
+            return jsonify({"error": "请输入用户名"}), 400
+        user = db.execute(
+            "SELECT id, username, email FROM users WHERE username = %s",
+            (username,),
+        ).fetchone()
+
+    if not user:
+        # Don't reveal whether the username exists.
+        return jsonify({"ok": True, "sent": False, "message": "如果该账号存在并设置了找回邮箱，验证码已发送"})
+
+    if not user["email"]:
+        return jsonify({"error": "该账号没有设置找回邮箱，无法通过邮件重置；请联系管理员"}), 400
+
+    user_dict = dict(user)
+    ok, err = _store_and_send_reset_code(db, user_dict, target)
+    if not ok:
+        return jsonify({"error": err}), 500
+    return jsonify({"ok": True, "sent": True, "email_masked": _mask_email(user["email"])})
+
+
+@app.route("/api/user/change_password", methods=["POST"])
+def user_change_password():
+    """Change the user's login or parent password.
+
+    Body fields:
+      target: 'login' or 'parent'
+      mode:   'current' (verify with current login password) or 'code' (verify with email reset code)
+      current_password / code: depending on mode
+      username: required only for forgot-login (mode=code, target=login, no session)
+      new_password: the new password (4+ chars; for 'parent' target empty string clears it)
+    """
+    if _rate_limited(f"change_pw:{request.remote_addr}", 10, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+    data = request.get_json(force=True, silent=True) or {}
+    target = data.get("target") or ""
+    mode = data.get("mode") or ""
+    new_pw = data.get("new_password") or ""
+    if target not in ("login", "parent") or mode not in ("current", "code"):
+        return jsonify({"error": "无效请求"}), 400
+
+    db = get_db()
+    user = None
+
+    if mode == "code" and target == "login" and "user_id" not in session:
+        # Forgot-login flow: username + code identifies the account.
+        username = (data.get("username") or "").strip()
+        if not username:
+            return jsonify({"error": "请输入用户名"}), 400
+        user = db.execute("SELECT * FROM users WHERE username = %s", (username,)).fetchone()
+    else:
+        if "user_id" not in session:
+            return jsonify({"error": "未登录"}), 401
+        user = db.execute("SELECT * FROM users WHERE id = %s", (session["user_id"],)).fetchone()
+
+    if not user:
+        return jsonify({"error": "用户名或验证码错误"}), 401
+
+    if mode == "current":
+        if not verify_password(data.get("current_password") or "", user["password_hash"]):
+            return jsonify({"error": "当前登录密码错误"}), 403
+    else:  # mode == "code"
+        if not _consume_reset_code(db, user["id"], target, data.get("code") or ""):
+            return jsonify({"error": "验证码无效或已过期"}), 403
+
+    if target == "login":
+        if len(new_pw) < 4:
+            return jsonify({"error": "新密码至少需要4个字符"}), 400
+        db.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(new_pw), user["id"]))
+        db.commit()
+        # If the user wasn't logged in (forgot-password flow), establish a
+        # fresh session so they're signed in with the new password.
+        if "user_id" not in session:
+            session.clear()
+            session.permanent = True
+            session["user_id"] = user["id"]
+            session["username"] = user["username"]
+        return jsonify({"ok": True})
+    else:  # target == "parent"
+        if new_pw == "":
+            db.execute("UPDATE users SET parent_password_hash = '' WHERE id = %s", (user["id"],))
+            db.commit()
+            return jsonify({"ok": True, "cleared": True})
+        if len(new_pw) < 4:
+            return jsonify({"error": "家长密码至少需要4个字符"}), 400
+        db.execute("UPDATE users SET parent_password_hash = %s WHERE id = %s", (hash_password(new_pw), user["id"]))
+        db.commit()
+        return jsonify({"ok": True})
+
+
 @app.route("/api/parent/login", methods=["POST"])
 def parent_login():
     if _rate_limited(f"parent_login:{request.remote_addr}", 10, 60):
@@ -1657,37 +1833,32 @@ def parent_page():
     )
 
 
-def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str) -> tuple[bool, str]:
-    """Send a contact-us message to ADMIN_CONTACT_EMAIL via SMTP.
-
-    Returns (ok, error). SMTP is configured via env vars:
-      SMTP_HOST, SMTP_PORT (default 587), SMTP_USER, SMTP_PASSWORD,
-      SMTP_FROM (defaults to SMTP_USER), SMTP_USE_SSL ("1" for SMTPS on 465).
-    If SMTP is not configured, returns (False, 'smtp_not_configured') —
-    callers should still persist the message to the DB.
-    """
+def _smtp_config():
+    """Return (host, port, user, pwd, sender, use_ssl) or None if SMTP isn't configured."""
     host = os.environ.get("SMTP_HOST", "").strip()
     user = os.environ.get("SMTP_USER", "").strip()
     pwd = os.environ.get("SMTP_PASSWORD", "").strip()
     if not (host and user and pwd):
-        return False, "smtp_not_configured"
+        return None
     port = int(os.environ.get("SMTP_PORT", "587"))
     sender = os.environ.get("SMTP_FROM", user).strip() or user
     use_ssl = os.environ.get("SMTP_USE_SSL", "").strip() in ("1", "true", "True")
+    return (host, port, user, pwd, sender, use_ssl)
 
+
+def _send_email(to_email: str, subject: str, body: str, reply_to: str = "") -> tuple[bool, str]:
+    """Send a plain-text email. Returns (ok, error)."""
+    cfg = _smtp_config()
+    if cfg is None:
+        return False, "smtp_not_configured"
+    host, port, user, pwd, sender, use_ssl = cfg
     msg = EmailMessage()
-    msg["Subject"] = f"[汉字游戏 留言] {subject or '(无主题)'}"
+    msg["Subject"] = subject
     msg["From"] = sender
-    msg["To"] = ADMIN_CONTACT_EMAIL
-    if reply_email:
-        msg["Reply-To"] = reply_email
-    body_lines = [
-        f"来自用户: {from_name or '(匿名)'}",
-        f"回复邮箱: {reply_email or '(未填写)'}",
-        "",
-        message or "",
-    ]
-    msg.set_content("\n".join(body_lines))
+    msg["To"] = to_email
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg.set_content(body)
     try:
         if use_ssl:
             with smtplib.SMTP_SSL(host, port, timeout=10) as s:
@@ -1702,6 +1873,103 @@ def _send_contact_email(from_name: str, reply_email: str, subject: str, message:
         return True, ""
     except Exception as e:
         return False, str(e)[:500]
+
+
+def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str) -> tuple[bool, str]:
+    """Send a contact-us message to ADMIN_CONTACT_EMAIL via SMTP."""
+    body = "\n".join([
+        f"来自用户: {from_name or '(匿名)'}",
+        f"回复邮箱: {reply_email or '(未填写)'}",
+        "",
+        message or "",
+    ])
+    return _send_email(
+        ADMIN_CONTACT_EMAIL,
+        f"[汉字游戏 留言] {subject or '(无主题)'}",
+        body,
+        reply_to=reply_email,
+    )
+
+
+def _mask_email(email: str) -> str:
+    """Mask an email for display: 'fcyucn@gmail.com' -> 'f***n@gmail.com'."""
+    if not email or "@" not in email:
+        return ""
+    local, _, domain = email.partition("@")
+    if len(local) <= 2:
+        masked_local = local[0] + "*"
+    else:
+        masked_local = local[0] + "*" * (len(local) - 2) + local[-1]
+    return f"{masked_local}@{domain}"
+
+
+def _looks_like_email(s: str) -> bool:
+    s = (s or "").strip()
+    if not s or "@" not in s or len(s) > 200:
+        return False
+    local, _, domain = s.partition("@")
+    if not local or not domain or "." not in domain:
+        return False
+    return True
+
+
+def _generate_reset_code() -> str:
+    """Generate a 6-digit numeric code."""
+    return f"{random.randint(0, 999999):06d}"
+
+
+def _hash_reset_code(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def _store_and_send_reset_code(db, user_row, target: str) -> tuple[bool, str]:
+    """Generate a reset code, store its hash, email it to the user. Returns (ok, error_msg).
+
+    On smtp_not_configured we still rotate the code so old ones don't outlive
+    the request, but the caller should surface a friendly error.
+    """
+    if not user_row.get("email"):
+        return False, "用户没有设置找回邮箱"
+    code = _generate_reset_code()
+    expires_at = datetime.utcnow() + timedelta(minutes=15)
+    # Invalidate any prior unused codes for this target.
+    db.execute(
+        "UPDATE password_reset_codes SET used = 1 WHERE user_id = %s AND target = %s AND used = 0",
+        (user_row["id"], target),
+    )
+    db.execute(
+        "INSERT INTO password_reset_codes (user_id, target, code_hash, expires_at) VALUES (%s, %s, %s, %s)",
+        (user_row["id"], target, _hash_reset_code(code), expires_at),
+    )
+    db.commit()
+    label = "登录密码" if target == "login" else "家长密码"
+    body = (
+        f"你正在为 {user_row['username']} 重置「{label}」。\n\n"
+        f"验证码: {code}\n"
+        f"有效期: 15 分钟\n\n"
+        f"如果不是你本人操作，请忽略此邮件。"
+    )
+    ok, err = _send_email(user_row["email"], f"[汉字小达人] {label}重置验证码", body)
+    if not ok:
+        return False, "邮件发送失败，请稍后再试" if err == "smtp_not_configured" else f"邮件发送失败: {err}"
+    return True, ""
+
+
+def _consume_reset_code(db, user_id: int, target: str, code: str) -> bool:
+    """Verify a reset code; mark used on success. Returns True if valid."""
+    if not code or len(code) != 6 or not code.isdigit():
+        return False
+    row = db.execute(
+        """SELECT id FROM password_reset_codes
+           WHERE user_id = %s AND target = %s AND used = 0
+                 AND code_hash = %s AND expires_at > %s
+           ORDER BY id DESC LIMIT 1""",
+        (user_id, target, _hash_reset_code(code), datetime.utcnow()),
+    ).fetchone()
+    if not row:
+        return False
+    db.execute("UPDATE password_reset_codes SET used = 1 WHERE id = %s", (row["id"],))
+    return True
 
 
 @app.route("/contact")
@@ -1827,17 +2095,48 @@ def scores_api():
         else:
             merged[d] = {"date": r["date"], "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": 0, "source": "作业"}
 
-    wrong_counts = {}
+    # Collect wrong characters per date from authoritative sources that don't
+    # decay when items are mastered:
+    # 1. daily_assignments.wrong_items — frozen at homework-completion time
+    # 2. wrong_answers — current open errors (may include game-mode misses
+    #    that aren't otherwise persisted historically)
+    wrong_chars_by_date = {}
+    def _add_char(date_key, ch):
+        if not ch:
+            return
+        s = wrong_chars_by_date.setdefault(date_key, set())
+        s.add(ch)
     for r in db.execute(
-        "SELECT DATE(created_at) as date, COUNT(DISTINCT character) as cnt FROM wrong_answers WHERE user_id = %s GROUP BY DATE(created_at)",
+        "SELECT date, wrong_items FROM daily_assignments WHERE user_id = %s AND status = 'completed' AND wrong_items IS NOT NULL AND wrong_items != '[]' AND wrong_items != ''",
         (session["user_id"],),
     ).fetchall():
-        wrong_counts[str(r["date"])] = r["cnt"]
+        try:
+            items = json.loads(r["wrong_items"])
+        except Exception:
+            items = []
+        date_key = str(r["date"])
+        for item in items:
+            _add_char(date_key, (item or {}).get("character"))
+    for r in db.execute(
+        "SELECT DATE(created_at) as date, character FROM wrong_answers WHERE user_id = %s",
+        (session["user_id"],),
+    ).fetchall():
+        _add_char(str(r["date"]), r["character"])
 
     scores = []
     for d in sorted(merged.keys(), reverse=True)[:60]:
         entry = merged[d]
-        entry["wrong_count"] = wrong_counts.get(d, 0)
+        chars = sorted(wrong_chars_by_date.get(d, set()))
+        # Fallback: if we don't have a character list (e.g. game-only day where
+        # the wrong_answers entries were already cleared), still report the raw
+        # count derived from total - correct so the user can see it.
+        if chars:
+            entry["wrong_count"] = len(chars)
+            entry["wrong_chars"] = chars
+        else:
+            diff = (entry.get("total_questions") or 0) - (entry.get("correct_answers") or 0)
+            entry["wrong_count"] = max(0, diff)
+            entry["wrong_chars"] = []
         scores.append(entry)
     return jsonify({"scores": scores})
 
@@ -3159,12 +3458,12 @@ def homework_progress():
         rec_grade = p["recognition_grade"] or p["grade"]
         wrt_grade = p["writing_grade"] or p["grade"]
         p_mode = p["mode"] if "mode" in p.keys() else "by_lesson"
-        if p_mode == "book_review":
-            rec_total = BOOK_REVIEW_DAYS
-            wrt_total = BOOK_REVIEW_DAYS
-        else:
-            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+        # Per UX: only show by_lesson plans on the progress dashboard.
+        # Book-review progress is tracked elsewhere.
+        if p_mode != "by_lesson":
+            continue
+        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
         rec_pct = round((p["recognition_lesson"] - 1) / rec_total * 100) if rec_total > 0 else 0
         wrt_pct = round((p["writing_lesson"] - 1) / wrt_total * 100) if wrt_total > 0 else 0
         overall_pct = round((rec_pct + wrt_pct) / 2)

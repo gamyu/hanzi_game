@@ -366,6 +366,30 @@
   .dictation-result.correct { color: #48bb78; }
   .dictation-result.wrong { color: #e53e3e; }
 
+  .auto-next-control {
+    display: flex; align-items: center; justify-content: center;
+    margin: 4px 0 12px; font-size: 13px; color: #4a5568;
+  }
+  .auto-next-control label {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  }
+  .auto-next-switch { position: relative; width: 40px; height: 22px; display: inline-block; }
+  .auto-next-switch input { opacity: 0; width: 0; height: 0; }
+  .auto-next-switch .slider {
+    position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+    background: #cbd5e0; border-radius: 22px; transition: 0.3s;
+  }
+  .auto-next-switch .slider:before {
+    content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+    background: #fff; border-radius: 50%; transition: 0.3s;
+  }
+  .auto-next-switch input:checked + .slider { background: #5a67d8; }
+  .auto-next-switch input:checked + .slider:before { transform: translateX(18px); }
+  .ok-btn {
+    margin-top: 10px; padding: 8px 32px; border: none; border-radius: 12px;
+    background: #5a67d8; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+  }
+
   @media (max-width: 420px) {
     th, td { padding: 10px 4px; font-size: 12px; }
     .char-cell { font-size: 24px; }
@@ -453,6 +477,38 @@ const MODE_LABELS = {
   dictation_handwrite: "看拼音写词语",
   read_aloud: "看字读音",
 };
+
+function isAutoNext() {
+  return localStorage.getItem('autoNextQuestion') !== 'false';
+}
+function setAutoNext(on) {
+  localStorage.setItem('autoNextQuestion', on ? 'true' : 'false');
+}
+function autoNextControlHTML() {
+  return `<div class="auto-next-control">
+    <label>
+      <span class="auto-next-switch">
+        <input type="checkbox" class="auto-next-toggle" ${isAutoNext() ? 'checked' : ''} onchange="setAutoNext(this.checked)">
+        <span class="slider"></span>
+      </span>
+      <span>自动下一题</span>
+    </label>
+  </div>`;
+}
+function advanceOrWait(nextFn, hintEl, delay) {
+  if (isAutoNext()) {
+    setTimeout(nextFn, delay || 800);
+  } else {
+    const btn = document.createElement("button");
+    btn.textContent = "继续";
+    btn.className = "ok-btn";
+    btn.onclick = () => {
+      btn.disabled = true;
+      nextFn();
+    };
+    if (hintEl) hintEl.appendChild(btn);
+  }
+}
 
 const params = new URLSearchParams(window.location.search);
 const date = params.get("date") || "";
@@ -601,10 +657,11 @@ function renderReviewQuestion(q, item) {
   const progress = `<div class="quiz-progress">第 ${reviewIndex + 1} / ${reviewTotal} 题</div>`;
   const modeTag = `<div class="quiz-mode-tag">${MODE_LABELS[q.mode] || q.mode}</div>`;
   const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
+  const autoNext = autoNextControlHTML();
 
   if (q.mode === "dictation_handwrite") {
     box.innerHTML = `
-      ${closeBtn}${progress}${modeTag}
+      ${closeBtn}${progress}${autoNext}${modeTag}
       <div class="quiz-question pinyin-display">${q.question}</div>
       <input class="dictation-input" id="dictInput" placeholder="写出词语" autocomplete="off">
       <br>
@@ -623,7 +680,7 @@ function renderReviewQuestion(q, item) {
 
   if (q.mode === "listen_to_char") {
     box.innerHTML = `
-      ${closeBtn}${progress}${modeTag}
+      ${closeBtn}${progress}${autoNext}${modeTag}
       <div>听读音，选汉字</div>
       <button class="listen-btn" onclick="speakText('${q.question}')">&#128264;</button>
       <div class="quiz-options" id="quizOpts"></div>
@@ -632,14 +689,14 @@ function renderReviewQuestion(q, item) {
     setTimeout(() => speakText(q.question), 200);
   } else if (q.mode === "char_to_pinyin") {
     box.innerHTML = `
-      ${closeBtn}${progress}${modeTag}
+      ${closeBtn}${progress}${autoNext}${modeTag}
       <div class="quiz-question">${q.question}</div>
       <div class="quiz-options" id="quizOpts"></div>
       <div class="quiz-hint" id="quizHint"></div>
     `;
   } else {
     box.innerHTML = `
-      ${closeBtn}${progress}${modeTag}
+      ${closeBtn}${progress}${autoNext}${modeTag}
       <div class="quiz-question pinyin-display">${q.question}</div>
       <div class="quiz-options" id="quizOpts"></div>
       <div class="quiz-hint" id="quizHint"></div>
@@ -677,14 +734,15 @@ function handleReviewAnswer(btn, idx, q, item) {
     allBtns[q.correct_index].classList.add("correct");
   }
 
+  const hint = document.getElementById("quizHint");
   if (q.word_hint) {
-    document.getElementById("quizHint").textContent = `组词: ${q.word_hint}`;
+    hint.textContent = `组词: ${q.word_hint}`;
   }
 
-  setTimeout(() => {
+  advanceOrWait(() => {
     reviewIndex++;
     loadReviewQuestion();
-  }, 1200);
+  }, hint, 1200);
 }
 
 function checkDictation(btn) {
@@ -707,10 +765,10 @@ function checkDictation(btn) {
     hint.innerHTML = `<div class="dictation-result wrong">${userAnswer} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>`;
   }
 
-  setTimeout(() => {
+  advanceOrWait(() => {
     reviewIndex++;
     loadReviewQuestion();
-  }, 1500);
+  }, hint, 1500);
 }
 
 function showReviewResult() {
