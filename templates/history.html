@@ -166,6 +166,53 @@
     gap: 12px;
   }
 
+  .wrong-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid #edf2f7;
+    border-radius: 12px;
+    background: #f7fafc;
+    color: #4a5568;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid currentColor;
+    background: #fff;
+  }
+
+  .legend-item.recognition {
+    color: #c53030;
+    font-weight: 900;
+  }
+
+  .legend-item.recognition .legend-swatch {
+    background: #fff5f5;
+  }
+
+  .legend-item.writing {
+    color: #2b6cb0;
+    font-weight: 600;
+  }
+
+  .legend-item.writing .legend-swatch {
+    background: #ebf8ff;
+  }
+
   .wrong-group {
     border: 1px solid #edf2f7;
     border-radius: 12px;
@@ -223,7 +270,7 @@
   .wrong-word {
     color: #2d3748;
     font-size: 22px;
-    font-weight: 900;
+    font-weight: 700;
     line-height: 1.1;
     max-width: 100%;
     word-break: keep-all;
@@ -233,17 +280,25 @@
   .wrong-tag {
     color: #718096;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 600;
   }
 
-  .wrong-chip.recognition .wrong-word,
-  .wrong-chip.recognition .wrong-tag {
+  .wrong-chip.recognition .wrong-word {
     color: #c53030;
+    font-weight: 900;
   }
 
-  .wrong-chip.writing .wrong-word,
-  .wrong-chip.writing .wrong-tag {
+  .wrong-chip.recognition .wrong-tag {
+    color: #742a2a;
+  }
+
+  .wrong-chip.writing .wrong-word {
     color: #2b6cb0;
+    font-weight: 600;
+  }
+
+  .wrong-chip.writing .wrong-tag {
+    color: #2c5282;
   }
 
   .score-link {
@@ -323,6 +378,10 @@
     错题本
     <button class="panel-close" type="button" id="wrongBookClose">收起</button>
   </div>
+  <div class="wrong-legend" aria-label="错题本图例">
+    <span class="legend-item recognition"><span class="legend-swatch"></span>认字：红色 / 粗体</span>
+    <span class="legend-item writing"><span class="legend-swatch"></span>写字：蓝色 / 常规</span>
+  </div>
   <div class="wrong-book-list" id="wrongBookContent">
     <div class="empty">加载中...</div>
   </div>
@@ -386,7 +445,7 @@ function renderWrongBook(items) {
       <div class="wrong-chip-list">
       ${rows.map(w => {
         const text = wrongDisplayText(w);
-        const tag = [gradeShortName(w.grade), wrongTypeLabel(w)].filter(Boolean).join(" · ");
+        const tag = gradeShortName(w.grade);
         const typeClass = wrongTypeClass(w);
         const sourceLabel = w.source_label || w.source || "";
         return `<a class="wrong-chip ${typeClass}" id="wrong-${w.id}" href="#score-${esc(date)}" title="${esc(sourceLabel)}">
