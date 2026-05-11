@@ -204,6 +204,16 @@
     text-decoration: none;
   }
 
+  .wrong-chip.recognition {
+    border-color: #feb2b2;
+    background: #fff5f5;
+  }
+
+  .wrong-chip.writing {
+    border-color: #90cdf4;
+    background: #ebf8ff;
+  }
+
   .wrong-chip:target,
   tr:target td {
     background: #fffaf0;
@@ -224,6 +234,16 @@
     color: #718096;
     font-size: 12px;
     font-weight: 800;
+  }
+
+  .wrong-chip.recognition .wrong-word,
+  .wrong-chip.recognition .wrong-tag {
+    color: #c53030;
+  }
+
+  .wrong-chip.writing .wrong-word,
+  .wrong-chip.writing .wrong-tag {
+    color: #2b6cb0;
   }
 
   .score-link {
@@ -325,6 +345,10 @@ function wrongTypeLabel(item) {
   return "认字";
 }
 
+function wrongTypeClass(item) {
+  return wrongTypeLabel(item) === "写字" ? "writing" : "recognition";
+}
+
 function wrongDisplayText(item) {
   if (item.character) return item.character;
   if (item.words) return item.words;
@@ -363,8 +387,9 @@ function renderWrongBook(items) {
       ${rows.map(w => {
         const text = wrongDisplayText(w);
         const tag = [gradeShortName(w.grade), wrongTypeLabel(w)].filter(Boolean).join(" · ");
+        const typeClass = wrongTypeClass(w);
         const sourceLabel = w.source_label || w.source || "";
-        return `<a class="wrong-chip" id="wrong-${w.id}" href="#score-${esc(date)}" title="${esc(sourceLabel)}">
+        return `<a class="wrong-chip ${typeClass}" id="wrong-${w.id}" href="#score-${esc(date)}" title="${esc(sourceLabel)}">
           <span class="wrong-word">${esc(text)}</span>
           <span class="wrong-tag">${esc(tag)}</span>
         </a>`;
