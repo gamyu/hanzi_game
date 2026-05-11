@@ -90,6 +90,27 @@
     margin-bottom: 14px;
   }
 
+  .filter-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .filter-title {
+    color: #2d3748;
+    font-size: 18px;
+    font-weight: 900;
+  }
+
+  .filter-summary {
+    color: #718096;
+    font-size: 13px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+
   .filter-row {
     display: flex;
     gap: 12px;
@@ -451,6 +472,10 @@
 </div>
 
 <div class="card filter-card" id="filterCard">
+  <div class="filter-heading">
+    <div class="filter-title">选择复习范围</div>
+    <div class="filter-summary" id="filterSummary">加载中...</div>
+  </div>
   <div class="filter-row">
     <div class="filter-field">
       <label for="reviewTypeFilter">复习类型</label>
@@ -511,7 +536,7 @@
 </div>
 
 <div class="btn-row" id="btnRow">
-  <button class="action-btn primary" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习</button>
+  <button class="action-btn primary" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习当前范围</button>
   <button class="action-btn" onclick="window.close()">关闭</button>
 </div>
 
@@ -593,6 +618,7 @@ function switchTab(tab) {
 
 async function loadWrongAnswers() {
   document.getElementById("dateLabel").textContent = date ? `${date} - {{ username }}` : "{{ username }}";
+  document.getElementById("filterSummary").textContent = "加载中...";
 
   const type = document.getElementById("reviewTypeFilter").value;
   const count = document.getElementById("reviewCountFilter").value;
@@ -608,6 +634,7 @@ async function loadWrongAnswers() {
 
   const items = data.wrong_answers || [];
   wrongItems = items;
+  document.getElementById("filterSummary").textContent = items.length ? `当前范围 ${items.length} 题` : "当前范围暂无错题";
 
   if (items.length === 0) {
     body.innerHTML = '<tr><td colspan="7" class="empty">没有错题记录</td></tr>';

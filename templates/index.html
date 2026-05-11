@@ -515,6 +515,7 @@
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
+    text-decoration: none;
     backdrop-filter: blur(4px);
     transition: all 0.2s;
   }
@@ -1079,6 +1080,7 @@
     background: linear-gradient(135deg, #fff5f5, #fed7d7); border-radius: 16px;
     padding: 20px; text-align: center; cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    display: block; text-decoration: none;
   }
   .hw-review-card:active { transform: scale(0.97); }
   .hw-review-card .icon { font-size: 36px; }
@@ -1928,7 +1930,7 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span style="cursor:pointer" onclick="switchToHomeworkView()">${state.user}</span>
-      <button class="user-btn" onclick="startVoluntaryReview()">复习</button>
+      <button class="user-btn" onclick="location.href='/review'">复习</button>
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
@@ -5903,19 +5905,14 @@ async function loadWrongReviewSection() {
     }
     section.style.display = "";
     content.innerHTML = `
-      <div class="hw-review-card" onclick="startVoluntaryReview()">
+      <a class="hw-review-card" href="/review">
         <div class="icon">📝</div>
         <div class="label">复习错题</div>
         <div class="info">共 ${items.length} 道错题</div>
-      </div>`;
+      </a>`;
   } catch (e) {
     section.style.display = "none";
   }
-}
-
-async function startVoluntaryReview() {
-  if (!state.user) { showAuthModal(); return; }
-  location.href = "/review";
 }
 
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };
