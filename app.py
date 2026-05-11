@@ -426,6 +426,8 @@ def find_next_lesson_across_grades(current_grade, current_lesson, content_key):
 
 def grade_short_name(grade):
     """Convert '一年级上' to '一上'."""
+    if not grade:
+        return ""
     return grade[0] + grade[-1]
 
 
@@ -714,6 +716,192 @@ def _rate_limited(key: str, max_requests: int, window_seconds: int) -> bool:
     return False
 
 
+MODE_LABELS = {
+    "char_to_pinyin": "看字选拼音",
+    "pinyin_to_char": "看拼音选字",
+    "listen_to_char": "听音选字",
+    "pinyin_typing": "给汉字注音",
+    "dictation_handwrite": "看拼音写词语",
+    "read_aloud": "看字读音",
+}
+
+HW_TYPE_LABELS = {"recognition": "认字", "writing": "写字"}
+
+
+def _string_value(value) -> str:
+    return "" if value is None else str(value)
+
+
+def _wrong_item_payload(item, fallback_grade="", fallback_mode=""):
+    """Normalize old and new wrong-item payloads into one immutable event shape."""
+    item = item or {}
+    mode = _string_value(item.get("mode") or fallback_mode)
+    character = _string_value(item.get("character") or item.get("display_char"))
+    pinyin = _string_value(item.get("pinyin") or item.get("display_pinyin"))
+    question = _string_value(item.get("question"))
+    correct_answer = _string_value(item.get("correct_answer") or item.get("answer"))
+    user_answer = _string_value(item.get("user_answer") or item.get("userAnswer"))
+    words = _string_value(item.get("words") or item.get("word_hint"))
+    grade = _string_value(item.get("grade") or fallback_grade)
+
+    if not character:
+        if mode in ("pinyin_to_char", "listen_to_char", "dictation_handwrite"):
+            character = correct_answer
+        elif mode in ("char_to_pinyin", "pinyin_typing", "read_aloud"):
+            character = question
+    if not pinyin:
+        if mode in ("char_to_pinyin", "pinyin_typing", "read_aloud"):
+            pinyin = correct_answer
+        else:
+            pinyin = question
+    if not question:
+        question = pinyin if mode in ("pinyin_to_char", "dictation_handwrite") else character
+    if not correct_answer:
+        correct_answer = pinyin if mode in ("char_to_pinyin", "pinyin_typing", "read_aloud") else character
+    if not words:
+        words = character
+
+    return {
+        "character": character,
+        "pinyin": pinyin,
+        "words": words,
+        "grade": grade,
+        "mode": mode,
+        "question": question,
+        "correct_answer": correct_answer,
+        "user_answer": user_answer,
+    }
+
+
+def _source_label(source, grade="", mode="", assignment_type="", lesson_num=None, assignment_mode=""):
+    if source == "homework":
+        type_label = HW_TYPE_LABELS.get(assignment_type, "作业")
+        unit = "天" if assignment_mode == "book_review" else "课"
+        if lesson_num:
+            return f"{grade_short_name(grade)}{type_label}作业 · 第{lesson_num}{unit}"
+        return f"{grade_short_name(grade)}{type_label}作业"
+    if source == "game":
+        mode_label = MODE_LABELS.get(mode, mode)
+        return f"自由练习 · {grade_short_name(grade)} · {mode_label}"
+    if source == "wrong_answers":
+        mode_label = MODE_LABELS.get(mode, mode)
+        return f"既有错题记录 · {grade_short_name(grade)} · {mode_label}"
+    return source or "未知来源"
+
+
+def _insert_wrong_event(db, user_id, item, *, source, source_id=None, source_date=None,
+                        source_label="", event_key=None, fallback_grade="",
+                        fallback_mode="", created_at=None):
+    payload = _wrong_item_payload(item, fallback_grade=fallback_grade, fallback_mode=fallback_mode)
+    if not payload["character"] and not payload["question"]:
+        return
+    source_date = _string_value(source_date or date.today().isoformat())
+    if isinstance(created_at, str):
+        try:
+            created_at = datetime.fromisoformat(created_at)
+        except ValueError:
+            created_at = None
+    db.execute(
+        """INSERT INTO wrong_answer_events
+           (event_key, user_id, character, pinyin, words, grade, mode, source,
+            source_id, source_date, source_label, question, correct_answer,
+            user_answer, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   COALESCE(%s, CURRENT_TIMESTAMP))
+           ON CONFLICT (event_key) DO NOTHING""",
+        (
+            event_key,
+            user_id,
+            payload["character"],
+            payload["pinyin"],
+            payload["words"],
+            payload["grade"],
+            payload["mode"],
+            source,
+            source_id,
+            source_date,
+            source_label,
+            payload["question"],
+            payload["correct_answer"],
+            payload["user_answer"],
+            created_at,
+        ),
+    )
+
+
+def _backfill_wrong_answer_events(db):
+    """Backfill immutable wrong history from records we can still trace."""
+    assignments = db.execute(
+        """SELECT id, user_id, date, type, grade, lesson_num, mode, wrong_items,
+                  completed_at, created_at
+           FROM daily_assignments
+           WHERE status = 'completed'
+             AND wrong_items IS NOT NULL
+             AND wrong_items != ''
+             AND wrong_items != '[]'"""
+    ).fetchall()
+    for assignment in assignments:
+        try:
+            items = json.loads(assignment["wrong_items"])
+        except Exception:
+            items = []
+        if not isinstance(items, list):
+            continue
+        source_label = _source_label(
+            "homework",
+            grade=assignment["grade"],
+            assignment_type=assignment["type"],
+            lesson_num=assignment["lesson_num"],
+            assignment_mode=assignment["mode"],
+        )
+        created_at = assignment["completed_at"] or assignment["created_at"] or assignment["date"]
+        for idx, item in enumerate(items):
+            payload = _wrong_item_payload(item, fallback_grade=assignment["grade"])
+            event_key = f"homework:{assignment['id']}:{idx}:{payload['character']}:{payload['mode']}"
+            _insert_wrong_event(
+                db,
+                assignment["user_id"],
+                item,
+                source="homework",
+                source_id=assignment["id"],
+                source_date=assignment["date"],
+                source_label=source_label,
+                event_key=event_key,
+                fallback_grade=assignment["grade"],
+                created_at=created_at,
+            )
+
+    rows = db.execute(
+        """SELECT id, user_id, character, pinyin, words, grade, mode, created_at
+           FROM wrong_answers"""
+    ).fetchall()
+    for row in rows:
+        source_date = row["created_at"].date().isoformat() if hasattr(row["created_at"], "date") else str(row["created_at"])[:10]
+        exists = db.execute(
+            """SELECT 1 FROM wrong_answer_events
+               WHERE user_id = %s AND source_date = %s
+                 AND character = %s AND mode = %s
+               LIMIT 1""",
+            (row["user_id"], source_date, row["character"], row["mode"]),
+        ).fetchone()
+        if exists:
+            continue
+        item = dict(row)
+        _insert_wrong_event(
+            db,
+            row["user_id"],
+            item,
+            source="wrong_answers",
+            source_id=row["id"],
+            source_date=source_date,
+            source_label=_source_label("wrong_answers", grade=row["grade"], mode=row["mode"]),
+            event_key=f"wrong_answers:{row['id']}",
+            fallback_grade=row["grade"],
+            fallback_mode=row["mode"],
+            created_at=row["created_at"],
+        )
+
+
 def init_db():
     db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     db.execute("""
@@ -752,6 +940,29 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS wrong_answer_events (
+            id SERIAL PRIMARY KEY,
+            event_key TEXT UNIQUE,
+            user_id INTEGER NOT NULL,
+            character TEXT NOT NULL DEFAULT '',
+            pinyin TEXT NOT NULL DEFAULT '',
+            words TEXT NOT NULL DEFAULT '',
+            grade TEXT NOT NULL DEFAULT '',
+            mode TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            source_id INTEGER,
+            source_date TEXT NOT NULL DEFAULT '',
+            source_label TEXT NOT NULL DEFAULT '',
+            question TEXT NOT NULL DEFAULT '',
+            correct_answer TEXT NOT NULL DEFAULT '',
+            user_answer TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_wrong_events_user_date ON wrong_answer_events(user_id, source_date)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_wrong_events_source ON wrong_answer_events(source, source_id)")
     db.execute("""
         CREATE TABLE IF NOT EXISTS mastered_words (
             id SERIAL PRIMARY KEY,
@@ -913,6 +1124,7 @@ def init_db():
         db.execute("ALTER TABLE homework_plans ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
     if not _col_exists("daily_assignments", "mode"):
         db.execute("ALTER TABLE daily_assignments ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
+    _backfill_wrong_answer_events(db)
     db.commit()
     db.close()
 
@@ -2053,10 +2265,32 @@ def scores_api():
             return jsonify({"ok": True})
 
         db = get_db()
-        db.execute(
-            "INSERT INTO scores (user_id, grade, mode, score, combo_max, total_questions, correct_answers) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        score_row = db.execute(
+            """INSERT INTO scores
+               (user_id, grade, mode, score, combo_max, total_questions, correct_answers)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               RETURNING id, DATE(created_at) as source_date, created_at""",
             (session["user_id"], grade, mode, score, combo_max, total_questions, correct_answers),
-        )
+        ).fetchone()
+        wrong_items = data.get("wrong_items", [])
+        if isinstance(wrong_items, list) and score_row:
+            source_label = _source_label("game", grade=grade, mode=mode)
+            for idx, item in enumerate(wrong_items):
+                payload = _wrong_item_payload(item, fallback_grade=grade, fallback_mode=mode)
+                event_key = f"score:{score_row['id']}:{idx}:{payload['character']}:{payload['mode']}"
+                _insert_wrong_event(
+                    db,
+                    session["user_id"],
+                    item,
+                    source="game",
+                    source_id=score_row["id"],
+                    source_date=str(score_row["source_date"]),
+                    source_label=source_label,
+                    event_key=event_key,
+                    fallback_grade=grade,
+                    fallback_mode=mode,
+                    created_at=score_row["created_at"],
+                )
         db.commit()
         return jsonify({"ok": True})
 
@@ -2095,50 +2329,32 @@ def scores_api():
         else:
             merged[d] = {"date": r["date"], "total_questions": r["total_questions"], "correct_answers": r["correct_answers"], "score": 0, "source": "作业"}
 
-    # Collect wrong characters per date from authoritative sources that don't
-    # decay when items are mastered:
-    # 1. daily_assignments.wrong_items — frozen at homework-completion time
-    # 2. wrong_answers — current open errors (may include game-mode misses
-    #    that aren't otherwise persisted historically)
-    wrong_chars_by_date = {}
-    def _add_char(date_key, ch):
-        if not ch:
-            return
-        s = wrong_chars_by_date.setdefault(date_key, set())
-        s.add(ch)
-    for r in db.execute(
-        "SELECT date, wrong_items FROM daily_assignments WHERE user_id = %s AND status = 'completed' AND wrong_items IS NOT NULL AND wrong_items != '[]' AND wrong_items != ''",
+    wrong_event_rows = db.execute(
+        """SELECT id, character, pinyin, words, grade, mode, source, source_id,
+                  source_date, source_label, question, correct_answer,
+                  user_answer, created_at
+           FROM wrong_answer_events
+           WHERE user_id = %s
+           ORDER BY source_date DESC, created_at DESC, id DESC""",
         (session["user_id"],),
-    ).fetchall():
-        try:
-            items = json.loads(r["wrong_items"])
-        except Exception:
-            items = []
-        date_key = str(r["date"])
-        for item in items:
-            _add_char(date_key, (item or {}).get("character"))
-    for r in db.execute(
-        "SELECT DATE(created_at) as date, character FROM wrong_answers WHERE user_id = %s",
-        (session["user_id"],),
-    ).fetchall():
-        _add_char(str(r["date"]), r["character"])
+    ).fetchall()
+    wrong_book = [dict(r) for r in wrong_event_rows]
+    wrong_events_by_date = {}
+    for item in wrong_book:
+        wrong_events_by_date.setdefault(str(item["source_date"]), []).append(item)
 
     scores = []
     for d in sorted(merged.keys(), reverse=True)[:60]:
         entry = merged[d]
-        chars = sorted(wrong_chars_by_date.get(d, set()))
-        # Fallback: if we don't have a character list (e.g. game-only day where
-        # the wrong_answers entries were already cleared), still report the raw
-        # count derived from total - correct so the user can see it.
-        if chars:
-            entry["wrong_count"] = len(chars)
-            entry["wrong_chars"] = chars
-        else:
-            diff = (entry.get("total_questions") or 0) - (entry.get("correct_answers") or 0)
-            entry["wrong_count"] = max(0, diff)
-            entry["wrong_chars"] = []
+        events = wrong_events_by_date.get(d, [])
+        diff = max(0, (entry.get("total_questions") or 0) - (entry.get("correct_answers") or 0))
+        entry["wrong_items"] = events
+        entry["traceable_wrong_count"] = len(events)
+        entry["untraced_wrong_count"] = max(0, diff - len(events))
+        entry["wrong_count"] = len(events) + entry["untraced_wrong_count"]
+        entry["wrong_chars"] = [e["character"] for e in events]
         scores.append(entry)
-    return jsonify({"scores": scores})
+    return jsonify({"scores": scores, "wrong_book": wrong_book})
 
 
 @app.route("/history")
@@ -3307,7 +3523,10 @@ def homework_submit():
     total_questions = data.get("total_questions", 0)
     correct_answers = data.get("correct_answers", 0)
     time_spent = data.get("time_spent", 0)
-    wrong_items = json.dumps(data.get("wrong_items", []), ensure_ascii=False)
+    wrong_item_list = data.get("wrong_items", [])
+    if not isinstance(wrong_item_list, list):
+        wrong_item_list = []
+    wrong_items = json.dumps(wrong_item_list, ensure_ascii=False)
 
     db = get_db()
     assignment = db.execute(
@@ -3353,11 +3572,31 @@ def homework_submit():
                            (next_ln, next_grade, plan["id"]))
 
     # Also record wrong answers in the main wrong_answers table
-    for item in data.get("wrong_items", []):
+    source_label = _source_label(
+        "homework",
+        grade=assignment["grade"],
+        assignment_type=assignment["type"],
+        lesson_num=assignment["lesson_num"],
+        assignment_mode=asn_mode,
+    )
+    for idx, item in enumerate(wrong_item_list):
         db.execute(
             "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",
             (session["user_id"], item.get("character", ""), item.get("pinyin", ""),
              item.get("words", ""), assignment["grade"], item.get("mode", "")),
+        )
+        payload = _wrong_item_payload(item, fallback_grade=assignment["grade"])
+        event_key = f"homework:{assignment_id}:{idx}:{payload['character']}:{payload['mode']}"
+        _insert_wrong_event(
+            db,
+            session["user_id"],
+            item,
+            source="homework",
+            source_id=assignment_id,
+            source_date=assignment["date"],
+            source_label=source_label,
+            event_key=event_key,
+            fallback_grade=assignment["grade"],
         )
 
     # Coins are now awarded in real-time via /api/streak during the quiz

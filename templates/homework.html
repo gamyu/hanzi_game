@@ -1240,6 +1240,9 @@ async function pinyinSubmit() {
         pinyin: q.display_pinyin || q.answer,
         words: q.word_hint || "",
         mode: q.mode,
+        question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+        correct_answer: q.answer,
+        user_answer: userAnswer,
       });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
@@ -1280,6 +1283,9 @@ function quizAnswer(selected) {
         pinyin: q.display_pinyin || q.question,
         words: q.word_hint || "",
         mode: q.mode,
+        question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+        correct_answer: q.answer,
+        user_answer: btns[selected]?.textContent || "",
       });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
@@ -1315,6 +1321,9 @@ function handleHwAnswer(userInput) {
         pinyin: q.question,
         words: q.answer,
         mode: q.mode,
+        question: q.question,
+        correct_answer: q.answer,
+        user_answer: userInput,
       });
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}

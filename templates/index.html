@@ -1808,6 +1808,7 @@ let state = {
   retryQueue: [],
   retryCount: 0,
   coinEligible: true,
+  wrongItems: [],
 };
 
 // Streak milestone coin rules (loaded from server, these are defaults)
@@ -2216,12 +2217,14 @@ async function saveScore() {
     combo_max: state.comboMax,
     total_questions: state.totalQuestions,
     correct_answers: state.correctAnswers,
+    wrong_items: state.wrongItems,
   };
   // Reset session counters but keep combo (persistent streak)
   state.score = 0;
   state.comboMax = state.combo;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
+  state.wrongItems = [];
   updateScoreboard();
   try {
     await fetch("/api/scores", {
@@ -2250,11 +2253,13 @@ function saveScoreAsync() {
     combo_max: state.comboMax,
     total_questions: state.totalQuestions,
     correct_answers: state.correctAnswers,
+    wrong_items: state.wrongItems,
   };
   state.score = 0;
   state.comboMax = state.combo;
   state.totalQuestions = 0;
   state.correctAnswers = 0;
+  state.wrongItems = [];
   updateScoreboard();
   // Use fetch with keepalive for reliable JSON delivery (sendBeacon may lose Content-Type)
   fetch("/api/scores", {
@@ -3376,7 +3381,10 @@ function handleAnswer(selected, q, btn) {
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span><br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span><br><span style="color:#718096">组词: ${q.word_hint}</span>`;
     const retryAttempt = q._retryAttempt || 0;
-    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt === 0 && !q._wrongRecorded) {
+      q._wrongRecorded = true;
+      recordWrongAnswer(q, q.options[selected]);
+    }
   }
 
   updateScoreboard();
@@ -3425,7 +3433,10 @@ function handleDictationAnswer(userInput, q) {
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
     const retryAttempt = q._retryAttempt || 0;
-    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt === 0 && !q._wrongRecorded) {
+      q._wrongRecorded = true;
+      recordWrongAnswer(q, userInput);
+    }
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
     const skipBtn = document.createElement("button");
@@ -4299,7 +4310,10 @@ async function submitGamePinyin() {
       <span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>
       <br><span style="color:#718096">${q.word_hint ? '组词: ' + q.word_hint : ''}</span>`;
     const retryAttempt = q._retryAttempt || 0;
-    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt === 0 && !q._wrongRecorded) {
+      q._wrongRecorded = true;
+      recordWrongAnswer(q, userAnswer);
+    }
     if (retryAttempt < 2) {
     }
     updateScoreboard();
@@ -4312,7 +4326,7 @@ async function submitGamePinyin() {
 }
 
 // --- Wrong answer recording ---
-function recordWrongAnswer(q) {
+function recordWrongAnswer(q, userAnswer, trackForScore = true) {
   if (!state.user) return;
   let character, pinyin;
   if (q.mode === "char_to_pinyin" || q.mode === "pinyin_typing" || q.mode === "read_aloud") {
@@ -4329,15 +4343,25 @@ function recordWrongAnswer(q) {
     character = q.answer;
     pinyin = q.question;
   }
+  const question = q.context_word ? `${q.question}（${q.context_word}）` : q.question;
+  const itemGrade = q.grade || (typeof hwQuiz !== "undefined" && hwQuiz.grade) || state.grade;
+  const item = {
+    character,
+    pinyin,
+    words: q.word_hint || q.answer || "",
+    grade: itemGrade,
+    mode: q.mode || state.mode,
+    question,
+    correct_answer: q.answer || "",
+    user_answer: userAnswer || "",
+  };
+  if (trackForScore) {
+    state.wrongItems.push(item);
+  }
   fetch("/api/wrong_answers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      character, pinyin,
-      words: q.word_hint || q.answer || "",
-      grade: state.grade,
-      mode: state.mode,
-    }),
+    body: JSON.stringify(item),
   });
 }
 
@@ -4594,7 +4618,10 @@ async function handleReadAloudAnswer(alternatives) {
     if (!isAutoNext()) setTimeout(() => speakChar(targetChar), 300);
 
     const retryAttempt = q._retryAttempt || 0;
-    if (retryAttempt === 0) recordWrongAnswer(q);
+    if (retryAttempt === 0 && !q._wrongRecorded) {
+      q._wrongRecorded = true;
+      recordWrongAnswer(q, recognizedText);
+    }
     if (retryAttempt < 2) {
     }
 
@@ -4913,6 +4940,7 @@ async function doStartPreview(mode) {
 
   hwQuiz.assignmentId = null; // preview, not graded
   hwQuiz.type = "preview";
+  hwQuiz.grade = data.grade || "";
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
   hwQuiz.questions = data.questions.map((q, i) => ({ ...q, _origIndex: i }));
@@ -4954,6 +4982,7 @@ async function startHwQuiz(assignmentId) {
 
   hwQuiz.assignmentId = assignmentId;
   hwQuiz.type = data.type;
+  hwQuiz.grade = data.grade || "";
   hwQuiz.isPreview = false;
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
@@ -5498,8 +5527,11 @@ async function hwPinyinSubmit() {
         pinyin: q.display_pinyin || q.answer,
         words: q.word_hint || "",
         mode: q.mode,
+        question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+        correct_answer: q.answer,
+        user_answer: userAnswer,
       });
-      recordWrongAnswer(q);
+      recordWrongAnswer(q, userAnswer, false);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
@@ -5546,8 +5578,11 @@ function hwQuizAnswer(selected, correctIdx) {
         pinyin: q.display_pinyin || q.question,
         words: q.word_hint || "",
         mode: q.mode,
+        question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+        correct_answer: q.answer,
+        user_answer: btns[selected]?.textContent || "",
       });
-      recordWrongAnswer(q);
+      recordWrongAnswer(q, btns[selected]?.textContent || "", false);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
@@ -5589,8 +5624,11 @@ function hwHandleHwAnswer(userInput) {
         pinyin: q.question,
         words: q.answer,
         mode: q.mode,
+        question: q.question,
+        correct_answer: q.answer,
+        user_answer: userInput,
       });
-      recordWrongAnswer(q);
+      recordWrongAnswer(q, userInput, false);
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
