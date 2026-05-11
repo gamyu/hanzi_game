@@ -86,6 +86,47 @@
     box-shadow: 0 20px 60px rgba(0,0,0,0.2);
   }
 
+  .filter-card {
+    margin-bottom: 14px;
+  }
+
+  .filter-row {
+    display: flex;
+    gap: 12px;
+    align-items: end;
+    flex-wrap: wrap;
+  }
+
+  .filter-field {
+    flex: 1 1 180px;
+  }
+
+  .filter-field label {
+    display: block;
+    color: #4a5568;
+    font-size: 13px;
+    font-weight: 800;
+    margin-bottom: 5px;
+  }
+
+  .filter-field select {
+    width: 100%;
+    border: 1px solid #cbd5e0;
+    border-radius: 10px;
+    background: #f7fafc;
+    color: #2d3748;
+    font: inherit;
+    padding: 9px 10px;
+  }
+
+  .group-row td {
+    background: #f7fafc;
+    color: #4a5568;
+    font-size: 13px;
+    font-weight: 900;
+    text-align: left;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;
@@ -409,6 +450,28 @@
   <button class="tab-btn" id="tabMastered" onclick="switchTab('mastered')">已掌握</button>
 </div>
 
+<div class="card filter-card" id="filterCard">
+  <div class="filter-row">
+    <div class="filter-field">
+      <label for="reviewTypeFilter">复习类型</label>
+      <select id="reviewTypeFilter" onchange="loadWrongAnswers()">
+        <option value="all">全部</option>
+        <option value="recognition">认字</option>
+        <option value="writing">写字</option>
+      </select>
+    </div>
+    <div class="filter-field">
+      <label for="reviewCountFilter">复习次数</label>
+      <select id="reviewCountFilter" onchange="loadWrongAnswers()">
+        <option value="all">全部待复习</option>
+        <option value="0">未复习</option>
+        <option value="1">已复习过一次</option>
+        <option value="2">已复习过两次</option>
+      </select>
+    </div>
+  </div>
+</div>
+
 <div class="card" id="wrongCard">
   <table>
     <thead>
@@ -474,6 +537,7 @@ const MODE_LABELS = {
   char_to_pinyin: "看字选拼音",
   pinyin_to_char: "看拼音选字",
   listen_to_char: "听音选字",
+  pinyin_typing: "给汉字注音",
   dictation_handwrite: "看拼音写词语",
   read_aloud: "看字读音",
 };
@@ -520,6 +584,7 @@ function switchTab(tab) {
   currentTab = tab;
   document.getElementById("tabWrong").classList.toggle("active", tab === "wrong");
   document.getElementById("tabMastered").classList.toggle("active", tab === "mastered");
+  document.getElementById("filterCard").style.display = tab === "wrong" ? "" : "none";
   document.getElementById("wrongCard").style.display = tab === "wrong" ? "" : "none";
   document.getElementById("masteredCard").style.display = tab === "mastered" ? "" : "none";
   document.getElementById("startReviewBtn").style.display = (tab === "wrong" && wrongItems.length > 0) ? "" : "none";
@@ -529,7 +594,13 @@ function switchTab(tab) {
 async function loadWrongAnswers() {
   document.getElementById("dateLabel").textContent = date ? `${date} - {{ username }}` : "{{ username }}";
 
-  const url = date ? `/api/wrong_answers?date=${encodeURIComponent(date)}` : "/api/wrong_answers";
+  const type = document.getElementById("reviewTypeFilter").value;
+  const count = document.getElementById("reviewCountFilter").value;
+  const query = new URLSearchParams();
+  if (date) query.set("date", date);
+  if (type !== "all") query.set("type", type);
+  if (count !== "all") query.set("review_count", count);
+  const url = `/api/wrong_answers${query.toString() ? "?" + query.toString() : ""}`;
   const res = await fetch(url);
   const data = await res.json();
   const body = document.getElementById("reviewBody");
@@ -548,7 +619,12 @@ async function loadWrongAnswers() {
     document.getElementById("startReviewBtn").style.display = "";
   }
 
-  items.forEach(w => {
+  const groupLabels = {
+    0: "未复习",
+    1: "已复习过一次",
+    2: "已复习过两次",
+  };
+  const renderRow = w => {
     const rc = w.review_count || 0;
     const rcClass = rc >= 2 ? "review-count-2" : rc >= 1 ? "review-count-1" : "review-count-0";
     const tr = document.createElement("tr");
@@ -562,7 +638,21 @@ async function loadWrongAnswers() {
       <td class="review-count-cell ${rcClass}">${rc}次</td>
     `;
     body.appendChild(tr);
-  });
+  };
+
+  if (count === "all") {
+    [0, 1, 2].forEach(rc => {
+      const rows = items.filter(w => (w.review_count || 0) === rc);
+      if (!rows.length) return;
+      const group = document.createElement("tr");
+      group.className = "group-row";
+      group.innerHTML = `<td colspan="7">${groupLabels[rc]} · ${rows.length} 题</td>`;
+      body.appendChild(group);
+      rows.forEach(renderRow);
+    });
+  } else {
+    items.forEach(renderRow);
+  }
 }
 
 async function loadMastered() {
@@ -717,18 +807,18 @@ async function markReviewed(item) {
   await fetch("/api/review_done", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ character: item.character, mode: item.mode }),
+    body: JSON.stringify({ event_id: item.event_id, character: item.character, mode: item.mode }),
   });
 }
 
-function handleReviewAnswer(btn, idx, q, item) {
+async function handleReviewAnswer(btn, idx, q, item) {
   const allBtns = document.querySelectorAll(".quiz-opt");
   allBtns.forEach(b => b.disabled = true);
 
   if (idx === q.correct_index) {
     btn.classList.add("correct");
     reviewCorrect++;
-    markReviewed(item);
+    await markReviewed(item);
   } else {
     btn.classList.add("wrong");
     allBtns[q.correct_index].classList.add("correct");
@@ -745,7 +835,7 @@ function handleReviewAnswer(btn, idx, q, item) {
   }, hint, 1200);
 }
 
-function checkDictation(btn) {
+async function checkDictation(btn) {
   const box = document.getElementById("quizBox");
   const input = document.getElementById("dictInput");
   const answer = box._answer;
@@ -760,7 +850,7 @@ function checkDictation(btn) {
   if (userAnswer === answer) {
     reviewCorrect++;
     hint.innerHTML = `<div class="dictation-result correct">${answer} ✓</div>`;
-    markReviewed(item);
+    await markReviewed(item);
   } else {
     hint.innerHTML = `<div class="dictation-result wrong">${userAnswer} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>`;
   }

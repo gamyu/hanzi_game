@@ -5915,30 +5915,7 @@ async function loadWrongReviewSection() {
 
 async function startVoluntaryReview() {
   if (!state.user) { showAuthModal(); return; }
-  try {
-    const res = await fetch("/api/wrong_answers");
-    const data = await res.json();
-    const items = data.wrong_answers || [];
-    if (items.length === 0) { alert("没有错题可复习"); return; }
-    // Switch to homework view if in game view
-    document.getElementById("gameView").style.display = "none";
-    const hwView = document.getElementById("homeworkView");
-    hwView.style.display = "flex";
-    hwView.style.flexDirection = "column";
-    hwView.style.alignItems = "center";
-    hwView.style.width = "100%";
-    document.getElementById("hwTodaySection").style.display = "none";
-    document.getElementById("hwProgressSection").style.display = "none";
-    document.getElementById("hwHistorySection").style.display = "none";
-    document.getElementById("hwResultSection").style.display = "none";
-    document.getElementById("hwWrongReviewSection").style.display = "none";
-    document.getElementById("hwReviewSection").style.display = "none";
-    hwReviewItems = items;
-    hwReview.isVoluntary = true;
-    startHwReview();
-  } catch (e) {
-    alert("加载错题失败");
-  }
+  location.href = "/review";
 }
 
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };

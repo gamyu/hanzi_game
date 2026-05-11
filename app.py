@@ -957,6 +957,9 @@ def init_db():
             question TEXT NOT NULL DEFAULT '',
             correct_answer TEXT NOT NULL DEFAULT '',
             user_answer TEXT NOT NULL DEFAULT '',
+            review_count INTEGER NOT NULL DEFAULT 0,
+            mastered INTEGER NOT NULL DEFAULT 0,
+            mastered_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
@@ -1124,6 +1127,12 @@ def init_db():
         db.execute("ALTER TABLE homework_plans ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
     if not _col_exists("daily_assignments", "mode"):
         db.execute("ALTER TABLE daily_assignments ADD COLUMN mode TEXT NOT NULL DEFAULT 'by_lesson'")
+    if not _col_exists("wrong_answer_events", "review_count"):
+        db.execute("ALTER TABLE wrong_answer_events ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0")
+    if not _col_exists("wrong_answer_events", "mastered"):
+        db.execute("ALTER TABLE wrong_answer_events ADD COLUMN mastered INTEGER NOT NULL DEFAULT 0")
+    if not _col_exists("wrong_answer_events", "mastered_at"):
+        db.execute("ALTER TABLE wrong_answer_events ADD COLUMN mastered_at TIMESTAMP")
     _backfill_wrong_answer_events(db)
     db.commit()
     db.close()
@@ -2037,7 +2046,7 @@ def parent_overview():
         (uid,),
     ).fetchone()
     mastered_count_row = db.execute(
-        "SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = %s",
+        "SELECT COUNT(*) as cnt FROM wrong_answer_events WHERE user_id = %s AND mastered = 1",
         (uid,),
     ).fetchone()
 
@@ -2404,7 +2413,7 @@ def scores_api():
     wrong_event_rows = db.execute(
         """SELECT id, character, pinyin, words, grade, mode, source, source_id,
                   source_date, source_label, question, correct_answer,
-                  user_answer, created_at
+                  user_answer, review_count, mastered, mastered_at, created_at
            FROM wrong_answer_events
            WHERE user_id = %s
            ORDER BY source_date DESC, created_at DESC, id DESC""",
@@ -2478,21 +2487,34 @@ def wrong_answers_api():
         return jsonify({"ok": True})
 
     date = request.args.get("date")
+    review_type = request.args.get("type", "all")
+    review_count = request.args.get("review_count", "all")
     db = get_db()
+    clauses = ["user_id = %s", "mastered = 0"]
+    params = [session["user_id"]]
     if date:
-        rows = db.execute(
-            "SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s AND DATE(created_at) = %s ORDER BY character, mode, created_at DESC",
-            (session["user_id"], date),
-        ).fetchall()
-    else:
-        rows = db.execute(
-            "SELECT DISTINCT ON (character, mode) character, pinyin, words, grade, mode, review_count, DATE(created_at) as date FROM wrong_answers WHERE user_id = %s ORDER BY character, mode, created_at DESC",
-            (session["user_id"],),
-        ).fetchall()
+        clauses.append("source_date = %s")
+        params.append(date)
+    if review_type == "writing":
+        clauses.append("(mode = 'dictation_handwrite' OR source_label LIKE %s)")
+        params.append("%写字%")
+    elif review_type == "recognition":
+        clauses.append("NOT (mode = 'dictation_handwrite' OR source_label LIKE %s)")
+        params.append("%写字%")
+    if review_count in ("0", "1", "2"):
+        clauses.append("review_count = %s")
+        params.append(int(review_count))
+
+    rows = db.execute(
+        f"""SELECT id AS event_id, character, pinyin, words, grade, mode,
+                   review_count, source_date AS date, source_label, question,
+                   correct_answer
+            FROM wrong_answer_events
+            WHERE {' AND '.join(clauses)}
+            ORDER BY review_count ASC, source_date DESC, created_at DESC, id DESC""",
+        tuple(params),
+    ).fetchall()
     results = [dict(r) for r in rows]
-    writing_chars = {r["character"] for r in results if r["mode"] == "dictation_handwrite"}
-    results = [r for r in results
-               if r["mode"] == "dictation_handwrite" or r["character"] not in writing_chars]
     return jsonify({"wrong_answers": results})
 
 
@@ -2508,6 +2530,7 @@ def review_question():
     words = data.get("words", "")
     grade = data.get("grade", "")
     mode = data.get("mode", "char_to_pinyin")
+    question_mode = "char_to_pinyin" if mode in ("pinyin_typing", "read_aloud") else mode
 
     char_list = CHARACTERS.get(grade, [])
     if len(char_list) < 4:
@@ -2534,12 +2557,12 @@ def review_question():
     else:
         others = [c for c in char_list if c["char"] != character]
 
-    if mode == "char_to_pinyin":
+    if question_mode == "char_to_pinyin":
         distractors = _pick_distractors(correct, others, key="pinyin")
         options = [pinyin] + [d["pinyin"] for d in distractors]
         random.shuffle(options)
         resp = {
-            "mode": mode, "question": character, "options": options,
+            "mode": question_mode, "question": character, "options": options,
             "correct_index": options.index(pinyin),
             "answer": pinyin, "word_hint": words,
         }
@@ -2549,55 +2572,74 @@ def review_question():
                 resp["context_word"] = cw
         return jsonify(resp)
 
-    if mode == "pinyin_to_char":
+    if question_mode == "pinyin_to_char":
         distractors = _pick_distractors(correct, others, key="char")
         options = [character] + [d["char"] for d in distractors]
         random.shuffle(options)
         return jsonify({
-            "mode": mode, "question": pinyin, "options": options,
+            "mode": question_mode, "question": pinyin, "options": options,
             "correct_index": options.index(character),
             "answer": character, "word_hint": words,
         })
 
-    if mode == "listen_to_char":
+    if question_mode == "listen_to_char":
         distractors = _pick_distractors(correct, others, key="char", exclude_homophones=True)
         options = [character] + [d["char"] for d in distractors]
         random.shuffle(options)
         return jsonify({
-            "mode": mode, "question": character, "question_pinyin": pinyin,
+            "mode": question_mode, "question": character, "question_pinyin": pinyin,
             "options": options, "correct_index": options.index(character),
             "answer": character, "word_hint": words,
         })
 
-    if mode == "dictation_handwrite":
-        payload = {"mode": mode, "question": pinyin, "answer": character}
+    if question_mode == "dictation_handwrite":
+        payload = {"mode": question_mode, "question": pinyin, "answer": character}
         if _pinyin_has_other_word(pinyin, character):
             hint = HOMOPHONE_HINTS.get(character)
             if hint:
                 payload["homophone_hint"] = hint
         return jsonify(payload)
 
-    if mode == "read_aloud":
-        return jsonify({
-            "mode": mode, "question": character, "answer": pinyin,
-            "answer_char": character, "word_hint": words,
-        })
-
     return jsonify({"error": f"Unknown mode: {mode}"}), 400
 
 
 @app.route("/api/review_done", methods=["POST"])
 def review_done():
-    """Mark a wrong answer as reviewed and delete it."""
+    """Mark a wrong-book event as reviewed after a correct answer."""
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
 
     data = request.get_json()
+    event_id = data.get("event_id")
     character = data.get("character", "")
     mode = data.get("mode", "")
     db = get_db()
 
-    # Delete the reviewed wrong answer
+    if event_id:
+        row = db.execute(
+            "SELECT id, review_count, mastered FROM wrong_answer_events WHERE id = %s AND user_id = %s",
+            (event_id, session["user_id"]),
+        ).fetchone()
+        if not row:
+            return jsonify({"error": "错题不存在"}), 404
+        next_count = (row["review_count"] or 0) + 1
+        if next_count >= 3:
+            db.execute(
+                """UPDATE wrong_answer_events
+                   SET review_count = %s, mastered = 1,
+                       mastered_at = COALESCE(mastered_at, CURRENT_TIMESTAMP)
+                   WHERE id = %s""",
+                (next_count, event_id),
+            )
+        else:
+            db.execute(
+                "UPDATE wrong_answer_events SET review_count = %s WHERE id = %s",
+                (next_count, event_id),
+            )
+        db.commit()
+        return jsonify({"ok": True, "review_count": next_count, "mastered": next_count >= 3})
+
+    # Backward-compatible path for older open wrong-answer records.
     db.execute(
         "DELETE FROM wrong_answers WHERE user_id = %s AND character = %s AND mode = %s",
         (session["user_id"], character, mode),
@@ -2613,7 +2655,11 @@ def mastered_words_api():
         return jsonify({"error": "未登录"}), 401
     db = get_db()
     rows = db.execute(
-        "SELECT character, pinyin, words, grade, mode, review_count, DATE(created_at) as date, DATE(mastered_at) as mastered_date FROM mastered_words WHERE user_id = %s ORDER BY mastered_at DESC",
+        """SELECT character, pinyin, words, grade, mode, review_count,
+                  source_date AS date, DATE(mastered_at) as mastered_date
+           FROM wrong_answer_events
+           WHERE user_id = %s AND mastered = 1
+           ORDER BY mastered_at DESC, id DESC""",
         (session["user_id"],),
     ).fetchall()
     return jsonify({"mastered_words": [dict(r) for r in rows]})
@@ -2811,7 +2857,7 @@ def admin_users():
         wa = db.execute("SELECT COUNT(*) as cnt FROM wrong_answers WHERE user_id = %s", (u["id"],)).fetchone()
         d["wrong_count"] = wa["cnt"]
         # Count mastered
-        ma = db.execute("SELECT COUNT(*) as cnt FROM mastered_words WHERE user_id = %s", (u["id"],)).fetchone()
+        ma = db.execute("SELECT COUNT(*) as cnt FROM wrong_answer_events WHERE user_id = %s AND mastered = 1", (u["id"],)).fetchone()
         d["mastered_count"] = ma["cnt"]
         result.append(d)
 
@@ -2852,8 +2898,8 @@ def admin_user_details(user_id):
     # Mastered words
     mastered = db.execute(
         """SELECT character, pinyin, words, grade, mode, DATE(mastered_at) as mastered_date
-           FROM mastered_words WHERE user_id = %s
-           ORDER BY mastered_at DESC""",
+           FROM wrong_answer_events WHERE user_id = %s AND mastered = 1
+           ORDER BY mastered_at DESC, id DESC""",
         (user_id,),
     ).fetchall()
 

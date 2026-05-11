@@ -84,13 +84,19 @@
     margin-bottom: 14px;
   }
 
-  .wrong-book-link {
-    width: 100%;
+  .top-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .wrong-book-link,
+  .review-link {
     border: 0;
     background: transparent;
     color: #5a67d8;
     display: flex;
-    justify-content: space-between;
     align-items: center;
     gap: 12px;
     font-size: 16px;
@@ -100,26 +106,22 @@
     font-family: inherit;
   }
 
+  .wrong-book-link {
+    flex: 1;
+    justify-content: space-between;
+  }
+
+  .review-link {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: #edf2ff;
+  }
+
   .wrong-book-link span {
     color: #718096;
     font-size: 13px;
     font-weight: 700;
-  }
-
-  .wrong-book-panel[hidden] {
-    display: none;
-  }
-
-  .panel-close {
-    border: 0;
-    background: #edf2ff;
-    color: #5a67d8;
-    border-radius: 999px;
-    padding: 7px 12px;
-    font-size: 13px;
-    font-weight: 800;
-    cursor: pointer;
-    font-family: inherit;
   }
 
   table {
@@ -348,10 +350,13 @@
 <p class="subtitle">{{ username }}</p>
 
 <div class="top-link-card">
-  <button class="wrong-book-link" id="wrongBookToggle" type="button">
-    错题本
-    <span id="wrongBookSummary">加载中...</span>
-  </button>
+  <div class="top-actions">
+    <button class="wrong-book-link" id="wrongBookToggle" type="button">
+      错题本
+      <span id="wrongBookSummary">加载中...</span>
+    </button>
+    <a class="review-link" href="/review">复习</a>
+  </div>
 </div>
 
 <div class="card">
@@ -373,10 +378,10 @@
   </table>
 </div>
 
-<div class="card wrong-book-panel" id="wrongBookPanel" hidden>
+<div class="card wrong-book-panel" id="wrongBookPanel">
   <div class="section-title">
     错题本
-    <button class="panel-close" type="button" id="wrongBookClose">收起</button>
+    <span>从上方链接可快速定位</span>
   </div>
   <div class="wrong-legend" aria-label="错题本图例">
     <span class="legend-item recognition"><span class="legend-swatch"></span>认字：红色 / 粗体</span>
@@ -460,14 +465,8 @@ function renderWrongBook(items) {
 
 function openWrongBook(target) {
   const panel = document.getElementById("wrongBookPanel");
-  panel.hidden = false;
   const scrollTarget = target || panel;
   requestAnimationFrame(() => scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" }));
-}
-
-function closeWrongBook() {
-  document.getElementById("wrongBookPanel").hidden = true;
-  document.getElementById("wrongBookToggle").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 async function loadScores() {
@@ -518,7 +517,6 @@ async function loadScores() {
 }
 
 document.getElementById("wrongBookToggle").addEventListener("click", () => openWrongBook());
-document.getElementById("wrongBookClose").addEventListener("click", closeWrongBook);
 document.addEventListener("click", event => {
   const link = event.target.closest(".wrong-jump");
   if (!link) return;
