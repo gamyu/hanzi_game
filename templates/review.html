@@ -664,7 +664,7 @@
 </div>
 
 <div class="btn-row" id="btnRow">
-  <button class="action-btn" onclick="window.close()">关闭</button>
+  <button class="action-btn" onclick="location.href='/'">返回主页</button>
 </div>
 
 <!-- Quiz overlay -->
@@ -723,6 +723,7 @@ function advanceOrWait(nextFn, hintEl, delay) {
       nextFn();
     };
     if (hintEl) hintEl.appendChild(btn);
+    setTimeout(() => btn.focus(), 0);
   }
 }
 
@@ -957,7 +958,10 @@ function renderReviewQuestion(q, item) {
     const pyInput = document.getElementById("pinyinInput");
     pyInput.focus();
     pyInput.addEventListener("keydown", e => {
-      if (e.key === "Enter") checkPinyinTyping(document.querySelector(".dictation-submit"));
+      if (e.key === "Enter") {
+        e.preventDefault();
+        checkPinyinTyping(document.querySelector(".dictation-submit"));
+      }
     });
     box._answer = q.answer;
     box._item = item;
@@ -1244,7 +1248,10 @@ function renderLegacyChoiceQuestion(q, item) {
     const input = document.getElementById("dictInput");
     input.focus();
     input.addEventListener("keydown", e => {
-      if (e.key === "Enter") checkDictation(document.querySelector(".dictation-submit"));
+      if (e.key === "Enter") {
+        e.preventDefault();
+        checkDictation(document.querySelector(".dictation-submit"));
+      }
     });
     box._answer = q.answer;
     box._item = item;
@@ -1370,6 +1377,25 @@ function closeQuiz() {
   if (ttsAudio) { ttsAudio.pause(); }
   loadWrongAnswers();
 }
+
+document.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  if (event.defaultPrevented) return;
+  if (event.target && ["TEXTAREA", "SELECT"].includes(event.target.tagName) && !event.target.disabled) return;
+  const okButtons = Array.from(document.querySelectorAll(".ok-btn"))
+    .filter(btn => !btn.disabled && btn.offsetParent !== null);
+  const okBtn = okButtons[okButtons.length - 1];
+  if (okBtn) {
+    event.preventDefault();
+    okBtn.click();
+    return;
+  }
+  const submitBtn = document.querySelector(".dictation-submit:not(:disabled), .review-canvas-buttons .submit:not(:disabled)");
+  if (submitBtn && submitBtn.offsetParent !== null) {
+    event.preventDefault();
+    submitBtn.click();
+  }
+});
 
 loadWrongAnswers();
 </script>

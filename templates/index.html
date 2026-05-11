@@ -1057,9 +1057,15 @@
     flex: 1; min-width: 240px;
     border: 2px solid #e2e8f0; border-radius: 16px; padding: 20px;
     text-align: center; cursor: pointer; transition: all 0.2s;
+    background: #fff;
   }
   .hw-card:hover { border-color: #667eea; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.2); }
+  .hw-card.mode-by-lesson { border-color: #9ae6b4; background: #f7fff9; }
+  .hw-card.mode-by-lesson:hover { border-color: #38a169; box-shadow: 0 4px 12px rgba(56,161,105,0.18); }
+  .hw-card.mode-book-review { border-color: #90cdf4; background: #f7fbff; }
+  .hw-card.mode-book-review:hover { border-color: #3182ce; box-shadow: 0 4px 12px rgba(49,130,206,0.2); }
   .hw-card.completed { border-color: #38a169; background: #f0fff4; cursor: default; }
+  .hw-card.mode-book-review.completed { border-color: #63b3ed; background: #ebf8ff; }
   .hw-card.completed:hover { transform: none; box-shadow: none; }
   .hw-card-icon { font-size: 40px; margin-bottom: 8px; }
   .hw-card-type { font-size: 20px; font-weight: 700; color: #2d3748; }
@@ -1783,6 +1789,7 @@ function advanceOrWait(nextFn, hintEl, delay) {
       nextFn();
     };
     if (hintEl) hintEl.appendChild(btn);
+    setTimeout(() => btn.focus(), 0);
   }
 }
 
@@ -3446,6 +3453,7 @@ function handleDictationAnswer(userInput, q) {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => loadQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -3951,6 +3959,7 @@ async function checkCanvasStrokeOrderGeneric(answer, strokes, canvasW, canvasH, 
           if (onRetry) onRetry();
         };
         if (container) container.appendChild(retryBtn);
+        setTimeout(() => retryBtn.focus(), 0);
         return;
       }
       const writer = HanziWriter.create(`_soAnim${idx}`, chars[idx], {
@@ -4324,6 +4333,7 @@ async function submitGamePinyin() {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => loadQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -4650,11 +4660,75 @@ function spawnConfetti() {
   }
 }
 
+function isHomeworkProcessActive() {
+  const section = document.getElementById("hwQuizSection");
+  if (!section || section.style.display === "none") return false;
+  if (hwQuiz && hwQuiz.assignmentId && !hwQuiz.isPreview) return true;
+  return !!(hwReview && hwReview.questions && hwReview.questions.length > 0 && !hwQuiz.isPreview);
+}
+
+function saveActiveHomeworkProgress() {
+  if (!isHomeworkProcessActive()) return;
+  try {
+    if (hwQuiz && hwQuiz.assignmentId && !hwQuiz.isPreview) {
+      autoSaveHwQuiz();
+    }
+    if (hwReview && hwReview.questions && hwReview.questions.length > 0) {
+      const timeElapsed = hwReview.startTime ? Math.floor((Date.now() - hwReview.startTime) / 1000) : 0;
+      localStorage.setItem("hwReview_saved", JSON.stringify({
+        currentIndex: hwReview.currentIndex,
+        correctCount: hwReview.correctCount,
+        wrongItems: hwReview.wrongItems,
+        totalOriginal: hwReview.totalOriginal,
+        questions: hwReview.questions,
+        answeredCorrectly: [...hwReview.answeredCorrectly],
+        timeElapsed: timeElapsed,
+      }));
+    }
+  } catch(e) {}
+}
+
+async function promptBeforeLeavingHomework() {
+  if (!isHomeworkProcessActive()) return true;
+  const choice = await showHwExitDialog();
+  if (choice === 0) return false;
+  if (choice === 1) saveActiveHomeworkProgress();
+  if (choice === 2) {
+    try {
+      if (hwQuiz && hwQuiz.assignmentId) localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`);
+      localStorage.removeItem("hwReview_saved");
+    } catch(e) {}
+  }
+  hwBackToToday();
+  return true;
+}
+
 // Save score when leaving the page or switching away
-window.addEventListener("beforeunload", () => { saveScoreAsync(); });
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") saveScoreAsync();
+window.addEventListener("beforeunload", (event) => {
+  saveScoreAsync();
+  if (isHomeworkProcessActive()) {
+    saveActiveHomeworkProgress();
+    event.preventDefault();
+    event.returnValue = "";
+    return "";
+  }
 });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    saveScoreAsync();
+    saveActiveHomeworkProgress();
+  }
+});
+
+document.addEventListener("click", async event => {
+  if (!isHomeworkProcessActive()) return;
+  if (event.target.closest("#hwQuizSection")) return;
+  if (event.target.closest(".hw-exit-overlay")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  await promptBeforeLeavingHomework();
+}, true);
 
 // =============================================
 // HOMEWORK SYSTEM (integrated into main page)
@@ -4832,19 +4906,23 @@ async function loadHomeworkToday() {
     const a = pending || group[group.length - 1];
     const type = a.type;
     const isCompleted = a.status === "completed";
-    const icon = type === "recognition" ? "📖" : "✍️";
+    const isBookReview = a.mode === "book_review";
+    const modeClass = isBookReview ? "mode-book-review" : "mode-by-lesson";
+    const icon = isBookReview
+      ? (type === "recognition" ? "📚" : "📝")
+      : (type === "recognition" ? "📖" : "✍️");
     const typeLabel = HW_TYPE_LABELS[type];
     const modeLabel = type === "recognition" ? "给汉字注音" : "看拼音写字";
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
     const completedCount = group.filter(x => x.status === "completed").length;
-    const unit = a.mode === "book_review" ? "天" : "课";
-    const reviewBadge = a.mode === "book_review"
+    const unit = isBookReview ? "天" : "课";
+    const reviewBadge = isBookReview
       ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>'
       : '<span style="font-size:11px;padding:1px 5px;background:#f0fff4;color:#2f855a;border-radius:3px;margin-left:6px">按课作业</span>';
 
-    html += `<div class="hw-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startHwQuiz(${a.id})"`}>
+    html += `<div class="hw-card ${modeClass} ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startHwQuiz(${a.id})"`}>
       <div class="hw-card-icon">${icon}</div>
       <div class="hw-card-type">${typeLabel}作业${reviewBadge}</div>
       <div class="hw-card-info">第${a.lesson_num}${unit} · ${gradeShort(a.grade)} · ${modeLabel}</div>`;
@@ -5561,6 +5639,7 @@ async function hwPinyinSubmit() {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextHwQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -5658,6 +5737,7 @@ function hwHandleHwAnswer(userInput) {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextHwQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -5855,6 +5935,7 @@ async function confirmHwReviewBack() {
 function showHwExitDialog() {
   return new Promise(resolve => {
     const overlay = document.createElement("div");
+    overlay.className = "hw-exit-overlay";
     overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center";
     const box = document.createElement("div");
     box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
@@ -5888,6 +5969,8 @@ function hwBackToToday() {
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };
 
 function startHwReview() {
+  hwQuiz.assignmentId = null;
+  hwQuiz.isPreview = false;
   // Build review questions from hwReviewItems
   const questions = [];
   hwReviewItems.forEach(item => {
@@ -6001,7 +6084,10 @@ function showHwReviewQuestion() {
     `;
     setTimeout(() => document.getElementById("hwReviewPinyinInput")?.focus(), 50);
     document.getElementById("hwReviewPinyinInput")?.addEventListener("keydown", e => {
-      if (e.key === "Enter") submitHwReviewPinyin();
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitHwReviewPinyin();
+      }
     });
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
@@ -6097,6 +6183,7 @@ function submitHwReviewPinyin() {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextHwReviewQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -6167,6 +6254,7 @@ async function submitHwReviewHandwrite() {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextHwReviewQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -6398,11 +6486,23 @@ async function submitHwQuiz() {
 // Global Enter key: click OK button or submit pinyin answer if visible
 document.addEventListener("keydown", function(e) {
   if (e.key !== "Enter") return;
-  // Don't intercept if focused on a pinyin input (handled by gamePyInputKeydown)
-  if (e.target && e.target.classList.contains("game-pinyin-type-input")) return;
+  if (e.defaultPrevented) return;
+  // Inputs with their own Enter handlers should finish their current submit first.
+  if (e.target && ["TEXTAREA", "SELECT"].includes(e.target.tagName) && !e.target.disabled) return;
   // Click OK button if visible
-  const okBtn = document.querySelector(".ok-btn");
+  const okButtons = Array.from(document.querySelectorAll(".ok-btn"))
+    .filter(btn => !btn.disabled && btn.offsetParent !== null);
+  const okBtn = okButtons[okButtons.length - 1];
   if (okBtn) { e.preventDefault(); okBtn.click(); return; }
+  const submitIds = ["gamePinyinSubmitBtn", "pinyinSubmitBtn", "hwSubmitBtn", "hwQuizSubmitBtn"];
+  for (const id of submitIds) {
+    const btn = document.getElementById(id);
+    if (btn && !btn.disabled && btn.offsetParent !== null) {
+      e.preventDefault();
+      btn.click();
+      return;
+    }
+  }
   // Click pinyin submit button if visible and in type mode
   const pyMode = localStorage.getItem("pinyin_input_mode");
   if (pyMode === "type") {

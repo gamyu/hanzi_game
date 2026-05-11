@@ -82,9 +82,15 @@
     flex: 1; min-width: 240px;
     border: 2px solid #e2e8f0; border-radius: 16px; padding: 20px;
     text-align: center; cursor: pointer; transition: all 0.2s;
+    background: #fff;
   }
   .assignment-card:hover { border-color: #667eea; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.2); }
+  .assignment-card.mode-by-lesson { border-color: #9ae6b4; background: #f7fff9; }
+  .assignment-card.mode-by-lesson:hover { border-color: #38a169; box-shadow: 0 4px 12px rgba(56,161,105,0.18); }
+  .assignment-card.mode-book-review { border-color: #90cdf4; background: #f7fbff; }
+  .assignment-card.mode-book-review:hover { border-color: #3182ce; box-shadow: 0 4px 12px rgba(49,130,206,0.2); }
   .assignment-card.completed { border-color: #38a169; background: #f0fff4; cursor: default; }
+  .assignment-card.mode-book-review.completed { border-color: #63b3ed; background: #ebf8ff; }
   .assignment-card.completed:hover { transform: none; box-shadow: none; }
   .card-icon { font-size: 40px; margin-bottom: 8px; }
   .card-type { font-size: 20px; font-weight: 700; color: #2d3748; }
@@ -297,7 +303,7 @@
 <body>
 
 <div class="top-nav">
-  <a href="/">← 返回游戏</a>
+  <a href="/">← 返回主页</a>
   <span style="font-size:14px; opacity:0.7">{{ username }}</span>
 </div>
 
@@ -395,6 +401,7 @@ function advanceOrWait(nextFn, hintEl, delay) {
       nextFn();
     };
     if (hintEl) hintEl.appendChild(btn);
+    setTimeout(() => btn.focus(), 0);
   }
 }
 
@@ -458,17 +465,21 @@ async function loadToday() {
   html += '<div class="assignment-cards">';
   assignments.forEach(a => {
     const isCompleted = a.status === "completed";
-    const icon = a.type === "recognition" ? "📖" : "✍️";
+    const isBookReview = a.mode === "book_review";
+    const modeClass = isBookReview ? "mode-book-review" : "mode-by-lesson";
+    const icon = isBookReview
+      ? (a.type === "recognition" ? "📚" : "📝")
+      : (a.type === "recognition" ? "📖" : "✍️");
     const typeLabel = TYPE_LABELS[a.type];
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
     const mins = Math.floor(a.time_spent / 60);
     const secs = a.time_spent % 60;
 
-    const unit = a.mode === "book_review" ? "天" : "课";
-    const reviewBadge = a.mode === "book_review"
+    const unit = isBookReview ? "天" : "课";
+    const reviewBadge = isBookReview
       ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>'
       : '<span style="font-size:11px;padding:1px 5px;background:#f0fff4;color:#2f855a;border-radius:3px;margin-left:6px">按课作业</span>';
-    html += `<div class="assignment-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
+    html += `<div class="assignment-card ${modeClass} ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
       <div class="card-icon">${icon}</div>
       <div class="card-type">${typeLabel}作业${reviewBadge}</div>
       <div class="card-info">第${a.lesson_num}${unit} · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : ""}</div>`;
@@ -1262,6 +1273,7 @@ async function pinyinSubmit() {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -1342,6 +1354,7 @@ function handleHwAnswer(userInput) {
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
     skipBtn.onclick = () => nextQuestion();
     hint.appendChild(skipBtn);
+    setTimeout(() => skipBtn.focus(), 0);
   }
 }
 
@@ -1369,6 +1382,50 @@ function autoSaveQuiz() {
     }));
   } catch(e) {}
 }
+
+function isQuizProcessActive() {
+  const section = document.getElementById("quizSection");
+  return !!section && section.style.display !== "none" && !!quiz.assignmentId;
+}
+
+window.addEventListener("beforeunload", event => {
+  if (!isQuizProcessActive()) return;
+  autoSaveQuiz();
+  event.preventDefault();
+  event.returnValue = "";
+  return "";
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && isQuizProcessActive()) {
+    autoSaveQuiz();
+  }
+});
+
+async function promptBeforeLeavingQuiz() {
+  if (!isQuizProcessActive()) return true;
+  const choice = await showExitDialog();
+  if (choice === 0) return false;
+  if (choice === 1) autoSaveQuiz();
+  if (choice === 2) {
+    try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
+  }
+  document.getElementById("quizSection").style.display = "none";
+  document.getElementById("todaySection").style.display = "";
+  loadToday();
+  loadProgress();
+  return true;
+}
+
+document.addEventListener("click", async event => {
+  if (!isQuizProcessActive()) return;
+  if (event.target.closest("#quizSection")) return;
+  if (event.target.closest(".hw-exit-overlay")) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  await promptBeforeLeavingQuiz();
+}, true);
 
 function nextQuestion() {
   quiz.currentIndex++;
@@ -1473,6 +1530,7 @@ async function confirmBackToList() {
 function showExitDialog() {
   return new Promise(resolve => {
     const overlay = document.createElement("div");
+    overlay.className = "hw-exit-overlay";
     overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center";
     const box = document.createElement("div");
     box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
@@ -1722,6 +1780,29 @@ async function submitHw() {
   // on correct so the user can re-submit after a wrong answer.
   handleHwAnswer(hwRecognizedResult);
 }
+
+document.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  if (event.defaultPrevented) return;
+  if (event.target && ["TEXTAREA", "SELECT"].includes(event.target.tagName) && !event.target.disabled) return;
+  const okButtons = Array.from(document.querySelectorAll(".ok-btn"))
+    .filter(btn => !btn.disabled && btn.offsetParent !== null);
+  const okBtn = okButtons[okButtons.length - 1];
+  if (okBtn) {
+    event.preventDefault();
+    okBtn.click();
+    return;
+  }
+  const submitIds = ["pinyinSubmitBtn", "hwSubmitBtn"];
+  for (const id of submitIds) {
+    const btn = document.getElementById(id);
+    if (btn && !btn.disabled && btn.offsetParent !== null) {
+      event.preventDefault();
+      btn.click();
+      return;
+    }
+  }
+});
 
 // --- Init ---
 async function init() {
