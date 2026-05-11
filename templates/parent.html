@@ -62,6 +62,12 @@
   .msg.ok { background: #f0fff4; color: #22543d; border: 1px solid #9ae6b4; }
   .msg.err { background: #fff5f5; color: #822727; border: 1px solid #feb2b2; }
   .hint { font-size: 13px; color: #718096; line-height: 1.5; margin-bottom: 8px; }
+  .policy-list {
+    margin: 6px 0 10px 18px;
+    color: #4a5568;
+    font-size: 13px;
+    line-height: 1.55;
+  }
 
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .col { flex: 1 1 140px; min-width: 120px; }
@@ -127,6 +133,11 @@
   <div class="hint">
     首次使用或忘记家长密码时，在这里输入孩子用户名和孩子账号登录密码，为家长设置一个单独密码。
   </div>
+  <ul class="policy-list">
+    <li>孩子用户名需要和孩子登录时使用的用户名一致，包含大小写。</li>
+    <li>孩子账号登录密码只用于确认身份，不会被改成家长密码。</li>
+    <li>新的家长密码至少 4 个字符，可以只用数字；例如 4321 是允许的。</li>
+  </ul>
   <div class="row">
     <div class="col col-2">
       <label for="setPpwUsername">孩子的用户名</label>
@@ -157,6 +168,10 @@
   <div class="card">
     <h2>修改家长密码</h2>
     <div class="hint">修改或关闭家长密码在当前页面完成。关闭后需要重新设置家长密码才能再次登录家长控制。</div>
+    <ul class="policy-list">
+      <li>新的家长密码至少 4 个字符，可以使用数字、字母、符号或中文。</li>
+      <li>留空只能用于“关闭家长登录”，不能作为新密码保存。</li>
+    </ul>
     <div class="row">
       <div class="col col-2">
         <label for="managePpwCurrent">当前家长密码</label>
@@ -225,10 +240,24 @@ async function api(path, opts = {}) {
   opts.headers = Object.assign({"Content-Type": "application/json"}, opts.headers || {});
   if (opts.body && typeof opts.body !== "string") opts.body = JSON.stringify(opts.body);
   if (parentCsrf && opts.method !== "GET") opts.headers["X-CSRF-Token"] = parentCsrf;
-  const res = await fetch(path, opts);
-  let data = null;
-  try { data = await res.json(); } catch(e) {}
-  return { ok: res.ok, status: res.status, data: data || {} };
+  try {
+    const res = await fetch(path, opts);
+    const text = await res.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch(e) {
+        const plain = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+        const detail = plain.length > 220 ? plain.slice(0, 220) + "..." : plain;
+        data = { error: detail || `服务器返回 ${res.status}` };
+      }
+    }
+    if (!res.ok && !data.error) data.error = `请求失败 (${res.status})`;
+    return { ok: res.ok, status: res.status, data };
+  } catch(e) {
+    return { ok: false, status: 0, data: { error: "网络错误或服务器没有响应" } };
+  }
 }
 
 async function checkParentSession() {
