@@ -54,9 +54,14 @@
     background: #fff; color: #5a67d8; border: 1px solid #cbd5e0;
     padding: 9px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
   }
+  button.danger {
+    background: #fff5f5; color: #c53030; border: 1px solid #feb2b2;
+    padding: 9px 18px; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer;
+  }
   .msg { font-size: 13px; padding: 6px 10px; border-radius: 6px; margin-top: 6px; }
   .msg.ok { background: #f0fff4; color: #22543d; border: 1px solid #9ae6b4; }
   .msg.err { background: #fff5f5; color: #822727; border: 1px solid #feb2b2; }
+  .hint { font-size: 13px; color: #718096; line-height: 1.5; margin-bottom: 8px; }
 
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .col { flex: 1 1 140px; min-width: 120px; }
@@ -94,7 +99,7 @@
 </div>
 
 <h1>👨‍👩‍👧 家长控制</h1>
-<div class="subtitle" id="subtitle">使用孩子账号的「家长密码」登录查看进度并布置作业</div>
+<div class="subtitle" id="subtitle">登录、设置家长密码、布置作业都在这里完成</div>
 
 <!-- Login card -->
 <div class="card" id="loginCard">
@@ -106,55 +111,40 @@
     </div>
     <div class="col col-2">
       <label for="pPassword">家长密码</label>
-      <input id="pPassword" type="password" placeholder="由孩子在设置中为家长创建" autocomplete="current-password">
+      <input id="pPassword" type="password" placeholder="在本页设置或修改的家长密码" autocomplete="current-password">
     </div>
   </div>
   <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <button class="primary" onclick="doParentLogin()">登录</button>
-    <a href="#" id="forgotParentPwLink" style="font-size:12px;color:#5a67d8" onclick="event.preventDefault();showForgotParentModal()">忘记家长密码？</a>
+    <a href="#" id="forgotParentPwLink" style="font-size:12px;color:#5a67d8" onclick="event.preventDefault();focusParentSetup()">首次使用 / 忘记家长密码？</a>
   </div>
   <div id="loginMsg" class="msg" style="display:none"></div>
 </div>
 
-<!-- Set / change parent password (visible to the logged-in child user) -->
-<div class="card hidden" id="setParentPwCard">
-  <h2>设置 / 修改家长密码 <span id="setParentPwOwner" style="font-size:13px;color:#5a67d8;margin-left:6px"></span></h2>
-  <div style="font-size:13px;color:#718096;margin-bottom:8px">
-    家长用孩子的用户名 + 这里设置的家长密码登录本页面，可以查看学习进度并布置作业。留空保存即关闭家长登录。
+<!-- Set / reset parent password from this page -->
+<div class="card" id="setParentPwCard">
+  <h2>设置家长密码</h2>
+  <div class="hint">
+    首次使用或忘记家长密码时，在这里输入孩子用户名和孩子账号登录密码，为家长设置一个单独密码。
   </div>
-  <div id="setParentPwStatus" style="font-size:13px;margin-bottom:6px"></div>
   <div class="row">
     <div class="col col-2">
-      <label for="setPpwCurrent">当前登录密码</label>
-      <input id="setPpwCurrent" type="password" placeholder="验证身份用">
+      <label for="setPpwUsername">孩子的用户名</label>
+      <input id="setPpwUsername" type="text" maxlength="50" placeholder="孩子注册的用户名" autocomplete="username">
+    </div>
+    <div class="col col-2">
+      <label for="setPpwChildLogin">孩子账号登录密码</label>
+      <input id="setPpwChildLogin" type="password" placeholder="用于确认是该账号的家长" autocomplete="current-password">
     </div>
     <div class="col col-2">
       <label for="setPpwNew">新的家长密码</label>
-      <input id="setPpwNew" type="password" placeholder="4位以上，留空表示关闭家长登录">
+      <input id="setPpwNew" type="password" placeholder="4位以上" autocomplete="new-password">
     </div>
   </div>
   <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <button class="primary" onclick="submitSetParentPwHere()">保存家长密码</button>
-    <a href="#" style="font-size:12px;color:#5a67d8" onclick="event.preventDefault();sendParentResetCode()">忘记登录密码？用邮箱验证码</a>
-  </div>
-  <div id="setParentPwCodeRow" style="display:none;margin-top:10px;padding:10px;background:#f7fafc;border-radius:8px">
-    <label for="setPpwCode" style="font-size:12px">6 位邮箱验证码</label>
-    <input id="setPpwCode" type="text" inputmode="numeric" maxlength="6" placeholder="例如 123456" style="margin-bottom:6px">
-    <label for="setPpwNew2" style="font-size:12px">新的家长密码</label>
-    <input id="setPpwNew2" type="password" placeholder="4位以上，留空关闭家长登录" style="margin-bottom:6px">
-    <button class="primary" onclick="submitSetParentPwViaCode()">用验证码保存</button>
   </div>
   <div id="setParentPwMsg" class="msg" style="display:none"></div>
-</div>
-
-<!-- Forgot parent password modal -->
-<div class="card hidden" id="forgotParentPwCard">
-  <h2>找回家长密码</h2>
-  <div style="font-size:13px;color:#718096;margin-bottom:8px">
-    如果是孩子用户，请直接登录主程序后回到本页修改家长密码。<br>
-    如果是家长，请联系孩子或管理员重置。
-  </div>
-  <button class="secondary" onclick="hideForgotParentModal()">返回</button>
 </div>
 
 <!-- Dashboard -->
@@ -162,6 +152,26 @@
   <div class="card">
     <h2>孩子概况 <span id="childName" style="font-size:14px;color:#5a67d8;margin-left:6px"></span></h2>
     <div class="stat-grid" id="statGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>修改家长密码</h2>
+    <div class="hint">修改或关闭家长密码在当前页面完成。关闭后需要重新设置家长密码才能再次登录家长控制。</div>
+    <div class="row">
+      <div class="col col-2">
+        <label for="managePpwCurrent">当前家长密码</label>
+        <input id="managePpwCurrent" type="password" placeholder="当前用于登录的家长密码" autocomplete="current-password">
+      </div>
+      <div class="col col-2">
+        <label for="managePpwNew">新的家长密码</label>
+        <input id="managePpwNew" type="password" placeholder="4位以上" autocomplete="new-password">
+      </div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="primary" onclick="submitParentPasswordChange(false)">保存新密码</button>
+      <button class="danger" onclick="submitParentPasswordChange(true)">关闭家长登录</button>
+    </div>
+    <div id="manageParentPwMsg" class="msg" style="display:none"></div>
   </div>
 
   <div class="card">
@@ -226,41 +236,7 @@ async function checkParentSession() {
   if (data.logged_in) {
     showDashboard(data.child_username);
     await loadOverview();
-    return;
   }
-  // Not parent-logged-in; check if a child user has an active session.
-  // If so, surface the "set parent password" card.
-  try {
-    const me = await api("/api/me");
-    if (me.data && me.data.logged_in) {
-      childUserUsername = me.data.username;
-      document.getElementById("setParentPwOwner").textContent = `(${me.data.username})`;
-      document.getElementById("setParentPwCard").classList.remove("hidden");
-      await refreshSetParentPwStatus();
-    }
-  } catch (e) { /* ignore */ }
-}
-
-let childUserUsername = "";
-
-async function refreshSetParentPwStatus() {
-  const statusEl = document.getElementById("setParentPwStatus");
-  try {
-    const res = await fetch("/api/user/security_status");
-    const data = await res.json();
-    const lines = [];
-    if (data.has_parent_password) {
-      lines.push('<span style="color:#22543d">✓ 家长密码已设置</span>');
-    } else {
-      lines.push('<span style="color:#9c4221">⚠ 尚未设置家长密码</span>');
-    }
-    if (data.has_email) {
-      lines.push(`找回邮箱: <strong>${data.email_masked}</strong>`);
-    } else {
-      lines.push('<span style="color:#9c4221">未设置找回邮箱（在主程序「修改密码」中可设置）</span>');
-    }
-    statusEl.innerHTML = lines.join(' · ');
-  } catch (e) { statusEl.textContent = ""; }
 }
 
 function showMsg(elId, text, ok) {
@@ -271,55 +247,21 @@ function showMsg(elId, text, ok) {
 }
 
 async function submitSetParentPwHere() {
-  const current = document.getElementById("setPpwCurrent").value;
+  const username = document.getElementById("setPpwUsername").value.trim();
+  const childPassword = document.getElementById("setPpwChildLogin").value;
   const next = document.getElementById("setPpwNew").value;
-  if (!current) { showMsg("setParentPwMsg", "请输入当前登录密码", false); return; }
-  const res = await fetch("/api/user/change_password", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target: "parent", mode: "current", current_password: current, new_password: next }),
+  if (!username) { showMsg("setParentPwMsg", "请输入孩子用户名", false); return; }
+  if (!childPassword) { showMsg("setParentPwMsg", "请输入孩子账号登录密码", false); return; }
+  if (next.length < 4) { showMsg("setParentPwMsg", "家长密码至少需要4个字符", false); return; }
+  const { ok, data } = await api("/api/parent/set_password", {
+    method: "POST",
+    body: { username, child_password: childPassword, new_password: next },
   });
-  const data = await res.json();
-  if (!res.ok || data.error) { showMsg("setParentPwMsg", data.error || "保存失败", false); return; }
-  showMsg("setParentPwMsg", data.cleared ? "✓ 家长登录已关闭" : "✓ 家长密码已保存", true);
-  document.getElementById("setPpwCurrent").value = "";
+  if (!ok || data.error) { showMsg("setParentPwMsg", data.error || "保存失败", false); return; }
+  showMsg("setParentPwMsg", "✓ 家长密码已保存，现在可以在上方登录", true);
+  document.getElementById("pUsername").value = data.child_username || username;
+  document.getElementById("setPpwChildLogin").value = "";
   document.getElementById("setPpwNew").value = "";
-  await refreshSetParentPwStatus();
-}
-
-async function sendParentResetCode() {
-  document.getElementById("setParentPwCodeRow").style.display = "block";
-  const res = await fetch("/api/user/send_reset_code", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target: "parent" }),
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) { showMsg("setParentPwMsg", data.error || "发送失败", false); return; }
-  showMsg("setParentPwMsg", `✓ 验证码已发送至 ${data.email_masked || "邮箱"}，15 分钟内有效`, true);
-}
-
-async function submitSetParentPwViaCode() {
-  const code = document.getElementById("setPpwCode").value.trim();
-  const next = document.getElementById("setPpwNew2").value;
-  if (!code) { showMsg("setParentPwMsg", "请输入验证码", false); return; }
-  const res = await fetch("/api/user/change_password", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ target: "parent", mode: "code", code, new_password: next }),
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) { showMsg("setParentPwMsg", data.error || "保存失败", false); return; }
-  showMsg("setParentPwMsg", data.cleared ? "✓ 家长登录已关闭" : "✓ 家长密码已保存", true);
-  document.getElementById("setPpwCode").value = "";
-  document.getElementById("setPpwNew2").value = "";
-  await refreshSetParentPwStatus();
-}
-
-function showForgotParentModal() {
-  document.getElementById("loginCard").classList.add("hidden");
-  document.getElementById("forgotParentPwCard").classList.remove("hidden");
-}
-function hideForgotParentModal() {
-  document.getElementById("loginCard").classList.remove("hidden");
-  document.getElementById("forgotParentPwCard").classList.add("hidden");
 }
 
 async function doParentLogin() {
@@ -344,10 +286,40 @@ async function doParentLogout() {
   location.reload();
 }
 
+function focusParentSetup() {
+  const username = document.getElementById("pUsername").value.trim();
+  if (username) document.getElementById("setPpwUsername").value = username;
+  document.getElementById("setParentPwCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  setTimeout(() => document.getElementById("setPpwUsername").focus(), 250);
+}
+
+async function submitParentPasswordChange(clearPassword) {
+  const current = document.getElementById("managePpwCurrent").value;
+  const next = clearPassword ? "" : document.getElementById("managePpwNew").value;
+  if (!current) { showMsg("manageParentPwMsg", "请输入当前家长密码", false); return; }
+  if (!clearPassword && next.length < 4) {
+    showMsg("manageParentPwMsg", "新家长密码至少需要4个字符", false);
+    return;
+  }
+  if (clearPassword && !confirm("确定关闭家长登录吗？关闭后将退出当前家长页面。")) return;
+  const { ok, data } = await api("/api/parent/change_password", {
+    method: "POST",
+    body: { current_parent_password: current, new_password: next },
+  });
+  if (!ok || data.error) { showMsg("manageParentPwMsg", data.error || "保存失败", false); return; }
+  if (data.cleared) {
+    showMsg("manageParentPwMsg", "✓ 家长登录已关闭", true);
+    setTimeout(() => location.reload(), 700);
+    return;
+  }
+  showMsg("manageParentPwMsg", "✓ 家长密码已修改", true);
+  document.getElementById("managePpwCurrent").value = "";
+  document.getElementById("managePpwNew").value = "";
+}
+
 function showDashboard(childUsername) {
   document.getElementById("loginCard").classList.add("hidden");
   document.getElementById("setParentPwCard").classList.add("hidden");
-  document.getElementById("forgotParentPwCard").classList.add("hidden");
   document.getElementById("dashboard").classList.remove("hidden");
   document.getElementById("childName").textContent = childUsername || "";
   document.getElementById("subtitle").textContent = "你正在以 " + childUsername + " 的家长身份查看";
@@ -501,6 +473,16 @@ async function savePlan() {
 ["pUsername", "pPassword"].forEach(id => {
   document.getElementById(id).addEventListener("keydown", e => {
     if (e.key === "Enter") doParentLogin();
+  });
+});
+["setPpwUsername", "setPpwChildLogin", "setPpwNew"].forEach(id => {
+  document.getElementById(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") submitSetParentPwHere();
+  });
+});
+["managePpwCurrent", "managePpwNew"].forEach(id => {
+  document.getElementById(id).addEventListener("keydown", e => {
+    if (e.key === "Enter") submitParentPasswordChange(false);
   });
 });
 

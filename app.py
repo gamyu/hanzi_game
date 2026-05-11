@@ -1650,40 +1650,8 @@ def _current_parent_user_id():
 
 @app.route("/api/user/set_parent_password", methods=["POST"])
 def set_parent_password():
-    """Logged-in user sets / changes their parent password. Empty string
-    clears it (disables parent login for this user)."""
-    if "user_id" not in session:
-        return jsonify({"error": "未登录"}), 401
-    data = request.get_json(force=True, silent=True) or {}
-    new_pw = data.get("parent_password") or ""
-    current_pw = data.get("current_password") or ""
-
-    db = get_db()
-    row = db.execute(
-        "SELECT password_hash FROM users WHERE id = %s",
-        (session["user_id"],),
-    ).fetchone()
-    if not row or not verify_password(current_pw, row["password_hash"]):
-        return jsonify({"error": "当前登录密码错误"}), 403
-
-    if new_pw == "":
-        # Clear — disable parent login
-        db.execute(
-            "UPDATE users SET parent_password_hash = '' WHERE id = %s",
-            (session["user_id"],),
-        )
-        db.commit()
-        return jsonify({"ok": True, "cleared": True})
-
-    if len(new_pw) < 4:
-        return jsonify({"error": "家长密码至少需要4个字符"}), 400
-
-    db.execute(
-        "UPDATE users SET parent_password_hash = %s WHERE id = %s",
-        (hash_password(new_pw), session["user_id"]),
-    )
-    db.commit()
-    return jsonify({"ok": True})
+    """Deprecated: parent password setup now belongs on the parent page."""
+    return jsonify({"error": "请在家长登录页面设置或修改家长密码"}), 400
 
 
 @app.route("/api/user/parent_status")
@@ -1750,32 +1718,23 @@ def user_send_reset_code():
     """Send a reset code to the user's recovery email.
 
     For "login" target the user does NOT need to be logged in (this is the
-    forgot-password flow); username + email-on-record must match. For "parent"
-    target the user must be logged in (only the child sets the parent pw).
+    forgot-password flow); username + email-on-record must match.
     """
     if _rate_limited(f"send_reset_code:{request.remote_addr}", 5, 300):
         return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
     data = request.get_json(force=True, silent=True) or {}
     target = data.get("target") or ""
-    if target not in ("login", "parent"):
+    if target != "login":
         return jsonify({"error": "无效请求"}), 400
 
     db = get_db()
-    if target == "parent":
-        if "user_id" not in session:
-            return jsonify({"error": "未登录"}), 401
-        user = db.execute(
-            "SELECT id, username, email FROM users WHERE id = %s",
-            (session["user_id"],),
-        ).fetchone()
-    else:
-        username = (data.get("username") or "").strip()
-        if not username:
-            return jsonify({"error": "请输入用户名"}), 400
-        user = db.execute(
-            "SELECT id, username, email FROM users WHERE username = %s",
-            (username,),
-        ).fetchone()
+    username = (data.get("username") or "").strip()
+    if not username:
+        return jsonify({"error": "请输入用户名"}), 400
+    user = db.execute(
+        "SELECT id, username, email FROM users WHERE username = %s",
+        (username,),
+    ).fetchone()
 
     if not user:
         # Don't reveal whether the username exists.
@@ -1793,14 +1752,14 @@ def user_send_reset_code():
 
 @app.route("/api/user/change_password", methods=["POST"])
 def user_change_password():
-    """Change the user's login or parent password.
+    """Change the user's login password.
 
     Body fields:
-      target: 'login' or 'parent'
+      target: 'login'
       mode:   'current' (verify with current login password) or 'code' (verify with email reset code)
       current_password / code: depending on mode
       username: required only for forgot-login (mode=code, target=login, no session)
-      new_password: the new password (4+ chars; for 'parent' target empty string clears it)
+      new_password: the new login password (4+ chars)
     """
     if _rate_limited(f"change_pw:{request.remote_addr}", 10, 300):
         return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
@@ -1808,7 +1767,7 @@ def user_change_password():
     target = data.get("target") or ""
     mode = data.get("mode") or ""
     new_pw = data.get("new_password") or ""
-    if target not in ("login", "parent") or mode not in ("current", "code"):
+    if target != "login" or mode not in ("current", "code"):
         return jsonify({"error": "无效请求"}), 400
 
     db = get_db()
@@ -1835,29 +1794,18 @@ def user_change_password():
         if not _consume_reset_code(db, user["id"], target, data.get("code") or ""):
             return jsonify({"error": "验证码无效或已过期"}), 403
 
-    if target == "login":
-        if len(new_pw) < 4:
-            return jsonify({"error": "新密码至少需要4个字符"}), 400
-        db.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(new_pw), user["id"]))
-        db.commit()
-        # If the user wasn't logged in (forgot-password flow), establish a
-        # fresh session so they're signed in with the new password.
-        if "user_id" not in session:
-            session.clear()
-            session.permanent = True
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-        return jsonify({"ok": True})
-    else:  # target == "parent"
-        if new_pw == "":
-            db.execute("UPDATE users SET parent_password_hash = '' WHERE id = %s", (user["id"],))
-            db.commit()
-            return jsonify({"ok": True, "cleared": True})
-        if len(new_pw) < 4:
-            return jsonify({"error": "家长密码至少需要4个字符"}), 400
-        db.execute("UPDATE users SET parent_password_hash = %s WHERE id = %s", (hash_password(new_pw), user["id"]))
-        db.commit()
-        return jsonify({"ok": True})
+    if len(new_pw) < 4:
+        return jsonify({"error": "新密码至少需要4个字符"}), 400
+    db.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(new_pw), user["id"]))
+    db.commit()
+    # If the user wasn't logged in (forgot-password flow), establish a
+    # fresh session so they're signed in with the new password.
+    if "user_id" not in session:
+        session.clear()
+        session.permanent = True
+        session["user_id"] = user["id"]
+        session["username"] = user["username"]
+    return jsonify({"ok": True})
 
 
 @app.route("/api/parent/login", methods=["POST"])
@@ -1891,6 +1839,83 @@ def parent_login():
         "child_username": row["username"],
         "csrf_token": _generate_csrf_token(),
     })
+
+
+@app.route("/api/parent/set_password", methods=["POST"])
+def parent_set_password():
+    """Set or reset the parent password from the parent page.
+
+    This verifies the child account's login password, so the parent password
+    setup no longer depends on the child already being logged in elsewhere.
+    """
+    if _rate_limited(f"parent_set_password:{request.remote_addr}", 10, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    username = (data.get("username") or "").strip()
+    child_password = data.get("child_password") or ""
+    new_pw = data.get("new_password") or ""
+
+    if not username or not child_password:
+        return jsonify({"error": "请输入孩子用户名和孩子账号登录密码"}), 400
+    if len(new_pw) < 4:
+        return jsonify({"error": "家长密码至少需要4个字符"}), 400
+
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE username = %s", (username,)).fetchone()
+    if not user or not verify_password(child_password, user["password_hash"]):
+        return jsonify({"error": "孩子用户名或登录密码错误"}), 401
+
+    _migrate_password_if_needed(db, user["id"], child_password, user["password_hash"])
+    db.execute(
+        "UPDATE users SET parent_password_hash = %s WHERE id = %s",
+        (hash_password(new_pw), user["id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True, "child_username": user["username"]})
+
+
+@app.route("/api/parent/change_password", methods=["POST"])
+def parent_change_password():
+    """Change or clear the parent password while logged in as parent."""
+    if _rate_limited(f"parent_change_password:{request.remote_addr}", 10, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
+    uid = _current_parent_user_id()
+    if not uid:
+        return jsonify({"error": "需要家长登录"}), 401
+
+    data = request.get_json(force=True, silent=True) or {}
+    current_pw = data.get("current_parent_password") or ""
+    new_pw = data.get("new_password") or ""
+    if not current_pw:
+        return jsonify({"error": "请输入当前家长密码"}), 400
+
+    db = get_db()
+    user = db.execute(
+        "SELECT id, parent_password_hash FROM users WHERE id = %s",
+        (uid,),
+    ).fetchone()
+    if not user or not user["parent_password_hash"]:
+        return jsonify({"error": "该用户未设置家长密码"}), 400
+    if not verify_password(current_pw, user["parent_password_hash"]):
+        return jsonify({"error": "当前家长密码错误"}), 403
+
+    if new_pw == "":
+        db.execute("UPDATE users SET parent_password_hash = '' WHERE id = %s", (uid,))
+        db.commit()
+        session.clear()
+        return jsonify({"ok": True, "cleared": True})
+
+    if len(new_pw) < 4:
+        return jsonify({"error": "家长密码至少需要4个字符"}), 400
+
+    db.execute(
+        "UPDATE users SET parent_password_hash = %s WHERE id = %s",
+        (hash_password(new_pw), uid),
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/parent/logout", methods=["POST"])

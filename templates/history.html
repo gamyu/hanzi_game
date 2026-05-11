@@ -74,6 +74,54 @@
     font-weight: 600;
   }
 
+  .top-link-card {
+    background: rgba(255,255,255,0.95);
+    border-radius: 16px;
+    width: 100%;
+    max-width: 760px;
+    padding: 12px 16px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.14);
+    margin-bottom: 14px;
+  }
+
+  .wrong-book-link {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #5a67d8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    font-size: 16px;
+    font-weight: 900;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: inherit;
+  }
+
+  .wrong-book-link span {
+    color: #718096;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .wrong-book-panel[hidden] {
+    display: none;
+  }
+
+  .panel-close {
+    border: 0;
+    background: #edf2ff;
+    color: #5a67d8;
+    border-radius: 999px;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;
@@ -112,25 +160,10 @@
     word-break: break-all; line-height: 1.4; max-width: 220px;
   }
 
-  .wrong-preview {
-    margin-top: 5px;
-    display: flex;
-    gap: 6px;
-    justify-content: center;
-    flex-wrap: wrap;
-  }
-
-  .wrong-preview a {
-    color: #2d3748;
-    font-size: 16px;
-    font-weight: 800;
-    text-decoration: none;
-  }
-
   .wrong-book-list {
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
   }
 
   .wrong-group {
@@ -143,59 +176,56 @@
     display: flex;
     justify-content: space-between;
     gap: 12px;
-    padding: 9px 12px;
-    background: #fff5f5;
-    color: #c53030;
+    padding: 8px 10px;
+    background: #f7fafc;
+    color: #4a5568;
     font-size: 14px;
     font-weight: 800;
   }
 
-  .wrong-item {
+  .wrong-chip-list {
     display: grid;
-    grid-template-columns: 52px 1fr;
-    gap: 12px;
-    padding: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    gap: 8px;
+    padding: 10px;
   }
 
-  .wrong-item:not(:last-child) { border-bottom: 1px solid #edf2f7; }
-
-  .wrong-char {
-    width: 52px;
-    height: 52px;
+  .wrong-chip {
+    min-height: 62px;
+    border: 1px solid #edf2f7;
     border-radius: 12px;
     background: #f7fafc;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 4px;
+    padding: 8px;
+    text-decoration: none;
+  }
+
+  .wrong-chip:target,
+  tr:target td {
+    background: #fffaf0;
+    box-shadow: inset 0 0 0 2px #f6ad55;
+  }
+
+  .wrong-word {
     color: #2d3748;
-    font-size: 26px;
+    font-size: 22px;
     font-weight: 900;
+    line-height: 1.1;
+    max-width: 100%;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
 
-  .wrong-main {
-    text-align: left;
-    min-width: 0;
-  }
-
-  .wrong-question {
-    color: #2d3748;
-    font-size: 15px;
-    font-weight: 800;
-    margin-bottom: 5px;
-  }
-
-  .wrong-meta {
-    color: #4a5568;
-    font-size: 13px;
-    line-height: 1.55;
-  }
-
-  .wrong-source {
-    margin-top: 5px;
+  .wrong-tag {
+    color: #718096;
     font-size: 12px;
+    font-weight: 800;
   }
 
-  .wrong-source a,
   .score-link {
     color: #5a67d8;
     font-weight: 700;
@@ -242,11 +272,11 @@
 <h1>历史成绩</h1>
 <p class="subtitle">{{ username }}</p>
 
-<div class="card" id="wrongBookCard">
-  <div class="section-title">错题本 <span id="wrongBookSummary"></span></div>
-  <div class="wrong-book-list" id="wrongBookContent">
-    <div class="empty">加载中...</div>
-  </div>
+<div class="top-link-card">
+  <button class="wrong-book-link" id="wrongBookToggle" type="button">
+    错题本
+    <span id="wrongBookSummary">加载中...</span>
+  </button>
 </div>
 
 <div class="card">
@@ -268,18 +298,40 @@
   </table>
 </div>
 
+<div class="card wrong-book-panel" id="wrongBookPanel" hidden>
+  <div class="section-title">
+    错题本
+    <button class="panel-close" type="button" id="wrongBookClose">收起</button>
+  </div>
+  <div class="wrong-book-list" id="wrongBookContent">
+    <div class="empty">加载中...</div>
+  </div>
+</div>
+
 <button class="back-btn" onclick="window.close()">关闭</button>
 
 <script>
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-const MODE_LABELS = {
-  char_to_pinyin: "看字选拼音",
-  pinyin_to_char: "看拼音选字",
-  listen_to_char: "听音选字",
-  pinyin_typing: "给汉字注音",
-  dictation_handwrite: "看拼音写词语",
-  read_aloud: "看字读音",
-};
+const WRITING_MODES = new Set(["dictation_handwrite"]);
+
+function gradeShortName(grade) {
+  grade = String(grade || "");
+  return grade.length >= 2 ? grade[0] + grade[grade.length - 1] : grade;
+}
+
+function wrongTypeLabel(item) {
+  const source = String(item.source_label || "");
+  if (source.includes("写字") || WRITING_MODES.has(item.mode)) return "写字";
+  return "认字";
+}
+
+function wrongDisplayText(item) {
+  if (item.character) return item.character;
+  if (item.words) return item.words;
+  if (item.correct_answer) return item.correct_answer;
+  if (item.question) return item.question;
+  return "?";
+}
 
 function groupByDate(items) {
   return items.reduce((acc, item) => {
@@ -293,7 +345,7 @@ function groupByDate(items) {
 function renderWrongBook(items) {
   const box = document.getElementById("wrongBookContent");
   const summary = document.getElementById("wrongBookSummary");
-  summary.textContent = items.length ? `${items.length} 题` : "";
+  summary.textContent = items.length ? `${items.length} 题` : "暂无错题";
   if (!items.length) {
     box.innerHTML = '<div class="empty">暂无可追溯错题</div>';
     return;
@@ -307,26 +359,31 @@ function renderWrongBook(items) {
         <span>${esc(date)}</span>
         <span>${rows.length} 题</span>
       </div>
+      <div class="wrong-chip-list">
       ${rows.map(w => {
-        const mode = MODE_LABELS[w.mode] || w.mode || "";
-        const question = w.question || w.character || "";
-        const correct = w.correct_answer || w.pinyin || w.character || "";
-        const user = w.user_answer ? `第一次答成: ${esc(w.user_answer)}` : "第一次答错";
-        const sourceLabel = w.source_label || w.source || "未知来源";
-        return `<div class="wrong-item" id="wrong-${w.id}">
-          <div class="wrong-char">${esc(w.character || question || "?")}</div>
-          <div class="wrong-main">
-            <div class="wrong-question">题目: ${esc(question)}</div>
-            <div class="wrong-meta">
-              正确答案: <strong>${esc(correct)}</strong> · ${user}<br>
-              ${esc(w.grade || "")} · ${esc(mode)}${w.words ? ` · 组词: ${esc(w.words)}` : ""}
-            </div>
-            <div class="wrong-source">来源: <a href="#score-${esc(date)}">${esc(sourceLabel)}</a></div>
-          </div>
-        </div>`;
+        const text = wrongDisplayText(w);
+        const tag = [gradeShortName(w.grade), wrongTypeLabel(w)].filter(Boolean).join(" · ");
+        const sourceLabel = w.source_label || w.source || "";
+        return `<a class="wrong-chip" id="wrong-${w.id}" href="#score-${esc(date)}" title="${esc(sourceLabel)}">
+          <span class="wrong-word">${esc(text)}</span>
+          <span class="wrong-tag">${esc(tag)}</span>
+        </a>`;
       }).join("")}
+      </div>
     </section>`;
   }).join("");
+}
+
+function openWrongBook(target) {
+  const panel = document.getElementById("wrongBookPanel");
+  panel.hidden = false;
+  const scrollTarget = target || panel;
+  requestAnimationFrame(() => scrollTarget.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function closeWrongBook() {
+  document.getElementById("wrongBookPanel").hidden = true;
+  document.getElementById("wrongBookToggle").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 async function loadScores() {
@@ -354,14 +411,11 @@ async function loadScores() {
     const untraced = s.untraced_wrong_count || 0;
     let wrongCell;
     if (wrongCount > 0) {
-      const traceableHtml = wrongItems.length > 0
-        ? `<div class="wrong-preview">${wrongItems.slice(0, 8).map(w => `<a href="#wrong-${w.id}" title="${esc(w.source_label || "")}">${esc(w.character || "?")}</a>`).join("")}</div>`
-        : '';
       const untracedHtml = untraced > 0
         ? `<div class="untraced-note">另有 ${untraced} 题旧记录仅能追溯数量</div>`
         : '';
-      const target = wrongItems.length > 0 ? `#wrong-date-${s.date}` : '#wrongBookCard';
-      wrongCell = `<a class="score-link" href="${target}">${wrongCount}题</a>${traceableHtml}${untracedHtml}`;
+      const target = wrongItems.length > 0 ? `#wrong-date-${s.date}` : '#wrongBookPanel';
+      wrongCell = `<a class="score-link wrong-jump" href="${target}">${wrongCount}题</a>${untracedHtml}`;
     } else {
       wrongCell = '<span style="color:#a0aec0">-</span>';
     }
@@ -378,6 +432,17 @@ async function loadScores() {
     body.appendChild(tr);
   });
 }
+
+document.getElementById("wrongBookToggle").addEventListener("click", () => openWrongBook());
+document.getElementById("wrongBookClose").addEventListener("click", closeWrongBook);
+document.addEventListener("click", event => {
+  const link = event.target.closest(".wrong-jump");
+  if (!link) return;
+  const target = document.querySelector(link.getAttribute("href"));
+  if (!target) return;
+  event.preventDefault();
+  openWrongBook(target);
+});
 
 loadScores();
 </script>
