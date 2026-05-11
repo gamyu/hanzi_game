@@ -404,6 +404,39 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
     return ""
 
 
+def _char_word_examples(char: str, pinyin: str, grade: str) -> list[str]:
+    """Return real example words for a single recognition character."""
+    if not char or len(char) != 1:
+        return []
+    grade_chars = CHARACTERS.get(grade, [])
+    for c in grade_chars:
+        if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
+            return c.get("words", [])
+    for c in grade_chars:
+        if c.get("char") == char and c.get("words"):
+            return c.get("words", [])
+    for chars in CHARACTERS.values():
+        for c in chars:
+            if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
+                return c.get("words", [])
+    for chars in CHARACTERS.values():
+        for c in chars:
+            if c.get("char") == char and c.get("words"):
+                return c.get("words", [])
+    return []
+
+
+def _recognition_word_hint(text: str, pinyin: str, grade: str, existing: str = "") -> str:
+    """Normalize recognition hints so a bare character is never shown as 组词."""
+    text = _string_value(text)
+    existing = _string_value(existing)
+    if len(text) != 1:
+        return ""
+    if existing and existing != text:
+        return existing
+    return "、".join(_char_word_examples(text, pinyin, grade))
+
+
 def find_next_lesson_across_grades(current_grade, current_lesson, content_key):
     """Find the next lesson with content, advancing to next grade if needed.
     Returns (grade, lesson_num) or (None, None) if all exhausted."""
@@ -758,8 +791,8 @@ def _wrong_item_payload(item, fallback_grade="", fallback_mode=""):
         question = pinyin if mode in ("pinyin_to_char", "dictation_handwrite") else character
     if not correct_answer:
         correct_answer = pinyin if mode in ("char_to_pinyin", "pinyin_typing", "read_aloud") else character
-    if not words:
-        words = character
+    if mode != "dictation_handwrite":
+        words = _recognition_word_hint(character, pinyin, grade, words)
 
     return {
         "character": character,
@@ -1499,7 +1532,8 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
     char_list = []
     for e in shizi_entries:
         char_list.append({
-            "char": e["word"], "pinyin": e["pinyin"], "words": [],
+            "char": e["word"], "pinyin": e["pinyin"],
+            "words": _char_word_examples(e["word"], e["pinyin"], grade),
         })
 
     if len(char_list) < 2:
@@ -2479,9 +2513,15 @@ def wrong_answers_api():
         if not data:
             return jsonify({"error": "无效的请求数据"}), 400
         db = get_db()
+        words = data.get("words", "")
+        if data.get("mode") != "dictation_handwrite":
+            words = _recognition_word_hint(
+                data.get("character", ""), data.get("pinyin", ""),
+                data.get("grade", ""), words,
+            )
         db.execute(
             "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",
-            (session["user_id"], data["character"], data["pinyin"], data["words"], data["grade"], data["mode"]),
+            (session["user_id"], data["character"], data["pinyin"], words, data["grade"], data["mode"]),
         )
         db.commit()
         return jsonify({"ok": True})
@@ -2515,6 +2555,12 @@ def wrong_answers_api():
         tuple(params),
     ).fetchall()
     results = [dict(r) for r in rows]
+    for item in results:
+        if item.get("mode") != "dictation_handwrite":
+            item["words"] = _recognition_word_hint(
+                item.get("character", ""), item.get("pinyin", ""),
+                item.get("grade", ""), item.get("words", ""),
+            )
     return jsonify({"wrong_answers": results})
 
 
@@ -2530,7 +2576,8 @@ def review_question():
     words = data.get("words", "")
     grade = data.get("grade", "")
     mode = data.get("mode", "char_to_pinyin")
-    question_mode = "char_to_pinyin" if mode in ("pinyin_typing", "read_aloud") else mode
+    question_mode = "dictation_handwrite" if mode == "dictation_handwrite" else "pinyin_typing"
+    words = _recognition_word_hint(character, pinyin, grade, words)
 
     char_list = CHARACTERS.get(grade, [])
     if len(char_list) < 4:
@@ -2557,17 +2604,16 @@ def review_question():
     else:
         others = [c for c in char_list if c["char"] != character]
 
-    if question_mode == "char_to_pinyin":
-        distractors = _pick_distractors(correct, others, key="pinyin")
-        options = [pinyin] + [d["pinyin"] for d in distractors]
-        random.shuffle(options)
+    if question_mode == "pinyin_typing":
         resp = {
-            "mode": question_mode, "question": character, "options": options,
-            "correct_index": options.index(pinyin),
-            "answer": pinyin, "word_hint": words,
+            "mode": question_mode, "question": character, "answer": pinyin,
+            "word_hint": words, "display_char": character,
+            "display_pinyin": pinyin,
         }
         if character in MULTI_PINYIN:
             cw = _find_context_word(character, pinyin, grade, 0)
+            if not cw and words:
+                cw = words.split("、")[0]
             if cw:
                 resp["context_word"] = cw
         return jsonify(resp)
@@ -2662,7 +2708,14 @@ def mastered_words_api():
            ORDER BY mastered_at DESC, id DESC""",
         (session["user_id"],),
     ).fetchall()
-    return jsonify({"mastered_words": [dict(r) for r in rows]})
+    items = [dict(r) for r in rows]
+    for item in items:
+        if item.get("mode") != "dictation_handwrite":
+            item["words"] = _recognition_word_hint(
+                item.get("character", ""), item.get("pinyin", ""),
+                item.get("grade", ""), item.get("words", ""),
+            )
+    return jsonify({"mastered_words": items})
 
 
 @app.route("/review")
@@ -3335,6 +3388,12 @@ def homework_today():
         (session["user_id"], today),
     ).fetchall()
     review_needed = [dict(r) for r in review_items]
+    for item in review_needed:
+        if item.get("mode") != "dictation_handwrite":
+            item["words"] = _recognition_word_hint(
+                item.get("character", ""), item.get("pinyin", ""),
+                item.get("grade", ""), item.get("words", ""),
+            )
     writing_chars = {r["character"] for r in review_needed if r["mode"] == "dictation_handwrite"}
     review_needed = [r for r in review_needed
                      if r["mode"] == "dictation_handwrite" or r["character"] not in writing_chars]
@@ -3446,7 +3505,7 @@ def homework_start(assignment_id):
                 "mode": "pinyin_typing",
                 "question": entry["word"],
                 "answer": entry["pinyin"],
-                "word_hint": "、".join(word_hint_list),
+                "word_hint": _recognition_word_hint(entry["word"], entry["pinyin"], grade, "、".join(word_hint_list)),
                 "display_char": entry["word"],
                 "display_pinyin": entry["pinyin"],
             }
@@ -3549,10 +3608,7 @@ def homework_preview(assignment_id):
         correct = {"char": word_text, "pinyin": entry["pinyin"], "words": []}
         if len(word_text) == 1:
             # Single char: use CHARACTERS pool for hints + distractors
-            for c in all_chars:
-                if c["char"] == word_text:
-                    correct["words"] = c.get("words", [])
-                    break
+            correct["words"] = _char_word_examples(word_text, entry["pinyin"], grade)
             others = [c for c in all_chars if c["char"] != word_text]
         else:
             # Multi-char 词语: pool = same-length 词语 from this grade, falling
@@ -3687,10 +3743,17 @@ def homework_submit():
         assignment_mode=asn_mode,
     )
     for idx, item in enumerate(wrong_item_list):
+        item_mode = item.get("mode", "")
+        item_words = item.get("words", "")
+        if item_mode != "dictation_handwrite":
+            item_words = _recognition_word_hint(
+                item.get("character", ""), item.get("pinyin", ""),
+                assignment["grade"], item_words,
+            )
         db.execute(
             "INSERT INTO wrong_answers (user_id, character, pinyin, words, grade, mode) VALUES (%s, %s, %s, %s, %s, %s)",
             (session["user_id"], item.get("character", ""), item.get("pinyin", ""),
-             item.get("words", ""), assignment["grade"], item.get("mode", "")),
+             item_words, assignment["grade"], item_mode),
         )
         payload = _wrong_item_payload(item, fallback_grade=assignment["grade"])
         event_key = f"homework:{assignment_id}:{idx}:{payload['character']}:{payload['mode']}"

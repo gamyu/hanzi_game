@@ -1786,6 +1786,10 @@ function advanceOrWait(nextFn, hintEl, delay) {
   }
 }
 
+function feedbackDelay(q, base) {
+  return q && q.word_hint ? Math.max(base || 800, 2200) : (base || 800);
+}
+
 let state = {
   grade: localStorage.getItem("hanzi_grade") || "一年级上",
   mode: localStorage.getItem("hanzi_mode") || "char_to_pinyin",
@@ -5530,7 +5534,7 @@ async function hwPinyinSubmit() {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
-    advanceOrWait(nextHwQuestion, hint, 800);
+    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = true;
@@ -5580,7 +5584,7 @@ function hwQuizAnswer(selected, correctIdx) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
-    advanceOrWait(nextHwQuestion, hint, 800);
+    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     btns[selected].classList.add("wrong");
@@ -5602,7 +5606,7 @@ function hwQuizAnswer(selected, correctIdx) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    advanceOrWait(nextHwQuestion, hint, 1600);
+    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
   }
 }
 
@@ -5888,9 +5892,9 @@ function startHwReview() {
   const questions = [];
   hwReviewItems.forEach(item => {
     if (item.mode === "char_to_pinyin" || item.mode === "pinyin_to_char" || item.mode === "listen_to_char" || item.mode === "pinyin_typing" || item.mode === "read_aloud") {
-      // Recognition review: show char, pick pinyin
+      // Recognition review uses the homework mode: show Hanzi, write pinyin.
       questions.push({
-        mode: "char_to_pinyin",
+        mode: "pinyin_typing",
         question: item.character,
         answer: item.pinyin,
         word_hint: item.words || "",
@@ -5912,27 +5916,6 @@ function startHwReview() {
   });
 
   if (questions.length === 0) { hwBackToToday(); return; }
-
-  // For char_to_pinyin, generate options.
-  // 字数必须匹配: the pool for distractors is filtered so every option has the
-  // same syllable count as the correct answer (single-char ↔ single-char,
-  // 2-syllable ↔ 2-syllable, etc.). Mixing lengths produces obviously wrong
-  // options the student can rule out without knowing the answer.
-  const syllableCount = s => (s || "").trim().split(/\s+/).filter(Boolean).length;
-  const allPinyins = hwReviewItems.map(i => i.pinyin).filter(Boolean);
-  questions.forEach(q => {
-    if (q.mode === "char_to_pinyin") {
-      const targetSylls = syllableCount(q.answer);
-      const opts = new Set([q.answer]);
-      const pool = allPinyins.filter(p => p !== q.answer && syllableCount(p) === targetSylls);
-      while (opts.size < Math.min(4, pool.length + 1) && pool.length > 0) {
-        const idx = Math.floor(Math.random() * pool.length);
-        opts.add(pool.splice(idx, 1)[0]);
-      }
-      q.options = [...opts].sort(() => Math.random() - 0.5);
-      q.correct_index = q.options.indexOf(q.answer);
-    }
-  });
 
   // Shuffle
   for (let i = questions.length - 1; i > 0; i--) {
@@ -6004,11 +5987,22 @@ function showHwReviewQuestion() {
   const hint = document.getElementById("hwQuizHint");
   hint.innerHTML = "";
 
-  if (q.mode === "char_to_pinyin") {
-    area.innerHTML = `<div class="quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${q.question}</div>`;
-    opts.innerHTML = q.options.map((o, i) =>
-      `<button class="hw-quiz-opt-btn" onclick="hwReviewAnswer(${i})">${o}</button>`
-    ).join("");
+  if (q.mode === "pinyin_typing") {
+    const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${q.question}</div>${contextHint}`;
+    opts.style.display = "flex";
+    opts.style.flexDirection = "column";
+    opts.style.alignItems = "center";
+    opts.style.gap = "10px";
+    opts.innerHTML = `
+      <input type="text" class="dictation-input" id="hwReviewPinyinInput" placeholder="输入拼音，如 hua1" autocomplete="off" autocapitalize="off">
+      <button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewPinyin()">确认</button>
+      <div style="font-size:12px;color:#a0aec0">可用数字表示声调: hua2=huá，0=轻声；多字请用空格分开</div>
+    `;
+    setTimeout(() => document.getElementById("hwReviewPinyinInput")?.focus(), 50);
+    document.getElementById("hwReviewPinyinInput")?.addEventListener("keydown", e => {
+      if (e.key === "Enter") submitHwReviewPinyin();
+    });
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
     const cols = charCount >= 3 ? 2 : charCount;
@@ -6029,6 +6023,10 @@ function showHwReviewQuestion() {
           <button class="hw-canvas-clear" onclick="recognizeHwQuiz()">识别</button>
         </div>
       </div>`;
+    opts.style.display = "block";
+    opts.style.flexDirection = "";
+    opts.style.alignItems = "";
+    opts.style.gap = "";
     // Draw grid
     const gridEl = document.getElementById("hwReviewGrid");
     for (let i = 1; i < cols; i++) {
@@ -6068,6 +6066,40 @@ function showHwReviewQuestion() {
   hwReview.answering = true;
 }
 
+function submitHwReviewPinyin() {
+  if (!hwReview.answering) return;
+  const q = hwReview.questions[hwReview.currentIndex];
+  const input = document.getElementById("hwReviewPinyinInput");
+  const hint = document.getElementById("hwQuizHint");
+  const raw = (input?.value || "").trim();
+  if (!raw) {
+    if (input) input.focus();
+    return;
+  }
+  const userInput = raw.split(/\s+/).map(parseNumberTonePinyin).join(" ");
+  const qKey = `${q.question}_${q.mode}`;
+  const isCorrect = normalizePinyin(userInput) === normalizePinyin(q.answer);
+  if (isCorrect) {
+    hwReview.answering = false;
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.correctCount++;
+      hwReview.answeredCorrectly.add(qKey);
+    }
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
+  } else {
+    hwReview.answering = true;
+    hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
+      <br>正确答案: <strong>${q.answer}</strong>
+      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    const skipBtn = document.createElement("button");
+    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
+    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
+    skipBtn.onclick = () => nextHwReviewQuestion();
+    hint.appendChild(skipBtn);
+  }
+}
+
 function hwReviewAnswer(selected) {
   if (!hwReview.answering) return;
   hwReview.answering = false;
@@ -6081,12 +6113,12 @@ function hwReviewAnswer(selected) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
     }
-    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
-    advanceOrWait(nextHwReviewQuestion, hint, 800);
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
   } else {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    advanceOrWait(nextHwReviewQuestion, hint, 1600);
+    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
   }
 }
 
@@ -6153,12 +6185,12 @@ async function finishHwReview() {
   // Only mark items as reviewed if the user actually answered them correctly
   // at least once — 跳过 (skip) counts as wrong and the item stays in 错题集.
   // Review questions are remapped by startHwReview: recognition modes →
-  // char_to_pinyin (keyed by character), dictation_handwrite stays
+  // pinyin_typing (keyed by character), dictation_handwrite stays
   // (keyed by pinyin). Mirror that keying here.
   const reviewedItems = (hwReview.items || []).filter(it => {
     const qKey = it.mode === "dictation_handwrite"
       ? `${it.pinyin}_dictation_handwrite`
-      : `${it.character}_char_to_pinyin`;
+      : `${it.character}_pinyin_typing`;
     return hwReview.answeredCorrectly.has(qKey);
   });
 

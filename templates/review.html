@@ -449,6 +449,110 @@
   .dictation-result.correct { color: #48bb78; }
   .dictation-result.wrong { color: #e53e3e; }
 
+  .review-pinyin-input {
+    font-size: 24px;
+    text-align: center;
+    padding: 10px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 14px;
+    width: 88%;
+    margin: 14px auto 8px;
+    display: block;
+    font-family: inherit;
+  }
+
+  .review-pinyin-input:focus { outline: none; border-color: #5a67d8; }
+
+  .review-input-note {
+    color: #a0aec0;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .review-canvas-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .review-hw-box {
+    position: relative;
+    border: 2px solid #e2e8f0;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fefefe;
+  }
+
+  .review-hw-box canvas {
+    display: block;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .review-grid-lines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .review-grid-line-v,
+  .review-grid-line-h {
+    position: absolute;
+    background: #a0aec0;
+  }
+
+  .review-grid-line-v { top: 0; bottom: 0; width: 2px; }
+  .review-grid-line-h { left: 0; right: 0; height: 2px; }
+
+  .review-grid-dash-v,
+  .review-grid-dash-h {
+    position: absolute;
+  }
+
+  .review-grid-dash-v {
+    width: 0;
+    border-left: 1px dashed #cbd5e0;
+  }
+
+  .review-grid-dash-h {
+    height: 0;
+    border-top: 1px dashed #cbd5e0;
+  }
+
+  .review-canvas-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .review-canvas-buttons button {
+    padding: 8px 18px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    color: #2d3748;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+  }
+
+  .review-canvas-buttons button.active,
+  .review-canvas-buttons button.submit {
+    background: #5a67d8;
+    border-color: #5a67d8;
+    color: #fff;
+  }
+
+  .review-recognized {
+    min-height: 22px;
+    color: #5a67d8;
+    font-weight: 800;
+    font-size: 16px;
+  }
+
   .auto-next-control {
     display: flex; align-items: center; justify-content: center;
     margin: 4px 0 12px; font-size: 13px; color: #4a5568;
@@ -620,6 +724,46 @@ function advanceOrWait(nextFn, hintEl, delay) {
     };
     if (hintEl) hintEl.appendChild(btn);
   }
+}
+
+function feedbackDelay(q, base) {
+  return q && q.word_hint ? Math.max(base || 800, 2200) : (base || 800);
+}
+
+function normalizePinyin(s) {
+  return String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function applyTone(base, tone) {
+  base = String(base || "").replace(/v/g, "ü").toLowerCase();
+  if (!base || tone === 0) return base;
+  const toneMap = {
+    a: ["ā","á","ǎ","à"], e: ["ē","é","ě","è"], i: ["ī","í","ǐ","ì"],
+    o: ["ō","ó","ǒ","ò"], u: ["ū","ú","ǔ","ù"], ü: ["ǖ","ǘ","ǚ","ǜ"],
+  };
+  const order = ["a", "e", "o", "i", "u", "ü"];
+  let target = -1;
+  for (const vowel of order) {
+    target = base.indexOf(vowel);
+    if (target >= 0) break;
+  }
+  if (target < 0) return base;
+  const ch = base[target];
+  return base.slice(0, target) + (toneMap[ch]?.[tone - 1] || ch) + base.slice(target + 1);
+}
+
+function parseNumberTonePinyin(input) {
+  input = String(input || "").trim();
+  if (!input) return "";
+  const last = input[input.length - 1];
+  if (/[0-4]/.test(last)) {
+    return applyTone(input.slice(0, -1), parseInt(last, 10));
+  }
+  return input;
+}
+
+function parsePinyinInput(input) {
+  return String(input || "").trim().split(/\s+/).filter(Boolean).map(parseNumberTonePinyin).join(" ");
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -799,6 +943,295 @@ function renderReviewQuestion(q, item) {
   const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
   const autoNext = autoNextControlHTML();
 
+  if (q.mode === "pinyin_typing") {
+    const contextHint = q.context_word ? `<div class="review-input-note">(${esc(q.context_word)})</div>` : "";
+    box.innerHTML = `
+      ${closeBtn}${progress}${autoNext}${modeTag}
+      <div class="quiz-question">${esc(q.question)}</div>
+      ${contextHint}
+      <input class="review-pinyin-input" id="pinyinInput" placeholder="输入拼音，如 hua1" autocomplete="off" autocapitalize="off">
+      <div class="review-input-note">可用数字表示声调: hua2=huá，0=轻声；多字请用空格分开</div>
+      <button class="dictation-submit" onclick="checkPinyinTyping(this)">确认</button>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+    const pyInput = document.getElementById("pinyinInput");
+    pyInput.focus();
+    pyInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") checkPinyinTyping(document.querySelector(".dictation-submit"));
+    });
+    box._answer = q.answer;
+    box._item = item;
+    box._question = q;
+    return;
+  }
+
+  if (q.mode === "dictation_handwrite") {
+    const charCount = q.answer.length;
+    const cols = charCount >= 3 ? 2 : charCount;
+    const cellSize = getReviewCellSize(cols);
+    const rows = Math.ceil(charCount / cols);
+    const canvasW = cols * cellSize;
+    const canvasH = rows * cellSize;
+    box.innerHTML = `
+      ${closeBtn}${progress}${autoNext}${modeTag}
+      <div class="quiz-question pinyin-display">${esc(q.question)}</div>
+      <div class="review-canvas-wrap">
+        <div class="review-hw-box" style="width:${canvasW}px;height:${canvasH}px">
+          <canvas id="reviewCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
+          <div class="review-grid-lines" id="reviewGrid"></div>
+        </div>
+        <div class="review-recognized" id="reviewRecognized"></div>
+        <div class="review-canvas-buttons">
+          <button onclick="clearReviewCanvas()">清除</button>
+          <button id="reviewEraserBtn" onclick="toggleReviewEraser()">橡皮擦</button>
+          <button onclick="recognizeReviewCanvas()">识别</button>
+          <button class="submit" onclick="checkReviewHandwriting(this)">确认</button>
+        </div>
+      </div>
+      <div class="quiz-hint" id="quizHint"></div>
+    `;
+    drawReviewGrid(cols, rows, cellSize, charCount);
+    initReviewCanvas();
+    box._answer = q.answer;
+    box._item = item;
+    box._question = q;
+    return;
+  }
+
+  renderLegacyChoiceQuestion(q, item);
+}
+
+function getReviewCellSize(cols) {
+  const maxWidth = Math.min(window.innerWidth * 0.76, 380);
+  return Math.floor(Math.min(150, maxWidth / Math.max(cols, 1)));
+}
+
+function drawReviewGrid(cols, rows, cellSize, charCount) {
+  const gridEl = document.getElementById("reviewGrid");
+  for (let i = 1; i < cols; i++) {
+    const line = document.createElement("div");
+    line.className = "review-grid-line-v";
+    line.style.left = `${i * cellSize}px`;
+    gridEl.appendChild(line);
+  }
+  for (let r = 1; r < rows; r++) {
+    const line = document.createElement("div");
+    line.className = "review-grid-line-h";
+    line.style.top = `${r * cellSize}px`;
+    gridEl.appendChild(line);
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (r * cols + c >= charCount) break;
+      const dashV = document.createElement("div");
+      dashV.className = "review-grid-dash-v";
+      dashV.style.left = `${c * cellSize + cellSize / 2}px`;
+      dashV.style.top = `${r * cellSize}px`;
+      dashV.style.height = `${cellSize}px`;
+      gridEl.appendChild(dashV);
+      const dashH = document.createElement("div");
+      dashH.className = "review-grid-dash-h";
+      dashH.style.left = `${c * cellSize}px`;
+      dashH.style.top = `${r * cellSize + cellSize / 2}px`;
+      dashH.style.width = `${cellSize}px`;
+      gridEl.appendChild(dashH);
+    }
+  }
+}
+
+let reviewCanvasStrokes = [];
+let reviewCurrentStroke = null;
+let reviewIsDrawing = false;
+let reviewEraserMode = false;
+let reviewRecognizedText = "";
+
+function initReviewCanvas() {
+  reviewCanvasStrokes = [];
+  reviewCurrentStroke = null;
+  reviewIsDrawing = false;
+  reviewEraserMode = false;
+  reviewRecognizedText = "";
+  const canvas = document.getElementById("reviewCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "#2d3748";
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return [t.clientX - rect.left, t.clientY - rect.top];
+  }
+
+  function startStroke(e) {
+    e.preventDefault();
+    reviewIsDrawing = true;
+    const [x, y] = getPos(e);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    if (reviewEraserMode) {
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.lineWidth = 22;
+      reviewCurrentStroke = null;
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.lineWidth = 5;
+      reviewCurrentStroke = [[x], [y], [Date.now()]];
+    }
+  }
+
+  function moveStroke(e) {
+    if (!reviewIsDrawing) return;
+    e.preventDefault();
+    const [x, y] = getPos(e);
+    if (reviewEraserMode) eraseReviewStrokesAt(x, y, 12);
+    if (reviewCurrentStroke) {
+      reviewCurrentStroke[0].push(x);
+      reviewCurrentStroke[1].push(y);
+      reviewCurrentStroke[2].push(Date.now());
+    }
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  function endStroke(e) {
+    if (!reviewIsDrawing) return;
+    e.preventDefault();
+    reviewIsDrawing = false;
+    ctx.globalCompositeOperation = "source-over";
+    if (reviewCurrentStroke && reviewCurrentStroke[0].length > 0) {
+      reviewCanvasStrokes.push(reviewCurrentStroke);
+    }
+    reviewCurrentStroke = null;
+  }
+
+  canvas.addEventListener("mousedown", startStroke);
+  canvas.addEventListener("mousemove", moveStroke);
+  canvas.addEventListener("mouseup", endStroke);
+  canvas.addEventListener("mouseleave", endStroke);
+  canvas.addEventListener("touchstart", startStroke);
+  canvas.addEventListener("touchmove", moveStroke);
+  canvas.addEventListener("touchend", endStroke);
+}
+
+function eraseReviewStrokesAt(ex, ey, radius) {
+  for (let i = reviewCanvasStrokes.length - 1; i >= 0; i--) {
+    const s = reviewCanvasStrokes[i];
+    for (let j = 0; j < s[0].length; j++) {
+      const dx = s[0][j] - ex;
+      const dy = s[1][j] - ey;
+      if (dx * dx + dy * dy <= radius * radius) {
+        reviewCanvasStrokes.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+function clearReviewCanvas() {
+  const canvas = document.getElementById("reviewCanvas");
+  if (!canvas) return;
+  canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+  reviewCanvasStrokes = [];
+  reviewRecognizedText = "";
+  document.getElementById("reviewRecognized").textContent = "";
+}
+
+function toggleReviewEraser() {
+  reviewEraserMode = !reviewEraserMode;
+  const btn = document.getElementById("reviewEraserBtn");
+  if (btn) {
+    btn.classList.toggle("active", reviewEraserMode);
+    btn.textContent = reviewEraserMode ? "写字" : "橡皮擦";
+  }
+}
+
+async function recognizeReviewCanvas() {
+  const canvas = document.getElementById("reviewCanvas");
+  const recEl = document.getElementById("reviewRecognized");
+  if (!canvas || reviewCanvasStrokes.length === 0) return;
+  recEl.textContent = "识别中...";
+  try {
+    const res = await fetch("/api/handwriting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ strokes: reviewCanvasStrokes, width: canvas.width, height: canvas.height }),
+    });
+    const data = await res.json();
+    if (data[0] === "SUCCESS") {
+      reviewRecognizedText = (data[1][0][1] || [])[0] || "";
+      recEl.textContent = reviewRecognizedText ? `识别结果: ${reviewRecognizedText}` : "未能识别，请重写";
+    } else {
+      recEl.textContent = "识别失败，请重试";
+    }
+  } catch(e) {
+    recEl.textContent = "识别失败，请重试";
+  }
+}
+
+async function checkReviewHandwriting(btn) {
+  const box = document.getElementById("quizBox");
+  const q = box._question || {};
+  const answer = box._answer;
+  const item = box._item;
+  const hint = document.getElementById("quizHint");
+  if (!reviewRecognizedText && reviewCanvasStrokes.length > 0) {
+    await recognizeReviewCanvas();
+  }
+  if (!reviewRecognizedText) {
+    document.getElementById("reviewRecognized").textContent = "请先写字";
+    return;
+  }
+  btn.disabled = true;
+  if (reviewRecognizedText === answer) {
+    reviewCorrect++;
+    hint.innerHTML = `<div class="dictation-result correct">${answer} ✓</div>`;
+    await markReviewed(item);
+  } else {
+    hint.innerHTML = `<div class="dictation-result wrong">${reviewRecognizedText} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>`;
+  }
+
+  advanceOrWait(() => {
+    reviewIndex++;
+    loadReviewQuestion();
+  }, hint, feedbackDelay(q, 1500));
+}
+
+async function checkPinyinTyping(btn) {
+  const box = document.getElementById("quizBox");
+  const q = box._question || {};
+  const input = document.getElementById("pinyinInput");
+  const answer = box._answer;
+  const item = box._item;
+  const hint = document.getElementById("quizHint");
+  const userAnswer = parsePinyinInput(input.value);
+  if (!userAnswer) return;
+  btn.disabled = true;
+  input.disabled = true;
+
+  if (normalizePinyin(userAnswer) === normalizePinyin(answer)) {
+    reviewCorrect++;
+    hint.innerHTML = `<div class="dictation-result correct">${answer} ✓</div>${q.word_hint ? `<div>组词: ${esc(q.word_hint)}</div>` : ""}`;
+    await markReviewed(item);
+  } else {
+    hint.innerHTML = `<div class="dictation-result wrong">${esc(userAnswer)} ✗</div><div style="margin-top:8px;font-size:20px;font-weight:700;color:#48bb78">正确答案: ${answer}</div>${q.word_hint ? `<div style="margin-top:6px">组词: ${esc(q.word_hint)}</div>` : ""}`;
+  }
+
+  advanceOrWait(() => {
+    reviewIndex++;
+    loadReviewQuestion();
+  }, hint, feedbackDelay(q, 1500));
+}
+
+function renderLegacyChoiceQuestion(q, item) {
+  const box = document.getElementById("quizBox");
+  const progress = `<div class="quiz-progress">第 ${reviewIndex + 1} / ${reviewTotal} 题</div>`;
+  const modeTag = `<div class="quiz-mode-tag">${MODE_LABELS[q.mode] || q.mode}</div>`;
+  const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
+  const autoNext = autoNextControlHTML();
+
   if (q.mode === "dictation_handwrite") {
     box.innerHTML = `
       ${closeBtn}${progress}${autoNext}${modeTag}
@@ -882,7 +1315,7 @@ async function handleReviewAnswer(btn, idx, q, item) {
   advanceOrWait(() => {
     reviewIndex++;
     loadReviewQuestion();
-  }, hint, 1200);
+  }, hint, feedbackDelay(q, 1200));
 }
 
 async function checkDictation(btn) {
@@ -908,7 +1341,7 @@ async function checkDictation(btn) {
   advanceOrWait(() => {
     reviewIndex++;
     loadReviewQuestion();
-  }, hint, 1500);
+  }, hint, feedbackDelay(box._question || {}, 1500));
 }
 
 function showReviewResult() {
