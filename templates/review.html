@@ -122,6 +122,27 @@
     flex: 1 1 180px;
   }
 
+  .filter-action {
+    flex: 0 0 auto;
+  }
+
+  .filter-start-btn {
+    border: 0;
+    border-radius: 12px;
+    background: #c53030;
+    color: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 900;
+    min-height: 42px;
+    padding: 10px 18px;
+    white-space: nowrap;
+  }
+
+  .filter-start-btn:hover {
+    background: #9b2c2c;
+  }
+
   .filter-field label {
     display: block;
     color: #4a5568;
@@ -494,6 +515,9 @@
         <option value="2">已复习过两次</option>
       </select>
     </div>
+    <div class="filter-action">
+      <button class="filter-start-btn" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习当前范围</button>
+    </div>
   </div>
 </div>
 
@@ -536,7 +560,6 @@
 </div>
 
 <div class="btn-row" id="btnRow">
-  <button class="action-btn primary" id="startReviewBtn" style="display:none" onclick="startReview()">开始复习当前范围</button>
   <button class="action-btn" onclick="window.close()">关闭</button>
 </div>
 

@@ -1402,9 +1402,9 @@
 <div id="homeworkView" style="display:none; width:100%; flex-direction:column; align-items:center;">
   <button class="view-toggle-btn" onclick="switchToGameView()">自由学习</button>
 
-  <!-- Review Section (blocks new homework until completed) -->
+  <!-- Temporary wrong-book section (blocks new homework until completed) -->
   <div class="hw-section" id="hwReviewSection" style="display:none">
-    <div class="hw-section-title">复习错题</div>
+    <div class="hw-section-title">临时错题本</div>
     <div id="hwReviewContent"></div>
   </div>
 
@@ -1414,12 +1414,6 @@
     <div id="hwTodayContent">
       <div style="text-align:center;color:#a0aec0;padding:20px">加载中...</div>
     </div>
-  </div>
-
-  <!-- Wrong Answer Review (always accessible) -->
-  <div class="hw-section" id="hwWrongReviewSection" style="display:none">
-    <div class="hw-section-title">错题本</div>
-    <div id="hwWrongReviewContent"></div>
   </div>
 
   <!-- Homework Quiz Section -->
@@ -1930,7 +1924,7 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span style="cursor:pointer" onclick="switchToHomeworkView()">${state.user}</span>
-      <button class="user-btn" onclick="location.href='/review'">复习</button>
+      <a class="user-btn" href="/review" target="_blank" rel="noopener">复习</a>
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
@@ -4738,10 +4732,8 @@ function switchToHomeworkView() {
   document.getElementById("hwQuizSection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwReviewSection").style.display = "none";
-  document.getElementById("hwWrongReviewSection").style.display = "none";
   loadHomeworkToday();
   loadHomeworkProgress();
-  loadWrongReviewSection();
 }
 
 async function switchToGameView() {
@@ -4768,11 +4760,11 @@ async function loadHomeworkToday() {
   if (hwReviewItems.length > 0) {
     reviewSection.style.display = "";
     reviewContent.innerHTML = `
-      <div class="hw-review-hint">完成错题复习后才能开始今日作业</div>
+      <div class="hw-review-hint">先订正上次作业错题，完成后才能开始今日作业</div>
       <div class="hw-review-card" onclick="startHwReview()">
         <div class="icon">🔄</div>
-        <div class="label">复习昨日错题</div>
-        <div class="info">${hwReviewItems.length}道错题需要复习</div>
+        <div class="label">订正临时错题本</div>
+        <div class="info">${hwReviewItems.length}道上次作业错题</div>
       </div>`;
     document.getElementById("hwTodaySection").style.display = "none";
     return;
@@ -5883,38 +5875,12 @@ function hwBackToToday() {
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "none";
   document.getElementById("hwReviewSection").style.display = "none";
-  document.getElementById("hwWrongReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "";
   loadHomeworkToday();
   loadHomeworkProgress();
-  loadWrongReviewSection();
 }
 
 // --- Review Quiz ---
-// --- Wrong answer review section (always accessible from home) ---
-async function loadWrongReviewSection() {
-  const section = document.getElementById("hwWrongReviewSection");
-  const content = document.getElementById("hwWrongReviewContent");
-  try {
-    const res = await fetch("/api/wrong_answers");
-    const data = await res.json();
-    const items = data.wrong_answers || [];
-    if (items.length === 0) {
-      section.style.display = "none";
-      return;
-    }
-    section.style.display = "";
-    content.innerHTML = `
-      <a class="hw-review-card" href="/review">
-        <div class="icon">📝</div>
-        <div class="label">复习错题</div>
-        <div class="info">共 ${items.length} 道错题</div>
-      </a>`;
-  } catch (e) {
-    section.style.display = "none";
-  }
-}
-
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };
 
 function startHwReview() {
@@ -6009,7 +5975,6 @@ function startHwReview() {
   // Show quiz section, hide everything else
   document.getElementById("hwReviewSection").style.display = "none";
   document.getElementById("hwTodaySection").style.display = "none";
-  document.getElementById("hwWrongReviewSection").style.display = "none";
   document.getElementById("hwProgressSection").style.display = "none";
   document.getElementById("hwHistorySection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
