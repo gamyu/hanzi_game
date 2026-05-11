@@ -2780,7 +2780,9 @@ async function loadAdminHomework() {
       const wrtGradeShort = u.writing_grade ? (u.writing_grade[0] + u.writing_grade[u.writing_grade.length-1]) : u.grade_short;
       const isReview = u.mode === "book_review";
       const unit = isReview ? "天" : "课";
-      const modeTag = isReview ? ' <span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-right:4px">分册复习</span>' : '';
+      const modeTag = isReview
+        ? ' <span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-right:4px">分册复习</span>'
+        : ' <span style="font-size:11px;padding:1px 5px;background:#f0fff4;color:#2f855a;border-radius:3px;margin-right:4px">按课作业</span>';
       html += `<div class="admin-item-row" style="flex-wrap:wrap;gap:4px">
         <span>${modeTag}<strong>${u.username}</strong> — 认:${recGradeShort}第${u.recognition_lesson}/${u.rec_total_lessons||u.total_lessons}${unit} 写:${wrtGradeShort}第${u.writing_lesson}/${u.wrt_total_lessons||u.total_lessons}${unit}</span>
         <span style="font-size:12px;color:#718096">认${recPct}% 写${wrtPct}%</span>
@@ -2904,7 +2906,7 @@ async function saveHomeworkPlan() {
       msg.textContent = data.error;
       msg.style.color = "#e53e3e";
     } else {
-      msg.textContent = "已保存";
+      msg.textContent = "已保存，可与另一种作业模式同时生效";
       msg.style.color = "#38a169";
       await loadAdminHomework();
     }
@@ -4777,7 +4779,8 @@ async function loadHomeworkToday() {
     document.getElementById("hwTodaySection").style.display = "";
   }
 
-  if (!data.plan) {
+  const plans = data.plans || (data.plan ? [data.plan] : []);
+  if (!plans.length) {
     content.innerHTML = `<div class="hw-no-plan">
       <p style="font-size:48px">📝</p>
       <p>尚未布置作业计划</p>
@@ -4786,7 +4789,6 @@ async function loadHomeworkToday() {
     return;
   }
 
-  const plan = data.plan;
   const assignments = data.assignments;
 
   if (!assignments || assignments.length === 0) {
@@ -4794,26 +4796,43 @@ async function loadHomeworkToday() {
     return;
   }
 
-  // Group by type, show one card per type: pending one if exists, otherwise last completed
-  const byType = {};
+  // Group by mode + type, so 按课作业 and 分册复习 can coexist.
+  const bySlot = {};
   assignments.forEach(a => {
-    if (!byType[a.type]) byType[a.type] = [];
-    byType[a.type].push(a);
+    const slot = `${a.mode || "by_lesson"}:${a.type}`;
+    if (!bySlot[slot]) bySlot[slot] = [];
+    bySlot[slot].push(a);
   });
 
   let html = '';
-  if (plan.mode === "book_review") {
+  const hasByLesson = plans.some(p => (p.mode || "by_lesson") === "by_lesson");
+  const hasBookReview = plans.some(p => p.mode === "book_review");
+  if (hasByLesson && hasBookReview) {
+    html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#f0fff4,#ebf8ff);border:1px solid #9ae6b4;border-radius:10px;color:#276749;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span style="font-size:18px">📝</span>
+      <span>今日同时有「按课作业」和「分册复习」</span>
+    </div>`;
+  } else if (hasBookReview) {
     html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#ebf4ff,#f0f5ff);border:1px solid #bee3f8;border-radius:10px;color:#2c5282;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
       <span style="font-size:18px">📚</span>
-      <span>当前为「分册复习」模式 · 每册分 7 天复习 · ${plan.grade_short || ''}</span>
+      <span>当前有「分册复习」作业 · 每册分 7 天复习</span>
     </div>`;
   }
   html += '<div class="hw-cards">';
-  for (const type of ["recognition", "writing"]) {
-    const group = byType[type];
+  const slotOrder = Object.keys(bySlot).sort((a, b) => {
+    const [modeA, typeA] = a.split(":");
+    const [modeB, typeB] = b.split(":");
+    const modeRank = { by_lesson: 0, book_review: 1 };
+    const typeRank = { recognition: 0, writing: 1 };
+    return (modeRank[modeA] ?? 9) - (modeRank[modeB] ?? 9)
+      || (typeRank[typeA] ?? 9) - (typeRank[typeB] ?? 9);
+  });
+  for (const slot of slotOrder) {
+    const group = bySlot[slot];
     if (!group) continue;
     const pending = group.find(a => a.status === "pending");
     const a = pending || group[group.length - 1];
+    const type = a.type;
     const isCompleted = a.status === "completed";
     const icon = type === "recognition" ? "📖" : "✍️";
     const typeLabel = HW_TYPE_LABELS[type];
@@ -4823,7 +4842,9 @@ async function loadHomeworkToday() {
     const secs = a.time_spent % 60;
     const completedCount = group.filter(x => x.status === "completed").length;
     const unit = a.mode === "book_review" ? "天" : "课";
-    const reviewBadge = a.mode === "book_review" ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>' : '';
+    const reviewBadge = a.mode === "book_review"
+      ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>'
+      : '<span style="font-size:11px;padding:1px 5px;background:#f0fff4;color:#2f855a;border-radius:3px;margin-left:6px">按课作业</span>';
 
     html += `<div class="hw-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startHwQuiz(${a.id})"`}>
       <div class="hw-card-icon">${icon}</div>
@@ -4842,7 +4863,7 @@ async function loadHomeworkToday() {
           savedInfo = sp.currentIndex ? ` (已做${sp.currentIndex}题)` : '';
         } catch(e) {}
       }
-      const continueLabel = a.mode === "book_review" ? '继续下一天' : '继续下一课';
+      const continueLabel = a.mode === "book_review" ? '继续分册复习' : '继续下一课';
       html += `<div class="hw-card-status pending">${hasSavedProgress ? '▶ 继续' + savedInfo : (completedCount > 0 ? continueLabel : '待完成')}</div>`;
     }
     // Preview button for recognition homework

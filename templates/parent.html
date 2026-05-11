@@ -373,14 +373,17 @@ async function loadOverview() {
   const coinGame = (coin_by_src.game && coin_by_src.game.earned) || 0;
   const coinHw   = (coin_by_src.homework && coin_by_src.homework.earned) || 0;
   const coinSpent = (coin_by_src.shop && coin_by_src.shop.spent) || 0;
-  const planStr = data.plan
-    ? `${data.plan.grade_short || ""} ${data.plan.mode === "book_review" ? "分册复习" : "按课布置"}`
+  const plans = data.plans || (data.plan ? [data.plan] : []);
+  const planLabel = p => `${p.grade_short || ""}${p.mode === "book_review" ? "分册复习" : "按课"}`;
+  const progressLabel = p => {
+    const unit = p.mode === "book_review" ? "天" : "课";
+    return `${p.mode === "book_review" ? "分册" : "按课"} 认${p.recognition_lesson - 1}/${p.rec_total_lessons}${unit} 写${p.writing_lesson - 1}/${p.wrt_total_lessons}${unit}`;
+  };
+  const planStr = plans.length
+    ? plans.map(planLabel).join(" / ")
     : "未布置";
-  const recProgress = data.plan
-    ? `认 ${data.plan.recognition_lesson - 1}/${data.plan.rec_total_lessons}${data.plan.mode === "book_review" ? "天" : "课"}`
-    : "-";
-  const wrtProgress = data.plan
-    ? `写 ${data.plan.writing_lesson - 1}/${data.plan.wrt_total_lessons}${data.plan.mode === "book_review" ? "天" : "课"}`
+  const progressStr = plans.length
+    ? plans.map(progressLabel).join(" / ")
     : "-";
 
   document.getElementById("statGrid").innerHTML = `
@@ -390,15 +393,16 @@ async function loadOverview() {
     <div class="stat"><div class="label">错题数</div><div class="val">${data.wrong_count}</div></div>
     <div class="stat"><div class="label">已掌握</div><div class="val">${data.mastered_count}</div></div>
     <div class="stat"><div class="label">作业计划</div><div class="val" style="font-size:14px">${planStr}</div></div>
-    <div class="stat"><div class="label">进度</div><div class="val" style="font-size:14px">${recProgress} · ${wrtProgress}</div></div>
+    <div class="stat"><div class="label">进度</div><div class="val" style="font-size:14px">${progressStr}</div></div>
   `;
 
   // Pre-fill plan form from current plan
-  if (data.plan) {
-    document.getElementById("planMode").value = data.plan.mode || "by_lesson";
-    document.getElementById("planGrade").value = data.plan.grade || (GRADES[0] || "");
-    document.getElementById("planRec").value = data.plan.recognition_lesson || 1;
-    document.getElementById("planWrt").value = data.plan.writing_lesson || 1;
+  const formPlan = plans.find(p => (p.mode || "by_lesson") === document.getElementById("planMode").value) || data.plan;
+  if (formPlan) {
+    document.getElementById("planMode").value = formPlan.mode || "by_lesson";
+    document.getElementById("planGrade").value = formPlan.grade || (GRADES[0] || "");
+    document.getElementById("planRec").value = formPlan.recognition_lesson || 1;
+    document.getElementById("planWrt").value = formPlan.writing_lesson || 1;
   }
   onPlanModeChange();
 

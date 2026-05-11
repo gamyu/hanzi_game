@@ -422,7 +422,8 @@ async function loadToday() {
 
   const content = document.getElementById("todayContent");
 
-  if (!data.plan) {
+  const plans = data.plans || (data.plan ? [data.plan] : []);
+  if (!plans.length) {
     content.innerHTML = `<div class="no-plan">
       <p style="font-size:48px">📝</p>
       <p>尚未布置作业计划</p>
@@ -431,7 +432,6 @@ async function loadToday() {
     return;
   }
 
-  const plan = data.plan;
   const assignments = data.assignments;
 
   if (!assignments || assignments.length === 0) {
@@ -442,10 +442,17 @@ async function loadToday() {
   }
 
   let html = '';
-  if (plan.mode === "book_review") {
+  const hasByLesson = plans.some(p => (p.mode || "by_lesson") === "by_lesson");
+  const hasBookReview = plans.some(p => p.mode === "book_review");
+  if (hasByLesson && hasBookReview) {
+    html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#f0fff4,#ebf8ff);border:1px solid #9ae6b4;border-radius:10px;color:#276749;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span style="font-size:18px">📝</span>
+      <span>今日同时有「按课作业」和「分册复习」</span>
+    </div>`;
+  } else if (hasBookReview) {
     html += `<div style="margin-bottom:12px;padding:10px 14px;background:linear-gradient(90deg,#ebf4ff,#f0f5ff);border:1px solid #bee3f8;border-radius:10px;color:#2c5282;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px">
       <span style="font-size:18px">📚</span>
-      <span>当前为「分册复习」模式 · 每册分 7 天复习 · ${plan.grade_short || ''}</span>
+      <span>当前有「分册复习」作业 · 每册分 7 天复习</span>
     </div>`;
   }
   html += '<div class="assignment-cards">';
@@ -458,11 +465,13 @@ async function loadToday() {
     const secs = a.time_spent % 60;
 
     const unit = a.mode === "book_review" ? "天" : "课";
-    const reviewBadge = a.mode === "book_review" ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>' : '';
+    const reviewBadge = a.mode === "book_review"
+      ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>'
+      : '<span style="font-size:11px;padding:1px 5px;background:#f0fff4;color:#2f855a;border-radius:3px;margin-left:6px">按课作业</span>';
     html += `<div class="assignment-card ${isCompleted ? 'completed' : ''}" ${isCompleted ? '' : `onclick="startQuiz(${a.id})"`}>
       <div class="card-icon">${icon}</div>
       <div class="card-type">${typeLabel}作业${reviewBadge}</div>
-      <div class="card-info">第${a.lesson_num}${unit} · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : plan.grade_short}</div>`;
+      <div class="card-info">第${a.lesson_num}${unit} · ${a.grade ? (a.grade[0] + a.grade[a.grade.length-1]) : ""}</div>`;
 
     if (isCompleted) {
       html += `<div class="card-status completed">✓ 已完成</div>

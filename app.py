@@ -1648,6 +1648,56 @@ def _current_parent_user_id():
     return session.get("parent_user_id")
 
 
+def _active_homework_plans(db, user_id):
+    """Return at most one active homework plan per mode for a user."""
+    rows = db.execute(
+        """SELECT * FROM homework_plans
+           WHERE user_id = %s AND active = 1
+           ORDER BY CASE mode
+                      WHEN 'by_lesson' THEN 0
+                      WHEN 'book_review' THEN 1
+                      ELSE 2
+                    END,
+                    id DESC""",
+        (user_id,),
+    ).fetchall()
+    plans = []
+    seen_modes = set()
+    for row in rows:
+        mode = row["mode"] if "mode" in row.keys() else "by_lesson"
+        if mode in seen_modes:
+            continue
+        seen_modes.add(mode)
+        plans.append(row)
+    return plans
+
+
+def _homework_plan_info(plan):
+    rec_grade = plan["recognition_grade"] or plan["grade"]
+    wrt_grade = plan["writing_grade"] or plan["grade"]
+    p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+    if p_mode == "book_review":
+        rec_total = BOOK_REVIEW_DAYS
+        wrt_total = BOOK_REVIEW_DAYS
+    else:
+        rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
+        wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
+    return {
+        "id": plan["id"],
+        "grade": plan["grade"],
+        "grade_short": grade_short_name(plan["grade"]),
+        "recognition_grade": rec_grade,
+        "writing_grade": wrt_grade,
+        "recognition_lesson": plan["recognition_lesson"],
+        "writing_lesson": plan["writing_lesson"],
+        "rec_total_lessons": rec_total,
+        "wrt_total_lessons": wrt_total,
+        "total_lessons": max(rec_total, wrt_total),
+        "mode": p_mode,
+        "active": plan["active"] if "active" in plan.keys() else 1,
+    }
+
+
 @app.route("/api/user/set_parent_password", methods=["POST"])
 def set_parent_password():
     """Deprecated: parent password setup now belongs on the parent page."""
@@ -1949,24 +1999,8 @@ def parent_overview():
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
-    plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (uid,),
-    ).fetchone()
-    plan_dict = dict(plan) if plan else None
-    if plan_dict:
-        rec_grade = plan_dict.get("recognition_grade") or plan_dict.get("grade")
-        wrt_grade = plan_dict.get("writing_grade") or plan_dict.get("grade")
-        p_mode = plan_dict.get("mode", "by_lesson")
-        if p_mode == "book_review":
-            rec_total = BOOK_REVIEW_DAYS
-            wrt_total = BOOK_REVIEW_DAYS
-        else:
-            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
-        plan_dict["rec_total_lessons"] = rec_total
-        plan_dict["wrt_total_lessons"] = wrt_total
-        plan_dict["grade_short"] = grade_short_name(plan_dict["grade"])
+    plan_infos = [_homework_plan_info(p) for p in _active_homework_plans(db, uid)]
+    plan_dict = plan_infos[0] if plan_infos else None
 
     today = date.today().isoformat()
     today_assignments = db.execute(
@@ -1974,7 +2008,12 @@ def parent_overview():
                   total_questions, correct_answers, time_spent
            FROM daily_assignments
            WHERE user_id = %s AND date = %s
-           ORDER BY type""",
+           ORDER BY CASE mode
+                      WHEN 'by_lesson' THEN 0
+                      WHEN 'book_review' THEN 1
+                      ELSE 2
+                    END,
+                    type, id""",
         (uid, today),
     ).fetchall()
 
@@ -1983,7 +2022,13 @@ def parent_overview():
                   total_questions, correct_answers, time_spent
            FROM daily_assignments
            WHERE user_id = %s AND date >= %s
-           ORDER BY date DESC, type""",
+           ORDER BY date DESC,
+                    CASE mode
+                      WHEN 'by_lesson' THEN 0
+                      WHEN 'book_review' THEN 1
+                      ELSE 2
+                    END,
+                    type, id""",
         (uid, (date.today() - timedelta(days=14)).isoformat()),
     ).fetchall()
 
@@ -2007,6 +2052,7 @@ def parent_overview():
     return jsonify({
         "user": dict(user),
         "plan": plan_dict,
+        "plans": plan_infos,
         "today_assignments": [dict(r) for r in today_assignments],
         "recent_assignments": [dict(r) for r in recent_assignments],
         "wrong_count": wrong_count_row["cnt"] if wrong_count_row else 0,
@@ -2041,8 +2087,9 @@ def parent_set_plan():
             return jsonify({"error": f"分册复习天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
 
     db = get_db()
-    # Deactivate existing plans
-    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s", (uid,))
+    # Keep one active plan per mode, so by-lesson homework and book review
+    # can coexist without overwriting each other.
+    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s AND mode = %s", (uid, mode))
     # Insert new plan
     db.execute(
         """INSERT INTO homework_plans
@@ -2054,8 +2101,8 @@ def parent_set_plan():
     # Clear today's pending assignments so new plan takes effect immediately
     today = date.today().isoformat()
     db.execute(
-        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending'",
-        (uid, today),
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending' AND mode = %s",
+        (uid, today, mode),
     )
     db.commit()
     return jsonify({"ok": True})
@@ -2930,10 +2977,10 @@ def _check_coin_eligible(db, user_id, mode, game_grade):
 
     is_writing = mode == "dictation_handwrite"
 
-    plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (user_id,),
-    ).fetchone()
+    plans = _active_homework_plans(db, user_id)
+    plan = next((p for p in plans if (p["mode"] if "mode" in p.keys() else "by_lesson") == "by_lesson"), None)
+    if not plan and plans:
+        plan = plans[0]
     if not plan:
         return True  # no homework plan, allow freely
 
@@ -3103,14 +3150,17 @@ def _get_or_create_today_assignments(db, user_id):
     """Get or auto-create today's assignments for a user."""
     today = date.today().isoformat()
 
-    # Find active homework plan
-    plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (user_id,),
-    ).fetchone()
-    if not plan:
+    plans = _active_homework_plans(db, user_id)
+    if not plans:
         existing = db.execute(
-            "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
+            """SELECT * FROM daily_assignments
+               WHERE user_id = %s AND date = %s
+               ORDER BY CASE mode
+                          WHEN 'by_lesson' THEN 0
+                          WHEN 'book_review' THEN 1
+                          ELSE 2
+                        END,
+                        type, id""",
             (user_id, today),
         ).fetchall()
         return [dict(r) for r in existing]
@@ -3131,31 +3181,35 @@ def _get_or_create_today_assignments(db, user_id):
         (user_id, today),
     ).fetchall()
 
-    plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
-    has_pending = any(r["status"] == "pending" for r in existing)
+    for plan in plans:
+        plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+        plan_existing = [
+            r for r in existing
+            if (r["mode"] if "mode" in r.keys() else "by_lesson") == plan_mode
+        ]
+        has_pending = any(r["status"] == "pending" for r in plan_existing)
 
-    if plan_mode == "book_review":
-        # Ensure both recognition and writing assignments exist for today.
-        # One type might be missing if the other was carried forward from
-        # a prior day while this type was already completed (and stayed
-        # on its old date).
-        existing_types = {r["type"] for r in existing}
-        changed = False
-        if "recognition" not in existing_types:
-            db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'book_review')",
-                (user_id, today, plan["grade"], plan["recognition_lesson"]),
-            )
-            changed = True
-        if "writing" not in existing_types:
-            db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'book_review')",
-                (user_id, today, plan["grade"], plan["writing_lesson"]),
-            )
-            changed = True
-        if changed:
-            db.commit()
-    elif not existing:
+        if plan_mode == "book_review":
+            # Ensure both recognition and writing review assignments exist.
+            existing_types = {r["type"] for r in plan_existing}
+            changed = False
+            if "recognition" not in existing_types:
+                db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'book_review')",
+                    (user_id, today, plan["grade"], plan["recognition_lesson"]),
+                )
+                changed = True
+            if "writing" not in existing_types:
+                db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'book_review')",
+                    (user_id, today, plan["grade"], plan["writing_lesson"]),
+                )
+                changed = True
+            if changed:
+                db.commit()
+            continue
+
+        if not plan_existing:
             # First visit today: create initial assignments using cross-grade search
             rec_base_grade = plan["recognition_grade"] or plan["grade"]
             wrt_base_grade = plan["writing_grade"] or plan["grade"]
@@ -3165,46 +3219,53 @@ def _get_or_create_today_assignments(db, user_id):
                 wrt_base_grade, plan["writing_lesson"], "词语")
             if rec_grade and rec_ln:
                 db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'recognition', %s, %s)",
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'by_lesson')",
                     (user_id, today, rec_grade, rec_ln),
                 )
             if wrt_grade and wrt_ln:
                 db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, 'writing', %s, %s)",
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'by_lesson')",
                     (user_id, today, wrt_grade, wrt_ln),
                 )
             db.commit()
-    elif not has_pending and plan_mode != "book_review":
-        # No pending work today — either (a) everything's done and we should
-        # advance to the next lesson, or (b) one type was carried over and
-        # completed but the other type has nothing for today yet. Both cases
-        # call for creating a fresh assignment from the plan's current
-        # lesson pointer for any type that either has no rows today at all
-        # or only has completed rows.
-        changed = False
-        for hw_type, content_key in [("recognition", "识字"), ("writing", "词语")]:
-            type_assignments = [dict(r) for r in existing if r["type"] == hw_type]
-            if any(a["status"] == "pending" for a in type_assignments):
-                continue  # should not happen — has_pending was False above
-            plan_lesson = plan["recognition_lesson"] if hw_type == "recognition" else plan["writing_lesson"]
-            base_grade = (plan["recognition_grade"] if hw_type == "recognition" else plan["writing_grade"]) or plan["grade"]
-            next_grade, next_ln = find_next_lesson_across_grades(
-                base_grade, plan_lesson, content_key)
-            if not next_grade:
-                continue
-            dup = any(a["grade"] == next_grade and a["lesson_num"] == next_ln for a in type_assignments)
-            if dup:
-                continue
-            db.execute(
-                "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s)",
-                (user_id, today, hw_type, next_grade, next_ln),
-            )
-            changed = True
-        if changed:
-            db.commit()
+        elif not has_pending:
+            # No pending work today — either (a) everything's done and we should
+            # advance to the next lesson, or (b) one type was carried over and
+            # completed but the other type has nothing for today yet. Both cases
+            # call for creating a fresh assignment from the plan's current
+            # lesson pointer for any type that either has no rows today at all
+            # or only has completed rows.
+            changed = False
+            for hw_type, content_key in [("recognition", "识字"), ("writing", "词语")]:
+                type_assignments = [dict(r) for r in plan_existing if r["type"] == hw_type]
+                if any(a["status"] == "pending" for a in type_assignments):
+                    continue  # should not happen — has_pending was False above
+                plan_lesson = plan["recognition_lesson"] if hw_type == "recognition" else plan["writing_lesson"]
+                base_grade = (plan["recognition_grade"] if hw_type == "recognition" else plan["writing_grade"]) or plan["grade"]
+                next_grade, next_ln = find_next_lesson_across_grades(
+                    base_grade, plan_lesson, content_key)
+                if not next_grade:
+                    continue
+                dup = any(a["grade"] == next_grade and a["lesson_num"] == next_ln for a in type_assignments)
+                if dup:
+                    continue
+                db.execute(
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, %s, %s, %s, 'by_lesson')",
+                    (user_id, today, hw_type, next_grade, next_ln),
+                )
+                changed = True
+            if changed:
+                db.commit()
 
     rows = db.execute(
-        "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
+        """SELECT * FROM daily_assignments
+           WHERE user_id = %s AND date = %s
+           ORDER BY CASE mode
+                      WHEN 'by_lesson' THEN 0
+                      WHEN 'book_review' THEN 1
+                      ELSE 2
+                    END,
+                    type, id""",
         (user_id, today),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -3216,34 +3277,8 @@ def homework_today():
         return jsonify({"error": "未登录"}), 401
     db = get_db()
     assignments = _get_or_create_today_assignments(db, session["user_id"])
-    # Also get plan info
-    plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (session["user_id"],),
-    ).fetchone()
-    plan_info = None
-    if plan:
-        rec_grade = plan["recognition_grade"] or plan["grade"]
-        wrt_grade = plan["writing_grade"] or plan["grade"]
-        p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
-        if p_mode == "book_review":
-            rec_total = BOOK_REVIEW_DAYS
-            wrt_total = BOOK_REVIEW_DAYS
-        else:
-            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
-        plan_info = {
-            "grade": plan["grade"],
-            "grade_short": grade_short_name(plan["grade"]),
-            "recognition_grade": rec_grade,
-            "writing_grade": wrt_grade,
-            "recognition_lesson": plan["recognition_lesson"],
-            "writing_lesson": plan["writing_lesson"],
-            "rec_total_lessons": rec_total,
-            "wrt_total_lessons": wrt_total,
-            "total_lessons": max(rec_total, wrt_total),
-            "mode": p_mode,
-        }
+    plan_infos = [_homework_plan_info(p) for p in _active_homework_plans(db, session["user_id"])]
+    plan_info = plan_infos[0] if plan_infos else None
     # Check if there are wrong answers from previous days needing review
     today = date.today().isoformat()
     review_items = db.execute(
@@ -3261,6 +3296,7 @@ def homework_today():
     return jsonify({
         "assignments": assignments,
         "plan": plan_info,
+        "plans": plan_infos,
         "review_needed": review_needed,
     })
 
@@ -3571,13 +3607,13 @@ def homework_submit():
         (total_questions, correct_answers, time_spent, wrong_items, assignment_id),
     )
 
+    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
     # Advance lesson if this assignment was completed (not a repeat).
     # book_review mode does NOT auto-advance — admin manually picks next day.
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (session["user_id"],),
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 AND mode = %s ORDER BY id DESC LIMIT 1",
+        (session["user_id"], asn_mode),
     ).fetchone()
-    asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
     if plan and assignment["status"] == "pending" and asn_mode != "book_review":
         content_key = "识字" if assignment["type"] == "recognition" else "词语"
         if assignment["type"] == "recognition":
@@ -3651,19 +3687,20 @@ def homework_submit():
         if has_content and not (next_grade == assignment["grade"] and next_lesson == assignment["lesson_num"]):
             # Check no duplicate for same type+grade+lesson today
             dup = db.execute(
-                "SELECT id FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s AND grade = %s AND lesson_num = %s",
-                (session["user_id"], today, assignment["type"], next_grade, next_lesson),
+                "SELECT id FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s AND grade = %s AND lesson_num = %s AND mode = %s",
+                (session["user_id"], today, assignment["type"], next_grade, next_lesson, asn_mode),
             ).fetchone()
             if not dup:
                 cur = db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                    (session["user_id"], today, assignment["type"], next_grade, next_lesson),
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    (session["user_id"], today, assignment["type"], next_grade, next_lesson, asn_mode),
                 )
                 next_assignment = {
                     "id": cur.fetchone()["id"],
                     "type": assignment["type"],
                     "grade": next_grade,
                     "lesson_num": next_lesson,
+                    "mode": asn_mode,
                 }
 
     db.commit()
@@ -3791,13 +3828,14 @@ def admin_homework_plan():
             return jsonify({"error": f"分册复习的天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
 
     db = get_db()
-    # Deactivate existing plans for this user
-    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s", (user_id,))
+    # Keep one active plan per mode, allowing by-lesson homework and book
+    # review homework to be assigned at the same time.
+    db.execute("UPDATE homework_plans SET active = 0 WHERE user_id = %s AND mode = %s", (user_id, mode))
     # Delete today's pending assignments so new plan takes effect immediately
     today = date.today().isoformat()
     db.execute(
-        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending'",
-        (user_id, today),
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND status = 'pending' AND mode = %s",
+        (user_id, today, mode),
     )
     # Create new plan with separate grade tracking for each type
     db.execute(
@@ -3827,10 +3865,10 @@ def admin_homework_repeat():
     # Create repeat for tomorrow
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
     asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
-    # Remove any existing assignment of same type for tomorrow
+    # Remove any existing assignment of same type and mode for tomorrow
     db.execute(
-        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s",
-        (assignment["user_id"], tomorrow, assignment["type"]),
+        "DELETE FROM daily_assignments WHERE user_id = %s AND date = %s AND type = %s AND mode = %s",
+        (assignment["user_id"], tomorrow, assignment["type"], asn_mode),
     )
     db.execute(
         "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -3839,8 +3877,8 @@ def admin_homework_repeat():
     # Roll back the lesson advancement (by_lesson only — book_review never
     # auto-advanced, so nothing to roll back).
     plan = db.execute(
-        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-        (assignment["user_id"],),
+        "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 AND mode = %s ORDER BY id DESC LIMIT 1",
+        (assignment["user_id"], asn_mode),
     ).fetchone()
     if plan and asn_mode != "book_review":
         if assignment["type"] == "recognition":
@@ -3869,42 +3907,35 @@ def admin_homework_overview():
     users = db.execute("SELECT id, username FROM users").fetchall()
     result = []
     for u in users:
-        plan = db.execute(
-            "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 ORDER BY id DESC LIMIT 1",
-            (u["id"],),
-        ).fetchone()
-        if not plan:
+        plans = _active_homework_plans(db, u["id"])
+        if not plans:
             continue
 
         assignments = db.execute(
-            "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s ORDER BY type",
+            """SELECT * FROM daily_assignments
+               WHERE user_id = %s AND date = %s
+               ORDER BY CASE mode
+                          WHEN 'by_lesson' THEN 0
+                          WHEN 'book_review' THEN 1
+                          ELSE 2
+                        END,
+                        type, id""",
             (u["id"], today),
         ).fetchall()
 
-        rec_grade = plan["recognition_grade"] or plan["grade"]
-        wrt_grade = plan["writing_grade"] or plan["grade"]
-        p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
-        if p_mode == "book_review":
-            rec_total = BOOK_REVIEW_DAYS
-            wrt_total = BOOK_REVIEW_DAYS
-        else:
-            rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
-            wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
-        result.append({
-            "user_id": u["id"],
-            "username": u["username"],
-            "grade": plan["grade"],
-            "grade_short": grade_short_name(plan["grade"]),
-            "recognition_grade": rec_grade,
-            "writing_grade": wrt_grade,
-            "recognition_lesson": plan["recognition_lesson"],
-            "writing_lesson": plan["writing_lesson"],
-            "rec_total_lessons": rec_total,
-            "wrt_total_lessons": wrt_total,
-            "total_lessons": max(rec_total, wrt_total),
-            "mode": p_mode,
-            "today_assignments": [dict(a) for a in assignments],
-        })
+        for plan in plans:
+            plan_info = _homework_plan_info(plan)
+            p_mode = plan_info["mode"]
+            plan_assignments = [
+                dict(a) for a in assignments
+                if (a["mode"] if "mode" in a.keys() else "by_lesson") == p_mode
+            ]
+            result.append({
+                "user_id": u["id"],
+                "username": u["username"],
+                **plan_info,
+                "today_assignments": plan_assignments,
+            })
 
     # Get available grades info
     grades_info = []
