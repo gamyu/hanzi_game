@@ -423,6 +423,22 @@ def _char_word_examples(char: str, pinyin: str, grade: str) -> list[str]:
         for c in chars:
             if c.get("char") == char and c.get("words"):
                 return c.get("words", [])
+    examples = []
+    for w in WORDS.get(grade, []):
+        word = w.get("word", "")
+        if len(word) >= 2 and char in word:
+            examples.append(word)
+        if len(examples) >= 2:
+            return examples
+    for ws in WORDS.values():
+        for w in ws:
+            word = w.get("word", "")
+            if len(word) >= 2 and char in word and word not in examples:
+                examples.append(word)
+            if len(examples) >= 2:
+                return examples
+    if examples:
+        return examples
     return []
 
 
