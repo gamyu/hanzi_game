@@ -3567,6 +3567,13 @@ function strokeCountErrorMessage(userCount, expected) {
   return null;
 }
 
+function handwritingNotRecognizedMessage(strokes, emptyMessage = "请先写字") {
+  if (strokes && strokes.length > 0) {
+    return "已经检测到书写，但暂时没有识别出汉字。请写工整一些后再点确认。";
+  }
+  return emptyMessage;
+}
+
 function sampleIndexedPoints(xs, ys, maxSamples, transform) {
   if (!xs || !ys || xs.length === 0) return [];
   const count = Math.min(maxSamples, xs.length);
@@ -3652,7 +3659,10 @@ function structureMismatchMessage(expected, user) {
   return null;
 }
 
+const STRUCTURE_CHECK_ENABLED = false;
+
 async function validateStrokeStructure(strokes, layout, answer, splitFn) {
+  if (!STRUCTURE_CHECK_ENABLED) return null;
   if (!answer || !strokes || strokes.length === 0) return null;
   const chars = answer.split("");
   const cellStrokes = layout && chars.length > 1 ? splitFn(strokes, layout) : [strokes];
@@ -3857,6 +3867,11 @@ function initCanvas() {
     }
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
+      hwRecognizedResult = '';
+      const recEl = document.getElementById("hwRecognized");
+      const statusEl = document.getElementById("hwStatus");
+      if (recEl) recEl.textContent = '';
+      if (statusEl) statusEl.textContent = '';
     }
     currentStroke = null;
   }
@@ -4001,7 +4016,7 @@ async function submitHandwriting() {
   }
   if (!hwRecognizedResult) {
     const recEl = document.getElementById("hwRecognized");
-    if (recEl) recEl.textContent = "请先写字";
+    if (recEl) recEl.textContent = handwritingNotRecognizedMessage(canvasStrokes);
     return;
   }
 
@@ -6435,7 +6450,7 @@ async function submitHwReviewHandwrite() {
   }
   if (!hwQuizRecognizedResult) {
     const recEl = document.getElementById("hwQuizRecognized");
-    if (recEl) recEl.textContent = "请先写字";
+    if (recEl) recEl.textContent = handwritingNotRecognizedMessage(hwCanvasStrokes);
     return;
   }
 
@@ -6576,6 +6591,14 @@ function initHwQuizCanvas() {
     }
     if (hwCurrentStroke && hwCurrentStroke[0].length > 0) {
       hwCanvasStrokes.push(hwCurrentStroke);
+      hwQuizRecognizedResult = '';
+      hwQuizRecognizedResult2 = '';
+      const recEl = document.getElementById("hwQuizRecognized");
+      const recEl2 = document.getElementById("hwQuizRecognized2");
+      const statusEl = document.getElementById("hwQuizStatus");
+      if (recEl) recEl.textContent = '';
+      if (recEl2) recEl2.textContent = '';
+      if (statusEl) statusEl.textContent = '';
     }
     hwCurrentStroke = null;
   }
@@ -6689,7 +6712,7 @@ async function submitHwQuiz() {
   }
   if (!hwQuizRecognizedResult2) {
     const recEl = document.getElementById("hwQuizRecognized2");
-    if (recEl) recEl.textContent = "请先写字";
+    if (recEl) recEl.textContent = handwritingNotRecognizedMessage(hwCanvasStrokes);
     return;
   }
   // Check stroke order if enabled and answer is correct

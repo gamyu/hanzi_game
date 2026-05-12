@@ -883,6 +883,13 @@ function hwStrokeCountErrorMessage(userCount, expected) {
   return null;
 }
 
+function handwritingNotRecognizedMessage(strokes, emptyMessage = "请先写汉字") {
+  if (strokes && strokes.length > 0) {
+    return "已经检测到书写，但暂时没有识别出汉字。请写工整一些后再点确认。";
+  }
+  return emptyMessage;
+}
+
 function hwSampleIndexedPoints(xs, ys, maxSamples, transform) {
   if (!xs || !ys || xs.length === 0) return [];
   const count = Math.min(maxSamples, xs.length);
@@ -950,7 +957,10 @@ function hwStructureMismatchMessage(expected, user) {
   if ((hasLeftRight || hasTopBottom) && gridDiff > 0.92 && (colDiff > 0.42 || rowDiff > 0.42)) return "字形结构不对，请注意左右和上下位置";
   return null;
 }
+const HW_STRUCTURE_CHECK_ENABLED = false;
+
 async function validateHwStrokeStructure(strokes, layout, answer) {
+  if (!HW_STRUCTURE_CHECK_ENABLED) return null;
   if (!answer || !strokes || strokes.length === 0) return null;
   const chars = answer.split("");
   const cellStrokes = layout && chars.length > 1 ? splitStrokesByCells(strokes, layout) : [strokes];
@@ -1761,6 +1771,11 @@ function initHwCanvas() {
     if (hwEraserMode) { const [x, y] = getPos(e); eraseStrokesAt(canvasStrokes, x, y, 10); }
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
+      hwRecognizedResult = '';
+      const recEl = document.getElementById("hwRecognized");
+      const statusEl = document.getElementById("hwStatus");
+      if (recEl) recEl.textContent = '';
+      if (statusEl) statusEl.textContent = '';
     }
     currentStroke = null;
   }
@@ -1909,7 +1924,7 @@ async function submitHw() {
   }
 
   if (!hwRecognizedResult) {
-    if (statusEl) statusEl.textContent = "请先写汉字";
+    if (statusEl) statusEl.textContent = handwritingNotRecognizedMessage(canvasStrokes);
     return;
   }
 
