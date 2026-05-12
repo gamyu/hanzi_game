@@ -416,6 +416,7 @@ let quiz = {
   timerInterval: null,
   answering: false,
   firstAttemptWrong: new Set(),
+  finishing: false,
 };
 
 // Canvas state
@@ -564,7 +565,13 @@ async function startQuiz(assignmentId) {
 
   quiz.assignmentId = assignmentId;
   quiz.questions = data.questions;
+  quiz.currentIndex = 0;
+  quiz.correctCount = 0;
+  quiz.wrongItems = [];
+  quiz.startTime = Date.now();
   quiz.answering = false;
+  quiz.firstAttemptWrong = new Set();
+  quiz.finishing = false;
 
   // Restore saved progress — localStorage is auto-saved after every
   // question so it's always up-to-date. Fall back to server response.
@@ -634,8 +641,21 @@ function updateTimer() {
 }
 
 function showQuizQuestion() {
-  const q = quiz.questions[quiz.currentIndex];
   const total = quiz.questions.length;
+  if (total <= 0) {
+    document.getElementById("quizProgress").textContent = "0/0";
+    document.getElementById("quizBarFill").style.width = "0%";
+    document.getElementById("quizHint").innerHTML = "";
+    document.getElementById("quizQuestionArea").innerHTML = `<div class="quiz-label">今天这项作业暂无题目</div>`;
+    document.getElementById("quizOptionsArea").innerHTML = "";
+    return;
+  }
+  if (quiz.currentIndex >= total) {
+    finishQuiz();
+    return;
+  }
+  if (quiz.currentIndex < 0) quiz.currentIndex = 0;
+  const q = quiz.questions[quiz.currentIndex];
   const idx = quiz.currentIndex + 1;
 
   document.getElementById("quizProgress").textContent = `${idx}/${total}`;
@@ -1464,6 +1484,7 @@ function scheduleRetry(q) {
 
 function autoSaveQuiz() {
   if (!quiz.assignmentId) return;
+  if (quiz.currentIndex >= quiz.questions.length) return;
   try {
     const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
     localStorage.setItem(`quiz_saved_${quiz.assignmentId}`, JSON.stringify({
@@ -1521,16 +1542,24 @@ document.addEventListener("click", async event => {
 }, true);
 
 function nextQuestion() {
-  quiz.currentIndex++;
-  autoSaveQuiz();
-  if (quiz.currentIndex >= quiz.questions.length) {
+  if (quiz.finishing) return;
+  if (!quiz.questions.length) {
     finishQuiz();
     return;
   }
+  if (quiz.currentIndex >= quiz.questions.length - 1) {
+    quiz.currentIndex = quiz.questions.length;
+    finishQuiz();
+    return;
+  }
+  quiz.currentIndex++;
+  autoSaveQuiz();
   showQuizQuestion();
 }
 
 async function finishQuiz() {
+  if (quiz.finishing) return;
+  quiz.finishing = true;
   clearInterval(quiz.timerInterval);
   const timeSpent = Math.floor((Date.now() - quiz.startTime) / 1000);
   try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
@@ -1561,7 +1590,8 @@ async function finishQuiz() {
   const secs = timeSpent % 60;
 
   document.getElementById("resultIcon").textContent = acc >= 80 ? "🎉" : acc >= 60 ? "💪" : "📚";
-  document.getElementById("resultTitle").textContent = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
+  const resultTitle = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
+  document.getElementById("resultTitle").textContent = data.all_done ? "当天作业已完成" : resultTitle;
   document.getElementById("resultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
 
   if (data.coins_earned > 0) {
@@ -1579,7 +1609,7 @@ async function finishQuiz() {
   }
 
   if (data.all_done) {
-    document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
+    document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">当天作业已完成!</span>`;
   }
 
   const actionsDiv = document.getElementById("resultActions");

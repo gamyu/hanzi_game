@@ -2824,11 +2824,12 @@ async function loadAdminHomework() {
   html += '</div>';
   html += '<div class="admin-row" style="flex-wrap:wrap;gap:6px">';
   html += '<select id="hwUserId" class="admin-input" style="max-width:120px"><option value="">选择用户</option></select>';
-  html += '<select id="hwGrade" class="admin-input" style="max-width:100px"><option value="">选择年级</option></select>';
+  html += '<select id="hwGrade" class="admin-input" style="max-width:120px" onchange="onHwGradeChange()"><option value="">选择年级</option></select>';
   html += '<input type="number" id="hwRecLesson" class="admin-input" style="max-width:70px" placeholder="认课" min="1" value="1" title="认字课号">';
   html += '<input type="number" id="hwWrtLesson" class="admin-input" style="max-width:70px" placeholder="写课" min="1" value="1" title="写字课号">';
   html += '<button class="admin-btn" onclick="saveHomeworkPlan()">保存</button>';
   html += '</div>';
+  html += '<div id="hwGradeMeta" style="font-size:12px;color:#718096;min-height:16px;margin-top:4px"></div>';
   html += '<div id="hwPlanMsg" style="font-size:12px;min-height:16px;margin-top:4px"></div>';
   html += '</div>';
 
@@ -2853,13 +2854,37 @@ async function loadAdminHomework() {
     opt.textContent = `${g.short} (${g.total_lessons}课)`;
     gradeSelect.appendChild(opt);
   });
+  onHwGradeChange();
+}
+
+function selectedHwGradeInfo() {
+  const grade = document.getElementById("hwGrade")?.value || "";
+  return hwGrades.find(g => g.grade === grade) || null;
+}
+
+function onHwGradeChange() {
+  const info = selectedHwGradeInfo();
+  const mode = (document.querySelector('input[name="hwMode"]:checked') || {}).value || "by_lesson";
+  const meta = document.getElementById("hwGradeMeta");
+  if (meta) {
+    if (!info) {
+      meta.textContent = "选择年级册后可看到本册总课数";
+    } else if (mode === "book_review") {
+      meta.textContent = `${info.grade} 共 ${info.total_lessons} 课；分册复习固定分为 7 天`;
+    } else {
+      meta.textContent = `${info.grade} 共 ${info.total_lessons} 课`;
+    }
+  }
+  onHwModeChange(false);
 }
 
 function onHwModeChange() {
+  const fromRadio = arguments.length === 0 ? true : arguments[0];
   const mode = (document.querySelector('input[name="hwMode"]:checked') || {}).value || "by_lesson";
   const recInput = document.getElementById("hwRecLesson");
   const wrtInput = document.getElementById("hwWrtLesson");
   if (!recInput || !wrtInput) return;
+  const info = selectedHwGradeInfo();
   if (mode === "book_review") {
     recInput.max = 7; wrtInput.max = 7;
     recInput.placeholder = "认字第几天"; wrtInput.placeholder = "写字第几天";
@@ -2868,12 +2893,20 @@ function onHwModeChange() {
     if (parseInt(recInput.value) > 7) recInput.value = 7;
     if (parseInt(wrtInput.value) > 7) wrtInput.value = 7;
   } else {
-    recInput.removeAttribute("max");
-    wrtInput.removeAttribute("max");
+    if (info && info.total_lessons) {
+      recInput.max = info.total_lessons;
+      wrtInput.max = info.total_lessons;
+      if (parseInt(recInput.value) > info.total_lessons) recInput.value = info.total_lessons;
+      if (parseInt(wrtInput.value) > info.total_lessons) wrtInput.value = info.total_lessons;
+    } else {
+      recInput.removeAttribute("max");
+      wrtInput.removeAttribute("max");
+    }
     recInput.placeholder = "认课"; wrtInput.placeholder = "写课";
-    recInput.title = "认字课号";
-    wrtInput.title = "写字课号";
+    recInput.title = info ? `认字课号 (1-${info.total_lessons})` : "认字课号";
+    wrtInput.title = info ? `写字课号 (1-${info.total_lessons})` : "写字课号";
   }
+  if (fromRadio) onHwGradeChange();
 }
 
 async function saveHomeworkPlan() {
@@ -2886,6 +2919,15 @@ async function saveHomeworkPlan() {
 
   if (!userId || !grade) {
     msg.textContent = "请选择用户和年级";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  const gradeInfo = selectedHwGradeInfo();
+  if (mode === "by_lesson" && gradeInfo && (
+    recLesson < 1 || recLesson > gradeInfo.total_lessons ||
+    wrtLesson < 1 || wrtLesson > gradeInfo.total_lessons
+  )) {
+    msg.textContent = `${gradeInfo.grade} 共 ${gradeInfo.total_lessons} 课，课号需在 1-${gradeInfo.total_lessons} 之间`;
     msg.style.color = "#e53e3e";
     return;
   }
@@ -4927,6 +4969,7 @@ let hwQuiz = {
   answeredCorrectly: new Set(),
   firstAttemptWrong: new Set(),
   retryMap: {},           // question_key -> retry count
+  finishing: false,
 };
 
 // Homework canvas state (separate from game canvas)
@@ -5188,6 +5231,7 @@ async function doStartPreview(mode) {
   hwQuiz.firstAttemptWrong = new Set();
   hwQuiz.retryMap = {};
   hwQuiz.isPreview = true;
+  hwQuiz.finishing = false;
 
   document.getElementById("hwTodaySection").style.display = "none";
   document.getElementById("hwProgressSection").style.display = "none";
@@ -5222,10 +5266,15 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.originalQuestions = data.questions;
   hwQuiz.totalOriginal = data.questions.length;
   hwQuiz.questions = data.questions.map((q, i) => ({ ...q, _origIndex: i }));
+  hwQuiz.currentIndex = 0;
+  hwQuiz.correctCount = 0;
+  hwQuiz.wrongItems = [];
+  hwQuiz.startTime = Date.now();
   hwQuiz.answering = false;
   hwQuiz.answeredCorrectly = new Set();
   hwQuiz.firstAttemptWrong = new Set();
   hwQuiz.retryMap = {};
+  hwQuiz.finishing = false;
 
   // Restore saved progress from localStorage (auto-saved after every
   // question) or the server response.
@@ -5299,9 +5348,22 @@ function updateHwTimer() {
 }
 
 function showHwQuizQuestion() {
+  const total = hwQuiz.questions.length;
+  if (total <= 0) {
+    document.getElementById("hwQuizProgress").textContent = "0/0";
+    document.getElementById("hwQuizBarFill").style.width = "0%";
+    document.getElementById("hwQuizQuestionArea").innerHTML = `<div class="hw-quiz-label">今天这项作业暂无题目</div>`;
+    document.getElementById("hwQuizOptionsArea").innerHTML = "";
+    document.getElementById("hwQuizHint").innerHTML = "";
+    return;
+  }
+  if (hwQuiz.currentIndex >= total) {
+    finishHwQuiz();
+    return;
+  }
+  if (hwQuiz.currentIndex < 0) hwQuiz.currentIndex = 0;
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const idx = hwQuiz.currentIndex + 1;
-  const total = hwQuiz.questions.length;
 
   document.getElementById("hwQuizProgress").textContent = `${idx}/${total}`;
   document.getElementById("hwQuizBarFill").style.width = `${(hwQuiz.currentIndex / total) * 100}%`;
@@ -5882,6 +5944,7 @@ function hwHandleHwAnswer(userInput) {
 
 function autoSaveHwQuiz() {
   if (!hwQuiz.assignmentId) return;
+  if (hwQuiz.currentIndex >= hwQuiz.questions.length) return;
   try {
     const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
     localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify({
@@ -5897,16 +5960,24 @@ function autoSaveHwQuiz() {
 }
 
 function nextHwQuestion() {
-  hwQuiz.currentIndex++;
-  autoSaveHwQuiz();
-  if (hwQuiz.currentIndex >= hwQuiz.questions.length) {
+  if (hwQuiz.finishing) return;
+  if (!hwQuiz.questions.length) {
     finishHwQuiz();
     return;
   }
+  if (hwQuiz.currentIndex >= hwQuiz.questions.length - 1) {
+    hwQuiz.currentIndex = hwQuiz.questions.length;
+    finishHwQuiz();
+    return;
+  }
+  hwQuiz.currentIndex++;
+  autoSaveHwQuiz();
   showHwQuizQuestion();
 }
 
 async function finishHwQuiz() {
+  if (hwQuiz.finishing) return;
+  hwQuiz.finishing = true;
   clearInterval(hwQuiz.timerInterval);
   const timeSpent = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
   // Clear any saved progress since the quiz is now complete
@@ -5945,7 +6016,7 @@ async function finishHwQuiz() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       assignment_id: hwQuiz.assignmentId,
-      total_questions: hwQuiz.questions.length,
+      total_questions: hwQuiz.totalOriginal || hwQuiz.questions.length,
       correct_answers: hwQuiz.correctCount,
       time_spent: timeSpent,
       wrong_items: hwQuiz.wrongItems,
@@ -5963,7 +6034,8 @@ async function finishHwQuiz() {
   const secs = timeSpent % 60;
 
   document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : acc >= 60 ? "💪" : "📚";
-  document.getElementById("hwResultTitle").textContent = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
+  const resultTitle = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
+  document.getElementById("hwResultTitle").textContent = data.all_done ? "当天作业已完成" : resultTitle;
   document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
 
   if (data.coins_earned > 0) {
@@ -5982,7 +6054,7 @@ async function finishHwQuiz() {
   }
 
   if (data.all_done) {
-    document.getElementById("hwResultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
+    document.getElementById("hwResultStats").innerHTML += `<br><span style="color:#38a169">当天作业已完成!</span>`;
   }
 
   // Show "继续下一课" button if next assignment was auto-created

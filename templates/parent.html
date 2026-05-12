@@ -62,6 +62,7 @@
   .msg.ok { background: #f0fff4; color: #22543d; border: 1px solid #9ae6b4; }
   .msg.err { background: #fff5f5; color: #822727; border: 1px solid #feb2b2; }
   .hint { font-size: 13px; color: #718096; line-height: 1.5; margin-bottom: 8px; }
+  .field-note { font-size: 12px; color: #718096; margin-top: 4px; line-height: 1.4; }
   .policy-list {
     margin: 6px 0 10px 18px;
     color: #4a5568;
@@ -201,7 +202,8 @@
       </div>
       <div class="col">
         <label for="planGrade">年级册</label>
-        <select id="planGrade"></select>
+        <select id="planGrade" onchange="onPlanGradeChange()"></select>
+        <div class="field-note" id="planGradeMeta"></div>
       </div>
       <div class="col">
         <label for="planRec">认字 <span id="recUnitLabel">课</span></label>
@@ -231,6 +233,7 @@
 
 <script>
 const GRADES = {{ grades|tojson }};
+const LESSON_COUNTS = {{ lesson_counts|tojson }};
 const BOOK_REVIEW_DAYS = {{ book_review_days }};
 
 let parentCsrf = "";
@@ -356,11 +359,46 @@ function showDashboard(childUsername) {
     `<button onclick="doParentLogout()">退出家长</button>`;
   // Populate grade dropdown
   const gSel = document.getElementById("planGrade");
-  gSel.innerHTML = GRADES.map(g => `<option value="${g}">${g}</option>`).join("");
+  gSel.innerHTML = GRADES.map(g => {
+    const total = LESSON_COUNTS[g] || 0;
+    return `<option value="${g}">${g}${total ? `（${total}课）` : ""}</option>`;
+  }).join("");
+  onPlanGradeChange();
 }
 
 function gradeShort(g) { return g ? g[0] + g[g.length-1] : ""; }
 function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function lessonCountForGrade(grade) { return LESSON_COUNTS[grade] || 0; }
+function clampLessonInput(input, max) {
+  if (!input) return;
+  input.min = 1;
+  if (max > 0) input.max = max;
+  else input.removeAttribute("max");
+  const value = parseInt(input.value || "1", 10);
+  if (!value || value < 1) input.value = 1;
+  else if (max > 0 && value > max) input.value = max;
+}
+
+function updatePlanGradeMeta() {
+  const grade = document.getElementById("planGrade").value;
+  const mode = document.getElementById("planMode").value;
+  const total = lessonCountForGrade(grade);
+  const meta = document.getElementById("planGradeMeta");
+  if (meta) {
+    if (mode === "book_review") {
+      meta.textContent = total ? `本册共 ${total} 课；分册复习固定分为 ${BOOK_REVIEW_DAYS} 天。` : `分册复习固定分为 ${BOOK_REVIEW_DAYS} 天。`;
+    } else {
+      meta.textContent = total ? `本册共 ${total} 课。` : "这册暂未解析课次。";
+    }
+  }
+  const max = mode === "book_review" ? BOOK_REVIEW_DAYS : total;
+  clampLessonInput(document.getElementById("planRec"), max);
+  clampLessonInput(document.getElementById("planWrt"), max);
+}
+
+function onPlanGradeChange() {
+  updatePlanGradeMeta();
+}
 
 async function loadOverview() {
   const { data } = await api("/api/parent/overview");
@@ -471,27 +509,29 @@ function onPlanModeChange() {
   const unit = mode === "book_review" ? "天" : "课";
   document.getElementById("recUnitLabel").textContent = unit;
   document.getElementById("wrtUnitLabel").textContent = unit;
-  const rec = document.getElementById("planRec");
-  const wrt = document.getElementById("planWrt");
-  if (mode === "book_review") {
-    rec.min = 1; rec.max = BOOK_REVIEW_DAYS;
-    wrt.min = 1; wrt.max = BOOK_REVIEW_DAYS;
-    if (+rec.value > BOOK_REVIEW_DAYS) rec.value = 1;
-    if (+wrt.value > BOOK_REVIEW_DAYS) wrt.value = 1;
-  } else {
-    rec.min = 1; rec.removeAttribute("max");
-    wrt.min = 1; wrt.removeAttribute("max");
-  }
+  updatePlanGradeMeta();
 }
 
 async function savePlan() {
-  const body = {
-    mode: document.getElementById("planMode").value,
-    grade: document.getElementById("planGrade").value,
-    recognition_lesson: +document.getElementById("planRec").value,
-    writing_lesson: +document.getElementById("planWrt").value,
-  };
+  const mode = document.getElementById("planMode").value;
+  const grade = document.getElementById("planGrade").value;
+  const max = mode === "book_review" ? BOOK_REVIEW_DAYS : lessonCountForGrade(grade);
+  const recLesson = +document.getElementById("planRec").value;
+  const wrtLesson = +document.getElementById("planWrt").value;
   const msg = document.getElementById("planMsg");
+  if (max > 0 && (recLesson < 1 || recLesson > max || wrtLesson < 1 || wrtLesson > max)) {
+    msg.style.color = "#e53e3e";
+    msg.textContent = mode === "book_review"
+      ? `分册复习天数需在 1-${BOOK_REVIEW_DAYS} 之间`
+      : `${grade} 共 ${max} 课，课号需在 1-${max} 之间`;
+    return;
+  }
+  const body = {
+    mode,
+    grade,
+    recognition_lesson: recLesson,
+    writing_lesson: wrtLesson,
+  };
   msg.textContent = "保存中...";
   const { ok, data } = await api("/api/parent/homework/plan", { method: "POST", body });
   if (!ok || data.error) {

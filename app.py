@@ -480,6 +480,11 @@ def grade_short_name(grade):
     return grade[0] + grade[-1]
 
 
+def lesson_counts_by_grade():
+    """Return the parsed homework lesson count for each available book."""
+    return {grade: len(HOMEWORK_LESSONS.get(grade, {})) for grade in CHARACTERS.keys()}
+
+
 # --- 分册复习 (per-book review) support ---
 # Each book is split into 7 daily portions. The split is deterministic per
 # grade (seeded by grade name) so all students get the same day-N content
@@ -2128,6 +2133,7 @@ def parent_overview():
         "mastered_count": mastered_count_row["cnt"] if mastered_count_row else 0,
         "coin_totals": [dict(r) for r in coin_totals],
         "grades": list(CHARACTERS.keys()),
+        "lesson_counts": lesson_counts_by_grade(),
         "book_review_days": BOOK_REVIEW_DAYS,
     })
 
@@ -2154,6 +2160,10 @@ def parent_set_plan():
     if mode == "book_review":
         if not (1 <= rec_lesson <= BOOK_REVIEW_DAYS and 1 <= wrt_lesson <= BOOK_REVIEW_DAYS):
             return jsonify({"error": f"分册复习天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
+    else:
+        total_lessons = len(HOMEWORK_LESSONS.get(grade, {}))
+        if not (1 <= rec_lesson <= total_lessons and 1 <= wrt_lesson <= total_lessons):
+            return jsonify({"error": f"{grade} 共 {total_lessons} 课，课号需在 1-{total_lessons} 之间"}), 400
 
     db = get_db()
     # Keep one active plan per mode, so by-lesson homework and book review
@@ -2182,6 +2192,7 @@ def parent_page():
     return render_template(
         "parent.html",
         grades=list(CHARACTERS.keys()),
+        lesson_counts=lesson_counts_by_grade(),
         book_review_days=BOOK_REVIEW_DAYS,
     )
 
@@ -3990,6 +4001,10 @@ def admin_homework_plan():
     if mode == "book_review":
         if not (1 <= rec_lesson <= BOOK_REVIEW_DAYS) or not (1 <= wrt_lesson <= BOOK_REVIEW_DAYS):
             return jsonify({"error": f"分册复习的天数需在 1-{BOOK_REVIEW_DAYS} 之间"}), 400
+    else:
+        total_lessons = len(HOMEWORK_LESSONS.get(grade, {}))
+        if not (1 <= rec_lesson <= total_lessons) or not (1 <= wrt_lesson <= total_lessons):
+            return jsonify({"error": f"{grade} 共 {total_lessons} 课，课号需在 1-{total_lessons} 之间"}), 400
 
     db = get_db()
     # Keep one active plan per mode, allowing by-lesson homework and book
