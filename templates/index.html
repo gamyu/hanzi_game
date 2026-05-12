@@ -3485,16 +3485,23 @@ function checkStrokeQuality(strokes, canvas) {
 // strokes, so we double-check that the user's stroke count is in the right
 // ballpark. Caches per-character lookup since loadCharacterData hits the CDN.
 const _expectedStrokeCache = {};
+const _hanziCharDataCache = {};
+async function getHanziCharDataCached(ch) {
+  if (_hanziCharDataCache[ch] === undefined) {
+    try {
+      _hanziCharDataCache[ch] = await HanziWriter.loadCharacterData(ch);
+    } catch(e) {
+      _hanziCharDataCache[ch] = null;
+    }
+  }
+  return _hanziCharDataCache[ch];
+}
 async function getExpectedStrokeCountForChars(chars) {
   let total = 0;
   for (const ch of chars) {
     if (_expectedStrokeCache[ch] === undefined) {
-      try {
-        const charData = await HanziWriter.loadCharacterData(ch);
-        _expectedStrokeCache[ch] = (charData.strokes || []).length;
-      } catch(e) {
-        _expectedStrokeCache[ch] = null;
-      }
+      const charData = await getHanziCharDataCached(ch);
+      _expectedStrokeCache[ch] = charData ? (charData.strokes || []).length : null;
     }
     const n = _expectedStrokeCache[ch];
     if (n === null) return null; // unknown for at least one char — skip check
@@ -3514,6 +3521,111 @@ function strokeCountErrorMessage(userCount, expected) {
   }
   if (userCount < Math.max(2, Math.floor(expected * 0.5))) {
     return `笔画过少 (写了${userCount}笔，应为${expected}笔)`;
+  }
+  return null;
+}
+
+function sampleIndexedPoints(xs, ys, maxSamples, transform) {
+  if (!xs || !ys || xs.length === 0) return [];
+  const count = Math.min(maxSamples, xs.length);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const idx = count === 1 ? 0 : Math.round(i * (xs.length - 1) / (count - 1));
+    out.push(transform(xs[idx], ys[idx]));
+  }
+  return out;
+}
+
+function normalizePointCloud(points) {
+  if (!points || points.length < 6) return null;
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX;
+  const h = maxY - minY;
+  if (w < 1 || h < 1) return null;
+  return points.map(([x, y]) => [(x - minX) / w, (y - minY) / h]);
+}
+
+function normalizedUserStructurePoints(strokes) {
+  const pts = [];
+  for (const s of strokes || []) {
+    pts.push(...sampleIndexedPoints(s[0], s[1], 10, (x, y) => [x, -y]));
+  }
+  return normalizePointCloud(pts);
+}
+
+function normalizedReferenceStructurePoints(charData) {
+  const pts = [];
+  for (const median of (charData.medians || [])) {
+    const xs = median.map(p => p[0]);
+    const ys = median.map(p => p[1]);
+    pts.push(...sampleIndexedPoints(xs, ys, 10, (x, y) => [x, y]));
+  }
+  return normalizePointCloud(pts);
+}
+
+function structureDistribution(points) {
+  const cols = [0, 0, 0];
+  const rows = [0, 0, 0];
+  const grid = Array(9).fill(0);
+  for (const [x, y] of points || []) {
+    const col = x < 0.36 ? 0 : (x > 0.64 ? 2 : 1);
+    const row = y > 0.64 ? 0 : (y < 0.36 ? 2 : 1);
+    cols[col]++;
+    rows[row]++;
+    grid[row * 3 + col]++;
+  }
+  const total = Math.max(1, points.length || 0);
+  return {
+    cols: cols.map(v => v / total),
+    rows: rows.map(v => v / total),
+    grid: grid.map(v => v / total),
+  };
+}
+
+function l1Distance(a, b) {
+  return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0);
+}
+
+function structureMismatchMessage(expected, user) {
+  const exp = structureDistribution(expected);
+  const got = structureDistribution(user);
+  const colDiff = l1Distance(exp.cols, got.cols);
+  const rowDiff = l1Distance(exp.rows, got.rows);
+  const gridDiff = l1Distance(exp.grid, got.grid);
+  const hasLeftRight = exp.cols[0] > 0.14 && exp.cols[2] > 0.14;
+  const hasTopBottom = exp.rows[0] > 0.14 && exp.rows[2] > 0.14;
+
+  if (hasLeftRight && colDiff > 0.52) {
+    return "字形结构不对，请注意左右部件的位置";
+  }
+  if (hasTopBottom && rowDiff > 0.52) {
+    return "字形结构不对，请注意上下部件的位置";
+  }
+  if ((hasLeftRight || hasTopBottom) && gridDiff > 0.92 && (colDiff > 0.42 || rowDiff > 0.42)) {
+    return "字形结构不对，请注意左右和上下位置";
+  }
+  return null;
+}
+
+async function validateStrokeStructure(strokes, layout, answer, splitFn) {
+  if (!answer || !strokes || strokes.length === 0) return null;
+  const chars = answer.split("");
+  const cellStrokes = layout && chars.length > 1 ? splitFn(strokes, layout) : [strokes];
+  for (let i = 0; i < chars.length; i++) {
+    const userStrokes = cellStrokes[i] || [];
+    if (userStrokes.length < 2) continue;
+    const charData = await getHanziCharDataCached(chars[i]);
+    if (!charData || !charData.medians || charData.medians.length < 4) continue;
+    const expected = normalizedReferenceStructurePoints(charData);
+    const user = normalizedUserStructurePoints(userStrokes);
+    if (!expected || !user) continue;
+    const msg = structureMismatchMessage(expected, user);
+    if (msg) {
+      return chars.length > 1 ? `第${i + 1}个字(${chars[i]}): ${msg}` : msg;
+    }
   }
   return null;
 }
@@ -3796,6 +3908,15 @@ async function recognizeHandwriting() {
         if (recEl) recEl.textContent = `第${missing.join('、')}个字未能识别，请清除后重写`;
         hwRecognizedResult = '';
       } else {
+        if (state.currentQ && combined === state.currentQ.answer) {
+          const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
+          if (structureErr) {
+            if (recEl) recEl.textContent = structureErr;
+            if (statusEl) statusEl.textContent = structureErr;
+            hwRecognizedResult = '';
+            return;
+          }
+        }
         hwRecognizedResult = combined;
         if (recEl) recEl.textContent = `识别结果: ${combined}`;
       }
@@ -3810,6 +3931,15 @@ async function recognizeHandwriting() {
       let topResult = null;
       try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
       if (topResult) {
+        if (state.currentQ && topResult === state.currentQ.answer) {
+          const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
+          if (structureErr) {
+            if (recEl) recEl.textContent = structureErr;
+            if (statusEl) statusEl.textContent = structureErr;
+            hwRecognizedResult = '';
+            return;
+          }
+        }
         hwRecognizedResult = topResult;
         if (recEl) recEl.textContent = `识别结果: ${topResult}`;
       } else {
@@ -3848,6 +3978,14 @@ async function submitHandwriting() {
     if (countErr) {
       if (statusEl) statusEl.textContent = countErr;
       hwRecognizedResult = ''; // force re-recognition next submit
+      return;
+    }
+    const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
+    if (structureErr) {
+      if (statusEl) statusEl.textContent = structureErr;
+      const recEl = document.getElementById("hwRecognized");
+      if (recEl) recEl.textContent = structureErr;
+      hwRecognizedResult = '';
       return;
     }
   }
@@ -5294,6 +5432,7 @@ function showHwQuizQuestion() {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+    hwQuizCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
 
     opts.innerHTML = `<div class="hw-quiz-canvas-wrap">
       ${getStrokeToggleHTML()}
@@ -5851,9 +5990,12 @@ async function finishHwQuiz() {
   const typeLabel = hwQuiz.type === "recognition" ? "认字" : "写字";
   if (data.next_assignment) {
     hwQuiz.nextAssignmentId = data.next_assignment.id;
+    const isReviewNext = data.next_assignment.mode === "book_review";
+    const nextUnit = isReviewNext ? "天" : "课";
+    const nextAction = isReviewNext ? "继续下一天" : "继续下一课";
     actionsDiv.innerHTML = `
       <button class="hw-result-btn" onclick="hwBackToToday()">返回</button>
-      <button class="hw-result-btn next" onclick="startHwQuiz(${data.next_assignment.id})">继续下一课 · ${gradeShort(data.next_assignment.grade)}${typeLabel}第${data.next_assignment.lesson_num}课 →</button>`;
+      <button class="hw-result-btn next" onclick="startHwQuiz(${data.next_assignment.id})">${nextAction} · ${gradeShort(data.next_assignment.grade)}${typeLabel}第${data.next_assignment.lesson_num}${nextUnit} →</button>`;
   } else {
     hwQuiz.nextAssignmentId = null;
     actionsDiv.innerHTML = `<button class="hw-result-btn" onclick="hwBackToToday()">返回</button>`;
@@ -6096,6 +6238,7 @@ function showHwReviewQuestion() {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+    hwQuizCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
     area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="hw-quiz-pinyin">${q.question}</div>
       <div class="hw-canvas-wrap" style="display:flex;flex-direction:column;align-items:center">
         <div style="position:relative;width:${canvasW}px;height:${canvasH}px;border:2px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fefefe">
@@ -6229,11 +6372,19 @@ async function submitHwReviewHandwrite() {
   const qKey = `${q.question}_${q.mode}`;
   if (userInput === q.answer) {
     // Stroke-count sanity check (catches scribbling around a correct shape).
-    const expected = await getExpectedStrokeCountForChars(q.answer.split(""));
-    const countErr = strokeCountErrorMessage(hwCanvasStrokes.length, expected);
+    const countErr = hwQuizCellLayout && hwQuizCellLayout.charCount > 1
+      ? await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer)
+      : strokeCountErrorMessage(hwCanvasStrokes.length, await getExpectedStrokeCountForChars(q.answer.split("")));
     if (countErr) {
       const recEl = document.getElementById("hwQuizRecognized");
       if (recEl) recEl.textContent = countErr;
+      hwQuizRecognizedResult = '';
+      return;
+    }
+    const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+    if (structureErr) {
+      const recEl = document.getElementById("hwQuizRecognized");
+      if (recEl) recEl.textContent = structureErr;
       hwQuizRecognizedResult = '';
       return;
     }
@@ -6367,6 +6518,7 @@ function initHwQuizCanvas() {
 }
 
 let hwQuizRecognizedResult = '';
+let hwQuizCellLayout = null;
 
 function clearHwQuizCanvas() {
   hwCanvasStrokes = [];
@@ -6391,6 +6543,15 @@ async function recognizeHwQuiz() {
     let topResult = null;
     try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
     if (topResult) {
+      const q = hwReview.questions[hwReview.currentIndex];
+      if (q && topResult === q.answer) {
+        const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+        if (structureErr) {
+          if (recEl) recEl.textContent = structureErr;
+          hwQuizRecognizedResult = '';
+          return;
+        }
+      }
       hwQuizRecognizedResult = topResult;
       if (recEl) recEl.textContent = `识别结果: ${topResult}`;
     } else {
@@ -6429,6 +6590,15 @@ async function recognizeHwQuiz2() {
     let topResult = null;
     try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
     if (topResult) {
+      const q = hwQuiz.questions[hwQuiz.currentIndex];
+      if (q && topResult === q.answer) {
+        const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+        if (structureErr) {
+          if (recEl) recEl.textContent = structureErr;
+          hwQuizRecognizedResult2 = '';
+          return;
+        }
+      }
       hwQuizRecognizedResult2 = topResult;
       if (recEl) recEl.textContent = `识别结果: ${topResult}`;
     } else {
@@ -6454,13 +6624,23 @@ async function submitHwQuiz() {
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   // Stroke-count sanity check (only when claiming correct).
   if (q && hwQuizRecognizedResult2 === q.answer) {
-    const expected = await getExpectedStrokeCountForChars(q.answer.split(""));
-    const countErr = strokeCountErrorMessage(hwCanvasStrokes.length, expected);
+    const countErr = hwQuizCellLayout && hwQuizCellLayout.charCount > 1
+      ? await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer)
+      : strokeCountErrorMessage(hwCanvasStrokes.length, await getExpectedStrokeCountForChars(q.answer.split("")));
     if (countErr) {
       const statusEl = document.getElementById("hwQuizStatus");
       if (statusEl) statusEl.textContent = countErr;
       const recEl = document.getElementById("hwQuizRecognized2");
       if (recEl) recEl.textContent = countErr;
+      hwQuizRecognizedResult2 = '';
+      return;
+    }
+    const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+    if (structureErr) {
+      const statusEl = document.getElementById("hwQuizStatus");
+      if (statusEl) statusEl.textContent = structureErr;
+      const recEl = document.getElementById("hwQuizRecognized2");
+      if (recEl) recEl.textContent = structureErr;
       hwQuizRecognizedResult2 = '';
       return;
     }

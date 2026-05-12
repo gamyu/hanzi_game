@@ -30,7 +30,7 @@
     flex-direction: column;
     align-items: center;
     color: #333;
-    padding: 24px 16px;
+    padding: 68px 16px 24px;
   }
 
   h1 {
@@ -245,9 +245,13 @@
   .btn-row {
     display: flex;
     gap: 12px;
-    margin-top: 20px;
+    margin-top: 0;
     justify-content: center;
     flex-wrap: wrap;
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 20;
   }
 
   .action-btn {
@@ -585,6 +589,7 @@
     .quiz-opt { font-size: 16px; padding: 10px 6px; }
   }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/hanzi-writer@3.7/dist/hanzi-writer.min.js"></script>
 </head>
 <body>
 
@@ -943,6 +948,7 @@ function renderReviewQuestion(q, item) {
   const modeTag = `<div class="quiz-mode-tag">${MODE_LABELS[q.mode] || q.mode}</div>`;
   const closeBtn = '<button class="quiz-x" onclick="closeQuiz()" title="关闭">&times;</button>';
   const autoNext = autoNextControlHTML();
+  reviewCellLayout = null;
 
   if (q.mode === "pinyin_typing") {
     const contextHint = q.context_word ? `<div class="review-input-note">(${esc(q.context_word)})</div>` : "";
@@ -976,6 +982,7 @@ function renderReviewQuestion(q, item) {
     const rows = Math.ceil(charCount / cols);
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
+    reviewCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
     box.innerHTML = `
       ${closeBtn}${progress}${autoNext}${modeTag}
       <div class="quiz-question pinyin-display">${esc(q.question)}</div>
@@ -1048,6 +1055,7 @@ let reviewCurrentStroke = null;
 let reviewIsDrawing = false;
 let reviewEraserMode = false;
 let reviewRecognizedText = "";
+let reviewCellLayout = null;
 
 function initReviewCanvas() {
   reviewCanvasStrokes = [];
@@ -1152,6 +1160,124 @@ function toggleReviewEraser() {
   }
 }
 
+const _reviewCharDataCache = {};
+async function getReviewCharData(ch) {
+  if (typeof HanziWriter === "undefined") return null;
+  if (_reviewCharDataCache[ch] === undefined) {
+    try {
+      _reviewCharDataCache[ch] = await HanziWriter.loadCharacterData(ch);
+    } catch(e) {
+      _reviewCharDataCache[ch] = null;
+    }
+  }
+  return _reviewCharDataCache[ch];
+}
+function reviewSampleIndexedPoints(xs, ys, maxSamples, transform) {
+  if (!xs || !ys || xs.length === 0) return [];
+  const count = Math.min(maxSamples, xs.length);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const idx = count === 1 ? 0 : Math.round(i * (xs.length - 1) / (count - 1));
+    out.push(transform(xs[idx], ys[idx]));
+  }
+  return out;
+}
+function reviewNormalizePointCloud(points) {
+  if (!points || points.length < 6) return null;
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX;
+  const h = maxY - minY;
+  if (w < 1 || h < 1) return null;
+  return points.map(([x, y]) => [(x - minX) / w, (y - minY) / h]);
+}
+function reviewNormalizedUserStructurePoints(strokes) {
+  const pts = [];
+  for (const s of strokes || []) {
+    pts.push(...reviewSampleIndexedPoints(s[0], s[1], 10, (x, y) => [x, -y]));
+  }
+  return reviewNormalizePointCloud(pts);
+}
+function reviewNormalizedReferenceStructurePoints(charData) {
+  const pts = [];
+  for (const median of (charData.medians || [])) {
+    const xs = median.map(p => p[0]);
+    const ys = median.map(p => p[1]);
+    pts.push(...reviewSampleIndexedPoints(xs, ys, 10, (x, y) => [x, y]));
+  }
+  return reviewNormalizePointCloud(pts);
+}
+function reviewStructureDistribution(points) {
+  const cols = [0, 0, 0];
+  const rows = [0, 0, 0];
+  const grid = Array(9).fill(0);
+  for (const [x, y] of points || []) {
+    const col = x < 0.36 ? 0 : (x > 0.64 ? 2 : 1);
+    const row = y > 0.64 ? 0 : (y < 0.36 ? 2 : 1);
+    cols[col]++;
+    rows[row]++;
+    grid[row * 3 + col]++;
+  }
+  const total = Math.max(1, points.length || 0);
+  return { cols: cols.map(v => v / total), rows: rows.map(v => v / total), grid: grid.map(v => v / total) };
+}
+function reviewL1Distance(a, b) {
+  return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0);
+}
+function reviewStructureMismatchMessage(expected, user) {
+  const exp = reviewStructureDistribution(expected);
+  const got = reviewStructureDistribution(user);
+  const colDiff = reviewL1Distance(exp.cols, got.cols);
+  const rowDiff = reviewL1Distance(exp.rows, got.rows);
+  const gridDiff = reviewL1Distance(exp.grid, got.grid);
+  const hasLeftRight = exp.cols[0] > 0.14 && exp.cols[2] > 0.14;
+  const hasTopBottom = exp.rows[0] > 0.14 && exp.rows[2] > 0.14;
+  if (hasLeftRight && colDiff > 0.52) return "字形结构不对，请注意左右部件的位置";
+  if (hasTopBottom && rowDiff > 0.52) return "字形结构不对，请注意上下部件的位置";
+  if ((hasLeftRight || hasTopBottom) && gridDiff > 0.92 && (colDiff > 0.42 || rowDiff > 0.42)) return "字形结构不对，请注意左右和上下位置";
+  return null;
+}
+function splitReviewStrokesByCells(strokes, layout) {
+  const { cellSize, cols, charCount } = layout;
+  const cellStrokes = Array.from({ length: charCount }, () => []);
+  for (const s of strokes) {
+    const avgX = s[0].reduce((a, b) => a + b, 0) / s[0].length;
+    const avgY = s[1].reduce((a, b) => a + b, 0) / s[1].length;
+    const col = Math.min(Math.floor(avgX / cellSize), cols - 1);
+    const row = Math.floor(avgY / cellSize);
+    const cellIdx = row * cols + col;
+    if (cellIdx >= 0 && cellIdx < charCount) {
+      const offsetX = col * cellSize;
+      const offsetY = row * cellSize;
+      cellStrokes[cellIdx].push([
+        s[0].map(x => x - offsetX),
+        s[1].map(y => y - offsetY),
+        s[2],
+      ]);
+    }
+  }
+  return cellStrokes;
+}
+async function validateReviewStrokeStructure(strokes, layout, answer) {
+  if (!answer || !strokes || strokes.length === 0) return null;
+  const chars = answer.split("");
+  const cellStrokes = layout && chars.length > 1 ? splitReviewStrokesByCells(strokes, layout) : [strokes];
+  for (let i = 0; i < chars.length; i++) {
+    const userStrokes = cellStrokes[i] || [];
+    if (userStrokes.length < 2) continue;
+    const charData = await getReviewCharData(chars[i]);
+    if (!charData || !charData.medians || charData.medians.length < 4) continue;
+    const expected = reviewNormalizedReferenceStructurePoints(charData);
+    const user = reviewNormalizedUserStructurePoints(userStrokes);
+    if (!expected || !user) continue;
+    const msg = reviewStructureMismatchMessage(expected, user);
+    if (msg) return chars.length > 1 ? `第${i + 1}个字(${chars[i]}): ${msg}` : msg;
+  }
+  return null;
+}
+
 async function recognizeReviewCanvas() {
   const canvas = document.getElementById("reviewCanvas");
   const recEl = document.getElementById("reviewRecognized");
@@ -1166,6 +1292,15 @@ async function recognizeReviewCanvas() {
     const data = await res.json();
     if (data[0] === "SUCCESS") {
       reviewRecognizedText = (data[1][0][1] || [])[0] || "";
+      const answer = document.getElementById("quizBox")._answer;
+      if (reviewRecognizedText && reviewRecognizedText === answer) {
+        const structureErr = await validateReviewStrokeStructure(reviewCanvasStrokes, reviewCellLayout, answer);
+        if (structureErr) {
+          reviewRecognizedText = "";
+          recEl.textContent = structureErr;
+          return;
+        }
+      }
       recEl.textContent = reviewRecognizedText ? `识别结果: ${reviewRecognizedText}` : "未能识别，请重写";
     } else {
       recEl.textContent = "识别失败，请重试";
@@ -1187,6 +1322,14 @@ async function checkReviewHandwriting(btn) {
   if (!reviewRecognizedText) {
     document.getElementById("reviewRecognized").textContent = "请先写字";
     return;
+  }
+  if (reviewRecognizedText === answer) {
+    const structureErr = await validateReviewStrokeStructure(reviewCanvasStrokes, reviewCellLayout, answer);
+    if (structureErr) {
+      document.getElementById("reviewRecognized").textContent = structureErr;
+      reviewRecognizedText = "";
+      return;
+    }
   }
   btn.disabled = true;
   if (reviewRecognizedText === answer) {

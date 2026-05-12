@@ -527,6 +527,16 @@ def get_book_review_split(grade):
     return result
 
 
+def find_next_book_review_day(grade, current_day, hw_type):
+    """Find the next non-empty book-review day for this grade/type."""
+    key = "recognition" if hw_type == "recognition" else "writing"
+    split = get_book_review_split(grade).get(key, [])
+    for day in range(current_day + 1, BOOK_REVIEW_DAYS + 1):
+        if day - 1 < len(split) and split[day - 1]:
+            return day
+    return None
+
+
 DEFAULT_COIN_RULES = {
     "recognition": [
         {"streak": 15, "coins": 1},
@@ -3289,19 +3299,29 @@ def _get_or_create_today_assignments(db, user_id):
         has_pending = any(r["status"] == "pending" for r in plan_existing)
 
         if plan_mode == "book_review":
-            # Ensure both recognition and writing review assignments exist.
-            existing_types = {r["type"] for r in plan_existing}
+            # Ensure the plan's current review day exists for each type. This
+            # also recovers gracefully if a prior submit advanced the plan but
+            # the newly-created assignment was lost before commit.
             changed = False
-            if "recognition" not in existing_types:
+            for hw_type, day_col in [
+                ("recognition", "recognition_lesson"),
+                ("writing", "writing_lesson"),
+            ]:
+                type_rows = [r for r in plan_existing if r["type"] == hw_type]
+                if any(r["status"] == "pending" for r in type_rows):
+                    continue
+                target_day = plan[day_col]
+                split_key = "recognition" if hw_type == "recognition" else "writing"
+                split = get_book_review_split(plan["grade"]).get(split_key, [])
+                has_content = 1 <= target_day <= BOOK_REVIEW_DAYS and target_day - 1 < len(split) and bool(split[target_day - 1])
+                if not has_content:
+                    continue
+                exists = any(r["grade"] == plan["grade"] and r["lesson_num"] == target_day for r in type_rows)
+                if exists:
+                    continue
                 db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'recognition', %s, %s, 'book_review')",
-                    (user_id, today, plan["grade"], plan["recognition_lesson"]),
-                )
-                changed = True
-            if "writing" not in existing_types:
-                db.execute(
-                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, 'writing', %s, %s, 'book_review')",
-                    (user_id, today, plan["grade"], plan["writing_lesson"]),
+                    "INSERT INTO daily_assignments (user_id, date, type, grade, lesson_num, mode) VALUES (%s, %s, %s, %s, %s, 'book_review')",
+                    (user_id, today, hw_type, plan["grade"], target_day),
                 )
                 changed = True
             if changed:
@@ -3710,29 +3730,42 @@ def homework_submit():
     )
 
     asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
-    # Advance lesson if this assignment was completed (not a repeat).
-    # book_review mode does NOT auto-advance — admin manually picks next day.
+    # Advance the plan pointer if this assignment was completed for the first
+    # time. Repeated assignments keep the plan where it is.
     plan = db.execute(
         "SELECT * FROM homework_plans WHERE user_id = %s AND active = 1 AND mode = %s ORDER BY id DESC LIMIT 1",
         (session["user_id"], asn_mode),
     ).fetchone()
-    if plan and assignment["status"] == "pending" and asn_mode != "book_review":
-        content_key = "识字" if assignment["type"] == "recognition" else "词语"
-        if assignment["type"] == "recognition":
-            base_grade = plan["recognition_grade"] or plan["grade"]
-            current_lesson = plan["recognition_lesson"]
+    first_completion = bool(plan and assignment["status"] == "pending")
+    if first_completion:
+        if asn_mode == "book_review":
+            next_day = find_next_book_review_day(
+                assignment["grade"], assignment["lesson_num"], assignment["type"]
+            )
+            if next_day:
+                if assignment["type"] == "recognition":
+                    db.execute("UPDATE homework_plans SET recognition_lesson = %s WHERE id = %s",
+                               (next_day, plan["id"]))
+                else:
+                    db.execute("UPDATE homework_plans SET writing_lesson = %s WHERE id = %s",
+                               (next_day, plan["id"]))
         else:
-            base_grade = plan["writing_grade"] or plan["grade"]
-            current_lesson = plan["writing_lesson"]
-
-        next_grade, next_ln = find_next_lesson_across_grades(base_grade, current_lesson + 1, content_key)
-        if next_grade and next_ln:
+            content_key = "识字" if assignment["type"] == "recognition" else "词语"
             if assignment["type"] == "recognition":
-                db.execute("UPDATE homework_plans SET recognition_lesson = %s, recognition_grade = %s WHERE id = %s",
-                           (next_ln, next_grade, plan["id"]))
+                base_grade = plan["recognition_grade"] or plan["grade"]
+                current_lesson = plan["recognition_lesson"]
             else:
-                db.execute("UPDATE homework_plans SET writing_lesson = %s, writing_grade = %s WHERE id = %s",
-                           (next_ln, next_grade, plan["id"]))
+                base_grade = plan["writing_grade"] or plan["grade"]
+                current_lesson = plan["writing_lesson"]
+
+            next_grade, next_ln = find_next_lesson_across_grades(base_grade, current_lesson + 1, content_key)
+            if next_grade and next_ln:
+                if assignment["type"] == "recognition":
+                    db.execute("UPDATE homework_plans SET recognition_lesson = %s, recognition_grade = %s WHERE id = %s",
+                               (next_ln, next_grade, plan["id"]))
+                else:
+                    db.execute("UPDATE homework_plans SET writing_lesson = %s, writing_grade = %s WHERE id = %s",
+                               (next_ln, next_grade, plan["id"]))
 
     # Also record wrong answers in the main wrong_answers table
     source_label = _source_label(
@@ -3772,26 +3805,32 @@ def homework_submit():
     # Coins are now awarded in real-time via /api/streak during the quiz
     coins_earned = 0
 
-    # Auto-create next lesson assignment if this was first completion.
-    # Skipped in book_review mode (admin assigns next day manually, Q3=A).
+    # Auto-create the next assignment if this was first completion.
     next_assignment = None
-    if plan and assignment["status"] == "pending" and asn_mode != "book_review":
+    if first_completion:
         today = date.today().isoformat()
         # Re-read the updated plan to get the advanced grade/lesson
         updated_plan = db.execute(
             "SELECT * FROM homework_plans WHERE id = %s", (plan["id"],)
         ).fetchone()
-        if assignment["type"] == "recognition":
-            next_grade = updated_plan["recognition_grade"] or updated_plan["grade"]
-            next_lesson = updated_plan["recognition_lesson"]
+        if asn_mode == "book_review":
+            next_grade = updated_plan["grade"]
+            next_lesson = updated_plan["recognition_lesson"] if assignment["type"] == "recognition" else updated_plan["writing_lesson"]
+            split_key = "recognition" if assignment["type"] == "recognition" else "writing"
+            split = get_book_review_split(next_grade).get(split_key, [])
+            has_content = 1 <= next_lesson <= BOOK_REVIEW_DAYS and next_lesson - 1 < len(split) and bool(split[next_lesson - 1])
         else:
-            next_grade = updated_plan["writing_grade"] or updated_plan["grade"]
-            next_lesson = updated_plan["writing_lesson"]
+            if assignment["type"] == "recognition":
+                next_grade = updated_plan["recognition_grade"] or updated_plan["grade"]
+                next_lesson = updated_plan["recognition_lesson"]
+            else:
+                next_grade = updated_plan["writing_grade"] or updated_plan["grade"]
+                next_lesson = updated_plan["writing_lesson"]
 
-        # Check the next lesson actually has content
-        next_lessons = HOMEWORK_LESSONS.get(next_grade, {})
-        content_key = "识字" if assignment["type"] == "recognition" else "词语"
-        has_content = bool(next_lessons.get(next_lesson, {}).get(content_key))
+            # Check the next lesson actually has content
+            next_lessons = HOMEWORK_LESSONS.get(next_grade, {})
+            content_key = "识字" if assignment["type"] == "recognition" else "词语"
+            has_content = bool(next_lessons.get(next_lesson, {}).get(content_key))
 
         if has_content and not (next_grade == assignment["grade"] and next_lesson == assignment["lesson_num"]):
             # Check no duplicate for same type+grade+lesson today

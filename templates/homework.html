@@ -222,6 +222,7 @@
     background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
     font-size: 16px; font-weight: 700; cursor: pointer;
   }
+  .result-btn.next { background: linear-gradient(135deg, #38a169, #2f855a); margin-left: 10px; }
 
   /* History */
   .history-section {
@@ -353,7 +354,7 @@
   <div class="result-title" id="resultTitle"></div>
   <div class="result-stats" id="resultStats"></div>
   <div class="result-wrong" id="resultWrong"></div>
-  <button class="result-btn" onclick="backToToday()">返回</button>
+  <div id="resultActions"><button class="result-btn" onclick="backToToday()">返回</button></div>
 </div>
 
 <!-- History Section -->
@@ -827,16 +828,23 @@ function checkStrokeQuality(strokes, canvas) {
 // --- Expected stroke-count check (rejects scribbles even when Google
 // recognises the right answer because user wrote extra strokes around it).
 const _hwExpectedStrokeCache = {};
+const _hwCharDataCache = {};
+async function getHwCharData(ch) {
+  if (_hwCharDataCache[ch] === undefined) {
+    try {
+      _hwCharDataCache[ch] = await HanziWriter.loadCharacterData(ch);
+    } catch(e) {
+      _hwCharDataCache[ch] = null;
+    }
+  }
+  return _hwCharDataCache[ch];
+}
 async function getHwExpectedStrokeCount(chars) {
   let total = 0;
   for (const ch of chars) {
     if (_hwExpectedStrokeCache[ch] === undefined) {
-      try {
-        const charData = await HanziWriter.loadCharacterData(ch);
-        _hwExpectedStrokeCache[ch] = (charData.strokes || []).length;
-      } catch(e) {
-        _hwExpectedStrokeCache[ch] = null;
-      }
+      const charData = await getHwCharData(ch);
+      _hwExpectedStrokeCache[ch] = charData ? (charData.strokes || []).length : null;
     }
     const n = _hwExpectedStrokeCache[ch];
     if (n === null) return null;
@@ -851,6 +859,91 @@ function hwStrokeCountErrorMessage(userCount, expected) {
   }
   if (userCount < Math.max(2, Math.floor(expected * 0.5))) {
     return `笔画过少 (写了${userCount}笔，应为${expected}笔)`;
+  }
+  return null;
+}
+
+function hwSampleIndexedPoints(xs, ys, maxSamples, transform) {
+  if (!xs || !ys || xs.length === 0) return [];
+  const count = Math.min(maxSamples, xs.length);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const idx = count === 1 ? 0 : Math.round(i * (xs.length - 1) / (count - 1));
+    out.push(transform(xs[idx], ys[idx]));
+  }
+  return out;
+}
+function hwNormalizePointCloud(points) {
+  if (!points || points.length < 6) return null;
+  const xs = points.map(p => p[0]);
+  const ys = points.map(p => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const w = maxX - minX;
+  const h = maxY - minY;
+  if (w < 1 || h < 1) return null;
+  return points.map(([x, y]) => [(x - minX) / w, (y - minY) / h]);
+}
+function hwNormalizedUserStructurePoints(strokes) {
+  const pts = [];
+  for (const s of strokes || []) {
+    pts.push(...hwSampleIndexedPoints(s[0], s[1], 10, (x, y) => [x, -y]));
+  }
+  return hwNormalizePointCloud(pts);
+}
+function hwNormalizedReferenceStructurePoints(charData) {
+  const pts = [];
+  for (const median of (charData.medians || [])) {
+    const xs = median.map(p => p[0]);
+    const ys = median.map(p => p[1]);
+    pts.push(...hwSampleIndexedPoints(xs, ys, 10, (x, y) => [x, y]));
+  }
+  return hwNormalizePointCloud(pts);
+}
+function hwStructureDistribution(points) {
+  const cols = [0, 0, 0];
+  const rows = [0, 0, 0];
+  const grid = Array(9).fill(0);
+  for (const [x, y] of points || []) {
+    const col = x < 0.36 ? 0 : (x > 0.64 ? 2 : 1);
+    const row = y > 0.64 ? 0 : (y < 0.36 ? 2 : 1);
+    cols[col]++;
+    rows[row]++;
+    grid[row * 3 + col]++;
+  }
+  const total = Math.max(1, points.length || 0);
+  return { cols: cols.map(v => v / total), rows: rows.map(v => v / total), grid: grid.map(v => v / total) };
+}
+function hwL1Distance(a, b) {
+  return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]), 0);
+}
+function hwStructureMismatchMessage(expected, user) {
+  const exp = hwStructureDistribution(expected);
+  const got = hwStructureDistribution(user);
+  const colDiff = hwL1Distance(exp.cols, got.cols);
+  const rowDiff = hwL1Distance(exp.rows, got.rows);
+  const gridDiff = hwL1Distance(exp.grid, got.grid);
+  const hasLeftRight = exp.cols[0] > 0.14 && exp.cols[2] > 0.14;
+  const hasTopBottom = exp.rows[0] > 0.14 && exp.rows[2] > 0.14;
+  if (hasLeftRight && colDiff > 0.52) return "字形结构不对，请注意左右部件的位置";
+  if (hasTopBottom && rowDiff > 0.52) return "字形结构不对，请注意上下部件的位置";
+  if ((hasLeftRight || hasTopBottom) && gridDiff > 0.92 && (colDiff > 0.42 || rowDiff > 0.42)) return "字形结构不对，请注意左右和上下位置";
+  return null;
+}
+async function validateHwStrokeStructure(strokes, layout, answer) {
+  if (!answer || !strokes || strokes.length === 0) return null;
+  const chars = answer.split("");
+  const cellStrokes = layout && chars.length > 1 ? splitStrokesByCells(strokes, layout) : [strokes];
+  for (let i = 0; i < chars.length; i++) {
+    const userStrokes = cellStrokes[i] || [];
+    if (userStrokes.length < 2) continue;
+    const charData = await getHwCharData(chars[i]);
+    if (!charData || !charData.medians || charData.medians.length < 4) continue;
+    const expected = hwNormalizedReferenceStructurePoints(charData);
+    const user = hwNormalizedUserStructurePoints(userStrokes);
+    if (!expected || !user) continue;
+    const msg = hwStructureMismatchMessage(expected, user);
+    if (msg) return chars.length > 1 ? `第${i + 1}个字(${chars[i]}): ${msg}` : msg;
   }
   return null;
 }
@@ -1488,6 +1581,19 @@ async function finishQuiz() {
   if (data.all_done) {
     document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">今日作业全部完成!</span>`;
   }
+
+  const actionsDiv = document.getElementById("resultActions");
+  if (data.next_assignment) {
+    const typeLabel = TYPE_LABELS[data.next_assignment.type];
+    const isReviewNext = data.next_assignment.mode === "book_review";
+    const nextUnit = isReviewNext ? "天" : "课";
+    const nextAction = isReviewNext ? "继续下一天" : "继续下一课";
+    actionsDiv.innerHTML = `
+      <button class="result-btn" onclick="backToToday()">返回</button>
+      <button class="result-btn next" onclick="startQuiz(${data.next_assignment.id})">${nextAction} · ${typeLabel}第${data.next_assignment.lesson_num}${nextUnit} →</button>`;
+  } else {
+    actionsDiv.innerHTML = `<button class="result-btn" onclick="backToToday()">返回</button>`;
+  }
 }
 
 async function confirmBackToList() {
@@ -1716,6 +1822,16 @@ async function recognizeHw() {
         if (recEl) recEl.textContent = `第${missing.join('、')}个字未能识别，请清除后重写`;
         hwRecognizedResult = '';
       } else {
+        const q = quiz.questions[quiz.currentIndex];
+        if (q && combined === q.answer) {
+          const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
+          if (structureErr) {
+            if (recEl) recEl.textContent = structureErr;
+            if (statusEl) statusEl.textContent = structureErr;
+            hwRecognizedResult = '';
+            return;
+          }
+        }
         hwRecognizedResult = combined;
         if (recEl) recEl.textContent = `识别结果: ${combined}`;
       }
@@ -1730,6 +1846,16 @@ async function recognizeHw() {
       let topResult = null;
       try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
       if (topResult) {
+        const q = quiz.questions[quiz.currentIndex];
+        if (q && topResult === q.answer) {
+          const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
+          if (structureErr) {
+            if (recEl) recEl.textContent = structureErr;
+            if (statusEl) statusEl.textContent = structureErr;
+            hwRecognizedResult = '';
+            return;
+          }
+        }
         hwRecognizedResult = topResult;
         if (recEl) recEl.textContent = `识别结果: ${topResult}`;
       } else {
@@ -1771,6 +1897,14 @@ async function submitHw() {
     }
     if (countErr) {
       if (statusEl) statusEl.textContent = countErr;
+      hwRecognizedResult = '';
+      return;
+    }
+    const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
+    if (structureErr) {
+      if (statusEl) statusEl.textContent = structureErr;
+      const recEl = document.getElementById("hwRecognized");
+      if (recEl) recEl.textContent = structureErr;
       hwRecognizedResult = '';
       return;
     }
