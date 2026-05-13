@@ -368,6 +368,12 @@ function showDashboard(childUsername) {
 
 function gradeShort(g) { return g ? g[0] + g[g.length-1] : ""; }
 function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+function formatHomeworkMinutes(seconds) {
+  const total = Number(seconds) || 0;
+  if (total <= 0) return "0分钟";
+  if (total > 12 * 60 * 60) return "记录异常";
+  return `${Math.max(1, Math.floor(total / 60))}分钟`;
+}
 function lessonCountForGrade(grade) { return LESSON_COUNTS[grade] || 0; }
 function clampLessonInput(input, max) {
   if (!input) return;
@@ -478,8 +484,7 @@ function rowAssignment(a) {
     : '<span class="badge pending">待完成</span>';
   const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
   const scoreCell = a.status === "completed" ? `${a.correct_answers}/${a.total_questions} (${acc}%)` : "-";
-  const mins = Math.floor(a.time_spent / 60), secs = a.time_spent % 60;
-  const timeCell = a.status === "completed" ? `${mins}分${secs}秒` : "-";
+  const timeCell = a.status === "completed" ? formatHomeworkMinutes(a.time_spent) : "-";
   return `<tr>
     <td>${tl} ${badge}</td>
     <td>${gradeShort(a.grade)} 第${a.lesson_num}${unit}</td>
@@ -494,13 +499,12 @@ function rowHistory(a) {
   const unit = a.mode === "book_review" ? "天" : "课";
   const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
   const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
-  const mins = Math.floor(a.time_spent / 60), secs = a.time_spent % 60;
   return `<tr>
     <td>${a.date}</td>
     <td>${tl}</td>
     <td>${gradeShort(a.grade)} 第${a.lesson_num}${unit}</td>
     <td style="color:${accColor};font-weight:700">${acc}% (${a.correct_answers}/${a.total_questions})</td>
-    <td>${mins}分${secs}秒</td>
+    <td>${formatHomeworkMinutes(a.time_spent)}</td>
   </tr>`;
 }
 

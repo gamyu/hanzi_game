@@ -3732,7 +3732,11 @@ def homework_submit():
     assignment_id = data.get("assignment_id")
     total_questions = data.get("total_questions", 0)
     correct_answers = data.get("correct_answers", 0)
-    time_spent = data.get("time_spent", 0)
+    try:
+        time_spent = int(data.get("time_spent", 0) or 0)
+    except (TypeError, ValueError):
+        time_spent = 0
+    time_spent = max(0, min(time_spent, 12 * 60 * 60))
     wrong_item_list = data.get("wrong_items", [])
     if not isinstance(wrong_item_list, list):
         wrong_item_list = []

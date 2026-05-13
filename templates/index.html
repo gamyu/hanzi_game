@@ -3017,8 +3017,7 @@ async function loadDailyLog() {
         if (h.status === "completed") {
           const acc = h.total_questions > 0 ? Math.round(h.correct_answers / h.total_questions * 100) : 0;
           const accColor = acc >= 80 ? "#38a169" : "#e53e3e";
-          const mins = Math.floor(h.time_spent / 60); const secs = h.time_spent % 60;
-          html += `<div class="day-item">作业 ${gs}${tl}第${h.lesson_num}课: <span style="color:${accColor};font-weight:700">${acc}%</span> (${h.correct_answers}/${h.total_questions}) ${mins}分${secs}秒</div>`;
+          html += `<div class="day-item">作业 ${gs}${tl}第${h.lesson_num}课: <span style="color:${accColor};font-weight:700">${acc}%</span> (${h.correct_answers}/${h.total_questions}) ${formatHomeworkMinutes(h.time_spent)}</div>`;
         } else {
           html += `<div class="day-item" style="color:#d69e2e">作业 ${gs}${tl}第${h.lesson_num}课: 未完成</div>`;
         }
@@ -4930,6 +4929,16 @@ document.addEventListener("click", async event => {
 // =============================================
 const HW_TYPE_LABELS = { recognition: "认字", writing: "写字" };
 function gradeShort(g) { return g ? g[0] + g[g.length - 1] : ""; }
+function formatHomeworkMinutes(seconds) {
+  const total = Number(seconds) || 0;
+  if (total <= 0) return "0分钟";
+  if (total > 12 * 60 * 60) return "记录异常";
+  return `${Math.max(1, Math.floor(total / 60))}分钟`;
+}
+function sanitizeSavedTimeElapsed(seconds) {
+  const total = Number(seconds) || 0;
+  return total > 0 && total <= 4 * 60 * 60 ? total : 0;
+}
 
 // Homework persistent streak (stored per-user on server, same as game)
 let hwStreak = 0;
@@ -5110,8 +5119,6 @@ async function loadHomeworkToday() {
     const typeLabel = HW_TYPE_LABELS[type];
     const modeLabel = type === "recognition" ? "给汉字注音" : "看拼音写字";
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
-    const mins = Math.floor(a.time_spent / 60);
-    const secs = a.time_spent % 60;
     const completedCount = group.filter(x => x.status === "completed").length;
     const unit = isBookReview ? "天" : "课";
     const reviewBadge = isBookReview
@@ -5125,7 +5132,7 @@ async function loadHomeworkToday() {
 
     if (isCompleted) {
       html += `<div class="hw-card-status done">✓ 已完成 (今日${completedCount}${unit})</div>
-        <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${mins}分${secs}秒</div>`;
+        <div class="hw-card-result">${a.correct_answers}/${a.total_questions} (${acc}%) · ${formatHomeworkMinutes(a.time_spent)}</div>`;
     } else {
       const hasSavedProgress = a.saved_progress && a.saved_progress !== '';
       let savedInfo = '';
@@ -5199,9 +5206,7 @@ async function loadHomeworkProgress() {
       if (h.status !== "completed") return;
       const acc = h.total_questions > 0 ? Math.round(h.correct_answers / h.total_questions * 100) : 0;
       const accCls = acc >= 80 ? "acc-good" : "acc-bad";
-      const mins = Math.floor(h.time_spent / 60);
-      const secs = h.time_spent % 60;
-      hhtml += `<tr><td>${h.date}</td><td>${HW_TYPE_LABELS[h.type]}</td><td>第${h.lesson_num}课</td><td class="${accCls}">${acc}%</td><td>${mins}分${secs}秒</td></tr>`;
+      hhtml += `<tr><td>${h.date}</td><td>${HW_TYPE_LABELS[h.type]}</td><td>第${h.lesson_num}课</td><td class="${accCls}">${acc}%</td><td>${formatHomeworkMinutes(h.time_spent)}</td></tr>`;
     });
     hhtml += '</table>';
     document.getElementById("hwHistoryContent").innerHTML = hhtml;
@@ -5318,7 +5323,7 @@ async function startHwQuiz(assignmentId) {
       hwQuiz.wrongItems = saved.wrongItems || [];
       hwQuiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
       hwQuiz.retryMap = saved.retryMap || {};
-      const te = Math.min(saved.timeElapsed || 0, 86400);
+      const te = sanitizeSavedTimeElapsed(saved.timeElapsed);
       hwQuiz.startTime = Date.now() - te * 1000;
     } else {
       // Saved index exceeds cleaned questions — stale save, start fresh
@@ -6005,11 +6010,9 @@ async function finishHwQuiz() {
     const total = hwQuiz.questions.length;
     const correct = hwQuiz.correctCount;
     const acc = Math.round(correct / total * 100);
-    const mins = Math.floor(timeSpent / 60);
-    const secs = timeSpent % 60;
     document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : "📖";
     document.getElementById("hwResultTitle").textContent = "预习完成!";
-    document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
+    document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${formatHomeworkMinutes(timeSpent)}</span>`;
     const wrongDiv = document.getElementById("hwResultWrong");
     if (hwQuiz.wrongItems.length > 0) {
       wrongDiv.innerHTML = `<h4>需要复习 (${hwQuiz.wrongItems.length}个):</h4>
@@ -6045,13 +6048,11 @@ async function finishHwQuiz() {
   const total = hwQuiz.totalOriginal;
   const correct = hwQuiz.correctCount;
   const acc = Math.round(correct / total * 100);
-  const mins = Math.floor(timeSpent / 60);
-  const secs = timeSpent % 60;
 
   document.getElementById("hwResultIcon").textContent = acc >= 80 ? "🎉" : acc >= 60 ? "💪" : "📚";
   const resultTitle = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
   document.getElementById("hwResultTitle").textContent = data.all_done ? "当天作业已完成" : resultTitle;
-  document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${mins}分${secs}秒</span>`;
+  document.getElementById("hwResultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${formatHomeworkMinutes(timeSpent)}</span>`;
 
   if (data.coins_earned > 0) {
     document.getElementById("hwResultStats").innerHTML += `<br>获得 <span>${data.coins_earned}</span> 金币!`;
@@ -6260,7 +6261,7 @@ function startHwReview() {
           hwReview.correctCount = sr.correctCount || 0;
           hwReview.wrongItems = sr.wrongItems || [];
           hwReview.answeredCorrectly = new Set(sr.answeredCorrectly || []);
-          hwReview.startTime = Date.now() - (sr.timeElapsed || 0) * 1000;
+          hwReview.startTime = Date.now() - sanitizeSavedTimeElapsed(sr.timeElapsed) * 1000;
         }
       }
     } catch (e) { /* ignore corrupt saved data */ }
