@@ -21,6 +21,7 @@ import io
 import json
 import os
 import random
+import re
 import atexit
 import smtplib
 import socket
@@ -966,6 +967,59 @@ def _backfill_wrong_answer_events(db):
         )
 
 
+def _parse_exchange_minutes(details):
+    match = re.search(r"兑换\s*(\d+)\s*分钟", details or "")
+    if not match:
+        match = re.search(r"(\d+)\s*分钟", details or "")
+    return int(match.group(1)) if match else 0
+
+
+def _backfill_exchange_records(db):
+    rows = db.execute(
+        """SELECT id, user_id, amount, details, created_at
+           FROM coin_transactions
+           WHERE source = 'shop' AND amount < 0
+           ORDER BY id"""
+    ).fetchall()
+    for row in rows:
+        minutes = _parse_exchange_minutes(row["details"])
+        if minutes <= 0:
+            continue
+        created_at = row["created_at"]
+        exchange_date = created_at.date().isoformat() if hasattr(created_at, "date") else str(created_at)[:10]
+        db.execute(
+            """INSERT INTO exchange_records
+               (user_id, exchange_date, coins, minutes, source_transaction_id, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (source_transaction_id) DO NOTHING""",
+            (row["user_id"], exchange_date, abs(row["amount"]), minutes, row["id"], created_at),
+        )
+
+
+def _seed_linky_game_usage_records(db):
+    user = db.execute("SELECT id FROM users WHERE LOWER(username) = 'linky'").fetchone()
+    if not user:
+        return
+    seeds = [
+        ("2026-05-13", 100, "还罚款"),
+        ("2026-05-13", 50, "玩"),
+    ]
+    for usage_date, minutes, purpose in seeds:
+        exists = db.execute(
+            """SELECT 1 FROM game_usage_records
+               WHERE user_id = %s AND usage_date = %s AND minutes = %s AND purpose = %s
+               LIMIT 1""",
+            (user["id"], usage_date, minutes, purpose),
+        ).fetchone()
+        if exists:
+            continue
+        db.execute(
+            """INSERT INTO game_usage_records (user_id, usage_date, minutes, purpose)
+               VALUES (%s, %s, %s, %s)""",
+            (user["id"], usage_date, minutes, purpose),
+        )
+
+
 def init_db():
     db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     db.execute("""
@@ -1100,6 +1154,31 @@ def init_db():
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user_date ON coin_transactions(user_id, created_at)")
     db.execute("""
+        CREATE TABLE IF NOT EXISTS exchange_records (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            exchange_date TEXT NOT NULL,
+            coins INTEGER NOT NULL,
+            minutes INTEGER NOT NULL,
+            source_transaction_id INTEGER UNIQUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_exchange_records_user_date ON exchange_records(user_id, exchange_date)")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS game_usage_records (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            usage_date TEXT NOT NULL,
+            minutes INTEGER NOT NULL,
+            purpose TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+    db.execute("CREATE INDEX IF NOT EXISTS idx_game_usage_user_date ON game_usage_records(user_id, usage_date)")
+    db.execute("""
         CREATE TABLE IF NOT EXISTS contact_messages (
             id SERIAL PRIMARY KEY,
             user_id INTEGER,
@@ -1198,6 +1277,8 @@ def init_db():
     if not _col_exists("wrong_answer_events", "mastered_at"):
         db.execute("ALTER TABLE wrong_answer_events ADD COLUMN mastered_at TIMESTAMP")
     _backfill_wrong_answer_events(db)
+    _backfill_exchange_records(db)
+    _seed_linky_game_usage_records(db)
     db.commit()
     db.close()
 
@@ -3017,6 +3098,18 @@ def admin_user_details(user_id):
            ORDER BY created_at DESC LIMIT 50""",
         (user_id,),
     ).fetchall()
+    exchange_recent = db.execute(
+        """SELECT exchange_date, coins, minutes, created_at
+           FROM exchange_records WHERE user_id = %s
+           ORDER BY exchange_date DESC, created_at DESC, id DESC LIMIT 100""",
+        (user_id,),
+    ).fetchall()
+    game_usage_recent = db.execute(
+        """SELECT usage_date, minutes, purpose, created_at
+           FROM game_usage_records WHERE user_id = %s
+           ORDER BY usage_date DESC, created_at DESC, id DESC LIMIT 100""",
+        (user_id,),
+    ).fetchall()
 
     return jsonify({
         "user": dict(user),
@@ -3026,6 +3119,8 @@ def admin_user_details(user_id):
         "coin_totals": [dict(r) for r in coin_totals],
         "coin_daily": [dict(r) for r in coin_daily],
         "coin_recent": [dict(r) for r in coin_recent],
+        "exchange_recent": [dict(r) for r in exchange_recent],
+        "game_usage_recent": [dict(r) for r in game_usage_recent],
     })
 
 
@@ -3263,9 +3358,20 @@ def shop_buy():
 
     db.execute("UPDATE users SET coins = coins - %s, game_minutes = game_minutes + %s WHERE id = %s",
                (package["price"], package["minutes"], session["user_id"]))
-    db.execute(
-        "INSERT INTO coin_transactions (user_id, amount, source, details) VALUES (%s, %s, 'shop', %s)",
+    tx = db.execute(
+        """INSERT INTO coin_transactions (user_id, amount, source, details)
+           VALUES (%s, %s, 'shop', %s)
+           RETURNING id, created_at""",
         (session["user_id"], -package["price"], f"兑换 {package['minutes']} 分钟游戏时间"),
+    ).fetchone()
+    tx_created_at = tx["created_at"]
+    exchange_date = tx_created_at.date().isoformat() if hasattr(tx_created_at, "date") else str(tx_created_at)[:10]
+    db.execute(
+        """INSERT INTO exchange_records
+           (user_id, exchange_date, coins, minutes, source_transaction_id, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s)
+           ON CONFLICT (source_transaction_id) DO NOTHING""",
+        (session["user_id"], exchange_date, package["price"], package["minutes"], tx["id"], tx_created_at),
     )
     db.commit()
     new_coins = user["coins"] - package["price"]
@@ -4165,13 +4271,27 @@ def admin_user_daily_log(user_id):
            GROUP BY DATE(created_at), source""",
         (user_id, start_date),
     ).fetchall()
+    exchange_rows = db.execute(
+        """SELECT exchange_date as date, coins, minutes, created_at
+           FROM exchange_records
+           WHERE user_id = %s AND exchange_date >= %s
+           ORDER BY exchange_date DESC, created_at DESC, id DESC""",
+        (user_id, start_date),
+    ).fetchall()
+    usage_rows = db.execute(
+        """SELECT usage_date as date, minutes, purpose, created_at
+           FROM game_usage_records
+           WHERE user_id = %s AND usage_date >= %s
+           ORDER BY usage_date DESC, created_at DESC, id DESC""",
+        (user_id, start_date),
+    ).fetchall()
 
     # Group by date (normalize keys to strings for consistent merging)
     daily_log = {}
     def _ensure(d):
         if d not in daily_log:
             daily_log[d] = {
-                "date": d, "homework": [], "games": [],
+                "date": d, "homework": [], "games": [], "exchanges": [], "game_usage": [],
                 "coins": {"game": 0, "homework": 0, "shop": 0, "admin": 0, "net": 0},
             }
         return daily_log[d]
@@ -4180,6 +4300,10 @@ def admin_user_daily_log(user_id):
         _ensure(str(row["date"]))["homework"].append(dict(row))
     for row in game_rows:
         _ensure(str(row["date"]))["games"].append(dict(row))
+    for row in exchange_rows:
+        _ensure(str(row["date"]))["exchanges"].append(dict(row))
+    for row in usage_rows:
+        _ensure(str(row["date"]))["game_usage"].append(dict(row))
     for row in coin_rows:
         d = str(row["date"])
         bucket = _ensure(d)["coins"]
@@ -4194,6 +4318,44 @@ def admin_user_daily_log(user_id):
     # Sort by date descending
     result = sorted(daily_log.values(), key=lambda x: x["date"], reverse=True)
     return jsonify({"daily_log": result})
+
+
+@app.route("/api/admin/user/<int:user_id>/game_usage_records", methods=["POST"])
+def admin_add_game_usage_record(user_id):
+    """Add a manual game usage record for a user."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    data = request.get_json(silent=True) or {}
+    usage_date = str(data.get("date") or "").strip()
+    purpose = str(data.get("purpose") or "").strip()
+    try:
+        minutes = int(data.get("minutes") or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+
+    if not usage_date:
+        usage_date = date.today().isoformat()
+    try:
+        datetime.strptime(usage_date, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"error": "日期格式需要是 YYYY-MM-DD"}), 400
+    if minutes <= 0:
+        return jsonify({"error": "请输入游戏使用分钟数"}), 400
+    if not purpose:
+        return jsonify({"error": "请选择或输入目的"}), 400
+
+    db = get_db()
+    user = db.execute("SELECT id FROM users WHERE id = %s", (user_id,)).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+    db.execute(
+        """INSERT INTO game_usage_records (user_id, usage_date, minutes, purpose)
+           VALUES (%s, %s, %s, %s)""",
+        (user_id, usage_date, minutes, purpose),
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/tts")

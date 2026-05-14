@@ -1717,6 +1717,19 @@
               <option value="30">最近30天</option>
             </select>
           </div>
+          <div class="admin-row" style="margin-bottom:12px;gap:6px;flex-wrap:wrap;align-items:center">
+            <input type="date" id="dailyGameUsageDate" class="admin-input" style="max-width:150px">
+            <input type="number" id="dailyGameUsageMinutes" class="admin-input" style="max-width:110px" min="1" placeholder="分钟">
+            <select id="dailyGameUsagePurpose" class="admin-input" style="max-width:120px">
+              <option value="玩">玩</option>
+              <option value="还罚款">还罚款</option>
+              <option value="学习奖励">学习奖励</option>
+              <option value="其他">其他</option>
+            </select>
+            <input type="text" id="dailyGameUsagePurposeOther" class="admin-input" style="max-width:160px" placeholder="补充目的(可选)">
+            <button class="admin-btn" onclick="addGameUsageRecord()" style="padding:8px 12px">添加游戏使用</button>
+            <span id="adminGameUsageMsg" style="font-size:12px"></span>
+          </div>
           <div id="adminDailyLogContent" class="admin-daily-log"></div>
         </div>
       </div>
@@ -2710,6 +2723,32 @@ async function showUserDetail(userId, username) {
     html += '<div style="color:#a0aec0;font-size:12px;padding:6px 0">暂无金币流水记录 (功能上线后的奖励/消费会显示在这里)</div>';
   }
 
+  const exchangeRecent = data.exchange_recent || [];
+  html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">兑换记录</h3>';
+  if (exchangeRecent.length === 0) {
+    html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无兑换记录</div>';
+  } else {
+    html += '<div style="max-height:160px;overflow-y:auto;font-size:13px">';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>金币</th><th>游戏时间</th></tr>';
+    exchangeRecent.forEach(r => {
+      html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px">${r.exchange_date}</td><td style="text-align:center">${r.coins}</td><td style="text-align:center">${r.minutes}分钟</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
+  const usageRecent = data.game_usage_recent || [];
+  html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">游戏使用记录</h3>';
+  if (usageRecent.length === 0) {
+    html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无游戏使用记录</div>';
+  } else {
+    html += '<div style="max-height:160px;overflow-y:auto;font-size:13px">';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>分钟</th><th>目的</th></tr>';
+    usageRecent.forEach(r => {
+      html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px">${r.usage_date}</td><td style="text-align:center">${r.minutes}</td><td style="text-align:center">${escapeHtml(r.purpose)}</td></tr>`;
+    });
+    html += '</table></div>';
+  }
+
   // Score history
   html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">历史成绩</h3>';
   if (data.scores.length === 0) {
@@ -2993,6 +3032,48 @@ async function initDailyLogTab() {
     opt.textContent = u.username;
     sel.appendChild(opt);
   });
+  const usageDate = document.getElementById("dailyGameUsageDate");
+  if (usageDate && !usageDate.value) {
+    const today = new Date();
+    today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+    usageDate.value = today.toISOString().slice(0, 10);
+  }
+}
+
+async function addGameUsageRecord() {
+  const userId = document.getElementById("dailyLogUserId").value;
+  const usageDate = document.getElementById("dailyGameUsageDate").value;
+  const minutes = parseInt(document.getElementById("dailyGameUsageMinutes").value || "0", 10);
+  const purposeChoice = document.getElementById("dailyGameUsagePurpose").value;
+  const purposeOther = document.getElementById("dailyGameUsagePurposeOther").value.trim();
+  const purpose = purposeOther || purposeChoice;
+  const msg = document.getElementById("adminGameUsageMsg");
+  if (!userId) {
+    msg.textContent = "先选择用户";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  if (!usageDate || minutes <= 0 || !purpose) {
+    msg.textContent = "请填写日期、分钟和目的";
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  const res = await fetch(`/api/admin/user/${userId}/game_usage_records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date: usageDate, minutes, purpose }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    msg.textContent = data.error;
+    msg.style.color = "#e53e3e";
+    return;
+  }
+  msg.textContent = "已添加";
+  msg.style.color = "#38a169";
+  document.getElementById("dailyGameUsageMinutes").value = "";
+  document.getElementById("dailyGameUsagePurposeOther").value = "";
+  await loadDailyLog();
 }
 
 async function loadDailyLog() {
@@ -3031,6 +3112,16 @@ async function loadDailyLog() {
         html += `<div class="day-item">游戏 ${gs} ${ml}: ${g.total_questions}题 正确率${acc}% 得分${g.score}</div>`;
       });
     }
+    if (day.game_usage && day.game_usage.length > 0) {
+      day.game_usage.forEach(r => {
+        html += `<div class="day-item" style="background:#f0fff4">游戏使用: ${r.minutes}分钟 · ${escapeHtml(r.purpose)}</div>`;
+      });
+    }
+    if (day.exchanges && day.exchanges.length > 0) {
+      day.exchanges.forEach(r => {
+        html += `<div class="day-item" style="background:#ebf8ff">兑换: ${r.coins}金币 → ${r.minutes}分钟</div>`;
+      });
+    }
     // 金币来源 per day
     const c = day.coins || {};
     const hasCoin = (c.game || c.homework || c.admin || c.shop);
@@ -3044,7 +3135,7 @@ async function loadDailyLog() {
       const netSign = c.net > 0 ? '+' : '';
       html += `<div class="day-item" style="background:#fffaf0"><span>🪙 金币: ${parts.join(' · ')} </span><span style="font-weight:700;color:${netColor};margin-left:6px">净 ${netSign}${c.net}</span></div>`;
     }
-    if (day.homework.length === 0 && day.games.length === 0 && !hasCoin) {
+    if (day.homework.length === 0 && day.games.length === 0 && !(day.game_usage || []).length && !(day.exchanges || []).length && !hasCoin) {
       html += `<div class="day-item" style="color:#a0aec0">无活动</div>`;
     }
   });
@@ -4861,11 +4952,13 @@ function isHomeworkProcessActive() {
   return !!(hwReview && hwReview.questions && hwReview.questions.length > 0 && !hwQuiz.isPreview);
 }
 
-function saveActiveHomeworkProgress() {
+async function saveActiveHomeworkProgress(keepalive = false) {
   if (!isHomeworkProcessActive()) return;
+  const saves = [];
   try {
     if (hwQuiz && hwQuiz.assignmentId && !hwQuiz.isPreview) {
       autoSaveHwQuiz();
+      saves.push(saveHwQuizProgressToServer(keepalive));
     }
     if (hwReview && hwReview.questions && hwReview.questions.length > 0) {
       const timeElapsed = hwReview.startTime ? Math.floor((Date.now() - hwReview.startTime) / 1000) : 0;
@@ -4880,18 +4973,22 @@ function saveActiveHomeworkProgress() {
       }));
     }
   } catch(e) {}
+  if (!keepalive && saves.length > 0) {
+    await Promise.allSettled(saves);
+  }
 }
 
 async function promptBeforeLeavingHomework() {
   if (!isHomeworkProcessActive()) return true;
   const choice = await showHwExitDialog();
   if (choice === 0) return false;
-  if (choice === 1) saveActiveHomeworkProgress();
+  if (choice === 1) await saveActiveHomeworkProgress();
   if (choice === 2) {
     try {
       if (hwQuiz && hwQuiz.assignmentId) localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`);
       localStorage.removeItem("hwReview_saved");
     } catch(e) {}
+    await clearHwQuizProgressFromServer();
   }
   hwBackToToday();
   return true;
@@ -4901,7 +4998,7 @@ async function promptBeforeLeavingHomework() {
 window.addEventListener("beforeunload", (event) => {
   saveScoreAsync();
   if (isHomeworkProcessActive()) {
-    saveActiveHomeworkProgress();
+    saveActiveHomeworkProgress(true);
     event.preventDefault();
     event.returnValue = "";
     return "";
@@ -4910,7 +5007,7 @@ window.addEventListener("beforeunload", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
     saveScoreAsync();
-    saveActiveHomeworkProgress();
+    saveActiveHomeworkProgress(true);
   }
 });
 
@@ -4929,6 +5026,7 @@ document.addEventListener("click", async event => {
 // =============================================
 const HW_TYPE_LABELS = { recognition: "认字", writing: "写字" };
 function gradeShort(g) { return g ? g[0] + g[g.length - 1] : ""; }
+function escapeHtml(s) { return String(s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 function formatHomeworkMinutes(seconds) {
   const total = Number(seconds) || 0;
   if (total <= 0) return "0分钟";
@@ -4995,6 +5093,15 @@ let hwQuiz = {
   retryMap: {},           // question_key -> retry count
   finishing: false,
 };
+
+function hasSavedHwQuizProgress(saved) {
+  if (!saved) return false;
+  return (saved.currentIndex || 0) > 0
+    || (saved.correctCount || 0) > 0
+    || (saved.wrongItems || []).length > 0
+    || (saved.firstAttemptWrong || []).length > 0
+    || (saved.answeredCorrectly || []).length > 0;
+}
 
 // Homework canvas state (separate from game canvas)
 let hwCanvasStrokes = [];
@@ -5303,16 +5410,16 @@ async function startHwQuiz(assignmentId) {
     const lsRaw = localStorage.getItem(`hwQuiz_saved_${assignmentId}`);
     if (lsRaw) saved = JSON.parse(lsRaw);
   } catch (e) {}
-  if (!saved || !(saved.currentIndex > 0)) {
+  if (!hasSavedHwQuizProgress(saved)) {
     saved = data.saved_progress || null;
   }
-  if (saved && saved.currentIndex > 0) {
+  if (hasSavedHwQuizProgress(saved)) {
     let savedQs = saved.questions || null;
     // Strip old retry copies that inflated the question array
     if (savedQs) savedQs = savedQs.filter(q => !q._isRetry);
     const qs = savedQs || hwQuiz.questions;
-    const ci = Math.min(saved.currentIndex, qs.length);
-    if (ci > 0 && ci < qs.length) {
+    const ci = Math.min(saved.currentIndex || 0, qs.length);
+    if (ci >= 0 && ci < qs.length) {
       if (savedQs) {
         hwQuiz.originalQuestions = savedQs;
         hwQuiz.totalOriginal = savedQs.length;
@@ -5322,12 +5429,14 @@ async function startHwQuiz(assignmentId) {
       hwQuiz.correctCount = saved.correctCount || 0;
       hwQuiz.wrongItems = saved.wrongItems || [];
       hwQuiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
+      hwQuiz.firstAttemptWrong = new Set(saved.firstAttemptWrong || []);
       hwQuiz.retryMap = saved.retryMap || {};
       const te = sanitizeSavedTimeElapsed(saved.timeElapsed);
       hwQuiz.startTime = Date.now() - te * 1000;
     } else {
       // Saved index exceeds cleaned questions — stale save, start fresh
       try { localStorage.removeItem(`hwQuiz_saved_${assignmentId}`); } catch(e) {}
+      await clearHwQuizProgressFromServer();
     }
   }
 
@@ -5833,6 +5942,8 @@ async function hwPinyinSubmit() {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    autoSaveHwQuiz(Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
+    saveHwQuizProgressToServer(false, Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
     advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
@@ -5855,6 +5966,8 @@ async function hwPinyinSubmit() {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    autoSaveHwQuiz();
+    saveHwQuizProgressToServer();
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -5884,6 +5997,8 @@ function hwQuizAnswer(selected, correctIdx) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    autoSaveHwQuiz(Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
+    saveHwQuizProgressToServer(false, Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
     advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
@@ -5906,6 +6021,8 @@ function hwQuizAnswer(selected, correctIdx) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    autoSaveHwQuiz();
+    saveHwQuizProgressToServer();
     advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
   }
 }
@@ -5928,6 +6045,8 @@ function hwHandleHwAnswer(userInput) {
     }
     reportHwStreak(true);
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
+    autoSaveHwQuiz(Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
+    saveHwQuizProgressToServer(false, Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
     advanceOrWait(nextHwQuestion, hint, 800);
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
@@ -5952,6 +6071,8 @@ function hwHandleHwAnswer(userInput) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    autoSaveHwQuiz();
+    saveHwQuizProgressToServer();
     playStrokeAnimation(q.answer, hint);
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
@@ -5962,21 +6083,59 @@ function hwHandleHwAnswer(userInput) {
   }
 }
 
-function autoSaveHwQuiz() {
-  if (!hwQuiz.assignmentId) return;
-  if (hwQuiz.currentIndex >= hwQuiz.questions.length) return;
+function buildHwQuizProgress(currentIndex = hwQuiz.currentIndex) {
+  const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
+  return {
+    currentIndex: currentIndex,
+    correctCount: hwQuiz.correctCount,
+    wrongItems: hwQuiz.wrongItems,
+    timeElapsed: timeElapsed,
+    questions: hwQuiz.questions,
+    answeredCorrectly: [...hwQuiz.answeredCorrectly],
+    firstAttemptWrong: [...hwQuiz.firstAttemptWrong],
+    retryMap: hwQuiz.retryMap,
+  };
+}
+
+function autoSaveHwQuiz(currentIndex = hwQuiz.currentIndex) {
+  if (!hwQuiz.assignmentId || hwQuiz.isPreview) return;
+  if (currentIndex >= hwQuiz.questions.length) return;
   try {
-    const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
-    localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify({
-      currentIndex: hwQuiz.currentIndex,
-      correctCount: hwQuiz.correctCount,
-      wrongItems: hwQuiz.wrongItems,
-      timeElapsed: timeElapsed,
-      questions: hwQuiz.questions,
-      answeredCorrectly: [...hwQuiz.answeredCorrectly],
-      retryMap: hwQuiz.retryMap,
-    }));
+    localStorage.setItem(`hwQuiz_saved_${hwQuiz.assignmentId}`, JSON.stringify(buildHwQuizProgress(currentIndex)));
   } catch(e) {}
+}
+
+async function saveHwQuizProgressToServer(keepalive = false, currentIndex = hwQuiz.currentIndex) {
+  if (!hwQuiz.assignmentId || hwQuiz.isPreview) return false;
+  if (currentIndex >= hwQuiz.questions.length) return false;
+  try {
+    await fetch("/api/homework/save_progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive,
+      body: JSON.stringify({
+        assignment_id: hwQuiz.assignmentId,
+        progress: buildHwQuizProgress(currentIndex),
+      }),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function clearHwQuizProgressFromServer() {
+  if (!hwQuiz.assignmentId || hwQuiz.isPreview) return false;
+  try {
+    await fetch("/api/homework/save_progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignment_id: hwQuiz.assignmentId, progress: {} }),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function nextHwQuestion() {
@@ -5992,6 +6151,7 @@ function nextHwQuestion() {
   }
   hwQuiz.currentIndex++;
   autoSaveHwQuiz();
+  saveHwQuizProgressToServer();
   showHwQuizQuestion();
 }
 
@@ -6119,26 +6279,11 @@ async function confirmHwBackToList() {
   if (choice === 1) {
     // Auto-save already wrote to localStorage; also push to server as backup
     autoSaveHwQuiz();
-    const timeElapsed = Math.floor((Date.now() - hwQuiz.startTime) / 1000);
-    try {
-      await fetch("/api/homework/save_progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assignment_id: hwQuiz.assignmentId,
-          progress: {
-            currentIndex: hwQuiz.currentIndex,
-            correctCount: hwQuiz.correctCount,
-            wrongItems: hwQuiz.wrongItems,
-            timeElapsed: timeElapsed,
-            questions: hwQuiz.questions,
-          },
-        }),
-      });
-    } catch (e) {}
+    await saveHwQuizProgressToServer();
   } else {
     // Discarded — clear localStorage
     try { localStorage.removeItem(`hwQuiz_saved_${hwQuiz.assignmentId}`); } catch(e) {}
+    await clearHwQuizProgressFromServer();
   }
   hwBackToToday();
 }

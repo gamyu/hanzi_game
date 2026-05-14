@@ -428,8 +428,18 @@ let quiz = {
   timerInterval: null,
   answering: false,
   firstAttemptWrong: new Set(),
+  answeredCorrectly: new Set(),
   finishing: false,
 };
+
+function hasSavedQuizProgress(saved) {
+  if (!saved) return false;
+  return (saved.currentIndex || 0) > 0
+    || (saved.correctCount || 0) > 0
+    || (saved.wrongItems || []).length > 0
+    || (saved.firstAttemptWrong || []).length > 0
+    || (saved.answeredCorrectly || []).length > 0;
+}
 
 // Canvas state
 let canvasStrokes = [];
@@ -486,7 +496,6 @@ async function loadToday() {
       : (a.type === "recognition" ? "📖" : "✍️");
     const typeLabel = TYPE_LABELS[a.type];
     const acc = a.total_questions > 0 ? Math.round(a.correct_answers / a.total_questions * 100) : 0;
-
     const unit = isBookReview ? "天" : "课";
     const reviewBadge = isBookReview
       ? '<span style="font-size:11px;padding:1px 5px;background:#ebf4ff;color:#5a67d8;border-radius:3px;margin-left:6px">分册复习</span>'
@@ -579,6 +588,7 @@ async function startQuiz(assignmentId) {
   quiz.startTime = Date.now();
   quiz.answering = false;
   quiz.firstAttemptWrong = new Set();
+  quiz.answeredCorrectly = new Set();
   quiz.finishing = false;
 
   // Restore saved progress — localStorage is auto-saved after every
@@ -588,42 +598,50 @@ async function startQuiz(assignmentId) {
     const lsRaw = localStorage.getItem(`quiz_saved_${assignmentId}`);
     if (lsRaw) saved = JSON.parse(lsRaw);
   } catch (e) {}
-  if (!saved || !(saved.currentIndex > 0)) {
+  if (!hasSavedQuizProgress(saved)) {
     saved = data.saved_progress || null;
   }
-  if (saved && saved.currentIndex > 0) {
+  if (hasSavedQuizProgress(saved)) {
     let savedQs = saved.questions || null;
     if (savedQs) savedQs = savedQs.filter(q => !q._isRetry);
     const qs = savedQs || data.questions;
-    const ci = Math.min(saved.currentIndex, qs.length);
-    if (ci > 0 && ci < qs.length) {
-      const resumeOk = confirm(`上次做到第 ${ci}/${qs.length} 题，是否继续？\n选"取消"将从头开始。`);
+    const ci = Math.min(saved.currentIndex || 0, qs.length);
+    if (ci >= 0 && ci < qs.length) {
+      const resumeOk = confirm(`上次做到第 ${ci + 1}/${qs.length} 题，是否继续？\n选"取消"将从头开始。`);
       if (resumeOk) {
         if (savedQs) quiz.questions = savedQs;
         quiz.currentIndex = ci;
         quiz.correctCount = saved.correctCount || 0;
         quiz.wrongItems = saved.wrongItems || [];
+        quiz.firstAttemptWrong = new Set(saved.firstAttemptWrong || []);
+        quiz.answeredCorrectly = new Set(saved.answeredCorrectly || []);
         const te = sanitizeSavedTimeElapsed(saved.timeElapsed);
         quiz.startTime = Date.now() - te * 1000;
       } else {
         quiz.currentIndex = 0;
         quiz.correctCount = 0;
-      quiz.firstAttemptWrong = new Set();
+        quiz.firstAttemptWrong = new Set();
+        quiz.answeredCorrectly = new Set();
         quiz.wrongItems = [];
         quiz.startTime = Date.now();
         try { localStorage.removeItem(`quiz_saved_${assignmentId}`); } catch(e) {}
+        await clearQuizProgressFromServer();
       }
     } else {
       quiz.currentIndex = 0;
       quiz.correctCount = 0;
       quiz.firstAttemptWrong = new Set();
+      quiz.answeredCorrectly = new Set();
       quiz.wrongItems = [];
       quiz.startTime = Date.now();
+      await clearQuizProgressFromServer();
     }
   } else {
     quiz.currentIndex = 0;
     quiz.correctCount = 0;
     quiz.wrongItems = [];
+    quiz.firstAttemptWrong = new Set();
+    quiz.answeredCorrectly = new Set();
     quiz.startTime = Date.now();
   }
 
@@ -1379,8 +1397,13 @@ async function pinyinSubmit() {
   if (isCorrect) {
     quiz.answering = false;
     if (btn) btn.disabled = true;
-    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+    if (!quiz.answeredCorrectly.has(qKey)) {
+      if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+      quiz.answeredCorrectly.add(qKey);
+    }
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    autoSaveQuiz(Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
+    saveQuizProgressToServer(false, Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
     advanceOrWait(nextQuestion, hint, 800);
   } else {
     quiz.answering = true;
@@ -1399,6 +1422,8 @@ async function pinyinSubmit() {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
       <br>正确答案: <strong style="font-size:28px;color:#38a169;font-family:'Times New Roman','STSong',serif">${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    autoSaveQuiz();
+    saveQuizProgressToServer();
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -1422,8 +1447,13 @@ function quizAnswer(selected) {
 
   if (isCorrect) {
     btns[selected].classList.add("correct");
-    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+    if (!quiz.answeredCorrectly.has(qKey)) {
+      if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+      quiz.answeredCorrectly.add(qKey);
+    }
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
+    autoSaveQuiz(Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
+    saveQuizProgressToServer(false, Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
     advanceOrWait(nextQuestion, hint, 800);
   } else {
     btns[selected].classList.add("wrong");
@@ -1442,6 +1472,8 @@ function quizAnswer(selected) {
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
+    autoSaveQuiz();
+    saveQuizProgressToServer();
     advanceOrWait(nextQuestion, hint, 1600);
   }
 }
@@ -1458,8 +1490,13 @@ function handleHwAnswer(userInput) {
     quiz.answering = false;
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
-    if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+    if (!quiz.answeredCorrectly.has(qKey)) {
+      if (!quiz.firstAttemptWrong.has(qKey)) quiz.correctCount++;
+      quiz.answeredCorrectly.add(qKey);
+    }
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
+    autoSaveQuiz(Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
+    saveQuizProgressToServer(false, Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
     advanceOrWait(nextQuestion, hint, 800);
   } else {
     quiz.answering = true;
@@ -1480,6 +1517,8 @@ function handleHwAnswer(userInput) {
     }
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
+    autoSaveQuiz();
+    saveQuizProgressToServer();
     const skipBtn = document.createElement("button");
     skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
     skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
@@ -1500,19 +1539,58 @@ function scheduleRetry(q) {
   quiz.questions.push(copy);
 }
 
-function autoSaveQuiz() {
+function buildQuizProgress(currentIndex = quiz.currentIndex) {
+  const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
+  return {
+    currentIndex: currentIndex,
+    correctCount: quiz.correctCount,
+    wrongItems: quiz.wrongItems,
+    timeElapsed: timeElapsed,
+    questions: quiz.questions,
+    firstAttemptWrong: [...quiz.firstAttemptWrong],
+    answeredCorrectly: [...quiz.answeredCorrectly],
+  };
+}
+
+function autoSaveQuiz(currentIndex = quiz.currentIndex) {
   if (!quiz.assignmentId) return;
-  if (quiz.currentIndex >= quiz.questions.length) return;
+  if (currentIndex >= quiz.questions.length) return;
   try {
-    const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
-    localStorage.setItem(`quiz_saved_${quiz.assignmentId}`, JSON.stringify({
-      currentIndex: quiz.currentIndex,
-      correctCount: quiz.correctCount,
-      wrongItems: quiz.wrongItems,
-      timeElapsed: timeElapsed,
-      questions: quiz.questions,
-    }));
+    localStorage.setItem(`quiz_saved_${quiz.assignmentId}`, JSON.stringify(buildQuizProgress(currentIndex)));
   } catch(e) {}
+}
+
+async function saveQuizProgressToServer(keepalive = false, currentIndex = quiz.currentIndex) {
+  if (!quiz.assignmentId) return false;
+  if (currentIndex >= quiz.questions.length) return false;
+  try {
+    await fetch("/api/homework/save_progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive,
+      body: JSON.stringify({
+        assignment_id: quiz.assignmentId,
+        progress: buildQuizProgress(currentIndex),
+      }),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function clearQuizProgressFromServer() {
+  if (!quiz.assignmentId) return false;
+  try {
+    await fetch("/api/homework/save_progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignment_id: quiz.assignmentId, progress: {} }),
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function isQuizProcessActive() {
@@ -1523,6 +1601,7 @@ function isQuizProcessActive() {
 window.addEventListener("beforeunload", event => {
   if (!isQuizProcessActive()) return;
   autoSaveQuiz();
+  saveQuizProgressToServer(true);
   event.preventDefault();
   event.returnValue = "";
   return "";
@@ -1531,6 +1610,7 @@ window.addEventListener("beforeunload", event => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden" && isQuizProcessActive()) {
     autoSaveQuiz();
+    saveQuizProgressToServer(true);
   }
 });
 
@@ -1538,9 +1618,13 @@ async function promptBeforeLeavingQuiz() {
   if (!isQuizProcessActive()) return true;
   const choice = await showExitDialog();
   if (choice === 0) return false;
-  if (choice === 1) autoSaveQuiz();
+  if (choice === 1) {
+    autoSaveQuiz();
+    await saveQuizProgressToServer();
+  }
   if (choice === 2) {
     try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
+    await clearQuizProgressFromServer();
   }
   document.getElementById("quizSection").style.display = "none";
   document.getElementById("todaySection").style.display = "";
@@ -1572,6 +1656,7 @@ function nextQuestion() {
   }
   quiz.currentIndex++;
   autoSaveQuiz();
+  saveQuizProgressToServer();
   showQuizQuestion();
 }
 
@@ -1652,25 +1737,10 @@ async function confirmBackToList() {
   if (choice === 1) {
     // Auto-save already wrote to localStorage; also push to server
     autoSaveQuiz();
-    try {
-      const timeElapsed = Math.floor((Date.now() - quiz.startTime) / 1000);
-      await fetch("/api/homework/save_progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          assignment_id: quiz.assignmentId,
-          progress: {
-            currentIndex: quiz.currentIndex,
-            correctCount: quiz.correctCount,
-            wrongItems: quiz.wrongItems,
-            timeElapsed: timeElapsed,
-            questions: quiz.questions,
-          },
-        }),
-      });
-    } catch (e) {}
+    await saveQuizProgressToServer();
   } else {
     try { localStorage.removeItem(`quiz_saved_${quiz.assignmentId}`); } catch(e) {}
+    await clearQuizProgressFromServer();
   }
 
   document.getElementById("quizSection").style.display = "none";
