@@ -5109,9 +5109,37 @@ function sanitizeSavedTimeElapsed(seconds) {
 
 // Homework persistent streak (stored per-user on server, same as game)
 let hwStreak = 0;
+let hwStreakType = "recognition";
+let hwStreakByType = { recognition: 0, writing: 0 };
+
+function questionStreakType(q) {
+  return q && q.mode === "dictation_handwrite" ? "writing" : "recognition";
+}
+
+function setHwStreakType(type) {
+  hwStreakType = type === "writing" ? "writing" : "recognition";
+  hwStreak = hwStreakByType[hwStreakType] || 0;
+  updateHwStreakBar();
+}
+
+async function loadHwStreaks() {
+  try {
+    const coinRes = await fetch("/api/coins");
+    const coinData = await coinRes.json();
+    hwStreakByType = {
+      recognition: coinData.recognition_streak || 0,
+      writing: coinData.writing_streak || 0,
+    };
+    state.coins = coinData.coins || state.coins || 0;
+    const coinsBox = document.getElementById("coinsBox");
+    if (coinsBox) coinsBox.textContent = `金币: ${state.coins}`;
+  } catch (e) {
+    hwStreakByType = { recognition: 0, writing: 0 };
+  }
+}
 
 function getHwStreakMilestones() {
-  const isWriting = hwQuiz.type === "writing";
+  const isWriting = hwStreakType === "writing";
   const milestones = isWriting ? COIN_MILESTONES.writing : COIN_MILESTONES.recognition;
   return (milestones || []).slice().sort((a, b) => a.streak - b.streak);
 }
@@ -5123,19 +5151,27 @@ function updateHwStreakBar() {
   renderStreakBarUI(barState, "hwStreakFill", "hwStreakLabel", "hwStreakReward", "hwStreakMarkers");
 }
 
-function reportHwStreak(correct) {
+function reportHwStreak(correct, type = null) {
   if (!state.user) return;
-  if (hwQuiz.isPreview) return; // no streak for preview
-  const mode = hwQuiz.type === "writing" ? "dictation_handwrite" : "pinyin_typing";
-  if (correct) hwStreak++; else hwStreak = 0;
-  updateHwStreakBar();
+  const activeQuestion = hwQuiz.questions && hwQuiz.questions[hwQuiz.currentIndex];
+  const streakType = type || questionStreakType(activeQuestion);
+  const mode = streakType === "writing" ? "dictation_handwrite" : "pinyin_typing";
+  if (correct) hwStreakByType[streakType] = (hwStreakByType[streakType] || 0) + 1;
+  else hwStreakByType[streakType] = 0;
+  if (hwStreakType === streakType) {
+    hwStreak = hwStreakByType[streakType] || 0;
+    updateHwStreakBar();
+  }
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ correct, mode, source: "homework" }),
   }).then(r => r.json()).then(data => {
-    hwStreak = data.streak;
-    updateHwStreakBar();
+    hwStreakByType[streakType] = data.streak;
+    if (hwStreakType === streakType) {
+      hwStreak = data.streak;
+      updateHwStreakBar();
+    }
     if (data.coins_earned > 0) {
       state.coins = data.coins;
       document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
@@ -5444,8 +5480,9 @@ async function doStartPreview(mode) {
   clearInterval(hwQuiz.timerInterval);
   hwQuiz.timerInterval = setInterval(updateHwTimer, 1000);
 
-  // No streak bar for preview
-  document.getElementById("hwStreakBar").style.display = "none";
+  document.getElementById("hwStreakBar").style.display = "";
+  await loadHwStreaks();
+  setHwStreakType("recognition");
   showHwQuizQuestion();
 }
 
@@ -5526,14 +5563,8 @@ async function startHwQuiz(assignmentId) {
   clearInterval(hwQuiz.timerInterval);
   hwQuiz.timerInterval = setInterval(updateHwTimer, 1000);
 
-  // Load persistent streak for this homework type
-  try {
-    const coinRes = await fetch("/api/coins");
-    const coinData = await coinRes.json();
-    const isWriting = data.type === "writing";
-    hwStreak = isWriting ? (coinData.writing_streak || 0) : (coinData.recognition_streak || 0);
-  } catch (e) { hwStreak = 0; }
-  updateHwStreakBar();
+  await loadHwStreaks();
+  setHwStreakType(data.type === "writing" ? "writing" : "recognition");
 
   showHwQuizQuestion();
 }
@@ -5562,6 +5593,7 @@ function showHwQuizQuestion() {
   if (hwQuiz.currentIndex < 0) hwQuiz.currentIndex = 0;
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const idx = hwQuiz.currentIndex + 1;
+  setHwStreakType(questionStreakType(q));
 
   document.getElementById("hwQuizProgress").textContent = `${idx}/${total}`;
   document.getElementById("hwQuizBarFill").style.width = `${(hwQuiz.currentIndex / total) * 100}%`;
@@ -6428,7 +6460,7 @@ function hwBackToToday() {
 // --- Review Quiz ---
 let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wrongItems: [], startTime: null, timerInterval: null, answering: false, answeredCorrectly: new Set(), retryMap: {}, totalOriginal: 0, isVoluntary: false };
 
-function startHwReview() {
+async function startHwReview() {
   hwQuiz.assignmentId = null;
   hwQuiz.isPreview = false;
   // Build review questions from hwReviewItems
@@ -6505,6 +6537,7 @@ function startHwReview() {
   document.getElementById("hwHistorySection").style.display = "none";
   document.getElementById("hwResultSection").style.display = "none";
   document.getElementById("hwQuizSection").style.display = "";
+  document.getElementById("hwStreakBar").style.display = "";
   // Replace the nav button so save goes to localStorage, not the homework API
   document.getElementById("hwQuizNav").innerHTML = `
     <button onclick="confirmHwReviewBack()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回</button>
@@ -6515,11 +6548,14 @@ function startHwReview() {
     document.getElementById("hwQuizTimer").textContent = `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
   }, 1000);
 
+  await loadHwStreaks();
+  setHwStreakType(questionStreakType(hwReview.questions[hwReview.currentIndex]));
   showHwReviewQuestion();
 }
 
 function showHwReviewQuestion() {
   const q = hwReview.questions[hwReview.currentIndex];
+  setHwStreakType(questionStreakType(q));
   const total = hwReview.totalOriginal;
   const done = hwReview.answeredCorrectly.size;
   document.getElementById("hwQuizProgress").textContent = `复习 ${done}/${total}`;
@@ -6709,10 +6745,12 @@ async function submitHwReviewPinyin() {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
     }
+    reportHwStreak(true, questionStreakType(q));
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwReview.answering = true;
+    reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
@@ -6738,9 +6776,11 @@ function hwReviewAnswer(selected) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
     }
+    reportHwStreak(true, questionStreakType(q));
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
   } else {
+    reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
     advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
@@ -6788,11 +6828,13 @@ async function submitHwReviewHandwrite() {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
     }
+    reportHwStreak(true, questionStreakType(q));
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     advanceOrWait(nextHwReviewQuestion, hint, 800);
   } else {
     hwReview.answering = true;
     hwQuizRecognizedResult = '';
+    reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     const skipBtn = document.createElement("button");
