@@ -856,6 +856,39 @@
     font-size: 15px;
   }
 
+  .shop-records {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .shop-record-panel {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+    padding: 10px;
+  }
+  .shop-record-panel h3 {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: #2d3748;
+  }
+  .shop-record-list {
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 13px;
+  }
+  .shop-record-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid #edf2f7;
+  }
+  .shop-record-row:last-child { border-bottom: none; }
+  .shop-record-main { font-weight: 700; color: #2d3748; }
+  .shop-record-sub { color: #718096; }
+
   .game-minutes-bar {
     text-align: center;
     padding: 8px;
@@ -1581,6 +1614,16 @@
     <div class="shop-coins-bar" id="shopCoinsBar">金币: 0</div>
     <div class="game-minutes-bar" id="shopGameMinutes">剩余游戏时间: 0 分钟</div>
     <div class="shop-grid" id="shopGrid"></div>
+    <div class="shop-records" id="shopRecords" style="display:none">
+      <div class="shop-record-panel">
+        <h3>兑换记录</h3>
+        <div class="shop-record-list" id="shopExchangeRecords"></div>
+      </div>
+      <div class="shop-record-panel">
+        <h3>游戏使用记录</h3>
+        <div class="shop-record-list" id="shopUsageRecords"></div>
+      </div>
+    </div>
     <div id="shopRulesInfo" style="margin-top:12px;padding:12px;background:#f7fafc;border-radius:10px;font-size:13px;color:#718096"></div>
     <button class="modal-close" onclick="document.getElementById('shopModal').classList.add('hidden')">关闭</button>
   </div>
@@ -2391,12 +2434,38 @@ async function showShop() {
       <button class="shop-buy-btn" onclick="buyItem(${item.id}, '${item.name}', ${item.price})" ${canBuy ? "" : "disabled"}>${state.user ? "兑换" : "登录后兑换"}</button>
     </div>`;
   }).join("");
+  renderShopRecords(data);
 
   // Show coin rules dynamically
   const rulesDiv = document.getElementById("shopRulesInfo");
   const recRules = (data.coin_rules?.recognition || []).map(r => `连击${r.streak}→${r.coins}币`).join(", ");
   const wrtRules = (data.coin_rules?.writing || []).map(r => `连击${r.streak}→${r.coins}币`).join(", ");
   rulesDiv.innerHTML = `<strong>赚取金币规则:</strong><br>认字模式: ${recRules || "无"}<br>写字模式: ${wrtRules || "无"}`;
+}
+
+function renderShopRecords(data) {
+  const wrap = document.getElementById("shopRecords");
+  const exchangeEl = document.getElementById("shopExchangeRecords");
+  const usageEl = document.getElementById("shopUsageRecords");
+  if (!state.user) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "";
+  const exchanges = data.exchange_recent || [];
+  const usage = data.game_usage_recent || [];
+  exchangeEl.innerHTML = exchanges.length
+    ? exchanges.map(r => `<div class="shop-record-row">
+        <span class="shop-record-sub">${r.exchange_date}</span>
+        <span class="shop-record-main">${r.coins}金币 → ${r.minutes}分钟</span>
+      </div>`).join("")
+    : '<div class="shop-record-sub">暂无兑换记录</div>';
+  usageEl.innerHTML = usage.length
+    ? usage.map(r => `<div class="shop-record-row">
+        <span class="shop-record-sub">${r.usage_date}</span>
+        <span class="shop-record-main">${r.minutes}分钟 · ${escapeHtml(r.purpose)}</span>
+      </div>`).join("")
+    : '<div class="shop-record-sub">暂无游戏使用记录</div>';
 }
 
 async function buyItem(itemId, name, price) {

@@ -89,6 +89,13 @@
   .badge.review { background: #ebf4ff; color: #5a67d8; }
   .badge.done { background: #c6f6d5; color: #22543d; }
   .badge.pending { background: #feebc8; color: #7b341e; }
+  .record-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .record-panel {
+    border: 1px solid #e2e8f0; border-radius: 10px; background: #fdfdfd;
+    padding: 10px 12px;
+  }
+  .record-panel h3 { font-size: 14px; color: #2d3748; margin-bottom: 8px; }
+  .record-empty { color: #a0aec0; font-size: 13px; padding: 6px 0; }
 
   .hidden { display: none; }
 
@@ -164,6 +171,11 @@
   <div class="card">
     <h2>孩子概况 <span id="childName" style="font-size:14px;color:#5a67d8;margin-left:6px"></span></h2>
     <div class="stat-grid" id="statGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>游戏时间记录</h2>
+    <div id="gameTimeRecordBody">加载中...</div>
   </div>
 
   <div class="card">
@@ -439,6 +451,7 @@ async function loadOverview() {
     <div class="stat"><div class="label">作业计划</div><div class="val" style="font-size:14px">${planStr}</div></div>
     <div class="stat"><div class="label">进度</div><div class="val" style="font-size:14px">${progressStr}</div></div>
   `;
+  renderGameTimeRecords(data.exchange_recent || [], data.game_usage_recent || []);
 
   // Pre-fill plan form from current plan
   const formPlan = plans.find(p => (p.mode || "by_lesson") === document.getElementById("planMode").value) || data.plan;
@@ -473,6 +486,35 @@ async function loadOverview() {
       ${hist.map(a => rowHistory(a)).join("")}
     </table>`;
   }
+}
+
+function renderGameTimeRecords(exchanges, usage) {
+  const body = document.getElementById("gameTimeRecordBody");
+  const exchangeHtml = exchanges.length
+    ? `<table><tr><th>日期</th><th>兑换</th></tr>${exchanges.map(rowExchange).join("")}</table>`
+    : '<div class="record-empty">暂无兑换记录</div>';
+  const usageHtml = usage.length
+    ? `<table><tr><th>日期</th><th>使用</th><th>目的</th></tr>${usage.map(rowUsage).join("")}</table>`
+    : '<div class="record-empty">暂无游戏使用记录</div>';
+  body.innerHTML = `<div class="record-grid">
+    <div class="record-panel"><h3>兑换记录</h3>${exchangeHtml}</div>
+    <div class="record-panel"><h3>游戏使用记录</h3>${usageHtml}</div>
+  </div>`;
+}
+
+function rowExchange(r) {
+  return `<tr>
+    <td>${r.exchange_date}</td>
+    <td>${r.coins}金币 → ${r.minutes}分钟</td>
+  </tr>`;
+}
+
+function rowUsage(r) {
+  return `<tr>
+    <td>${r.usage_date}</td>
+    <td>${r.minutes}分钟</td>
+    <td>${escapeHtml(r.purpose)}</td>
+  </tr>`;
 }
 
 function rowAssignment(a) {

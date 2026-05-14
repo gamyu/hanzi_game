@@ -2141,6 +2141,26 @@ def parent_me():
     })
 
 
+def _game_time_records(db, user_id, limit=50):
+    exchanges = db.execute(
+        """SELECT exchange_date, coins, minutes
+           FROM exchange_records
+           WHERE user_id = %s
+           ORDER BY exchange_date DESC, created_at DESC, id DESC
+           LIMIT %s""",
+        (user_id, limit),
+    ).fetchall()
+    usage = db.execute(
+        """SELECT usage_date, minutes, purpose
+           FROM game_usage_records
+           WHERE user_id = %s
+           ORDER BY usage_date DESC, created_at DESC, id DESC
+           LIMIT %s""",
+        (user_id, limit),
+    ).fetchall()
+    return [dict(r) for r in exchanges], [dict(r) for r in usage]
+
+
 @app.route("/api/parent/overview")
 def parent_overview():
     uid = _current_parent_user_id()
@@ -2203,6 +2223,7 @@ def parent_overview():
            FROM coin_transactions WHERE user_id = %s GROUP BY source""",
         (uid,),
     ).fetchall()
+    exchange_recent, game_usage_recent = _game_time_records(db, uid, limit=50)
 
     return jsonify({
         "user": dict(user),
@@ -2213,6 +2234,8 @@ def parent_overview():
         "wrong_count": wrong_count_row["cnt"] if wrong_count_row else 0,
         "mastered_count": mastered_count_row["cnt"] if mastered_count_row else 0,
         "coin_totals": [dict(r) for r in coin_totals],
+        "exchange_recent": exchange_recent,
+        "game_usage_recent": game_usage_recent,
         "grades": list(CHARACTERS.keys()),
         "lesson_counts": lesson_counts_by_grade(),
         "book_review_days": BOOK_REVIEW_DAYS,
@@ -3336,7 +3359,12 @@ def shop_api():
     db = get_db()
     packages = _get_exchange_packages(db)
     rules = _get_coin_rules(db)
-    return jsonify({"items": packages, "coin_rules": rules})
+    payload = {"items": packages, "coin_rules": rules}
+    if "user_id" in session:
+        exchange_recent, game_usage_recent = _game_time_records(db, session["user_id"], limit=50)
+        payload["exchange_recent"] = exchange_recent
+        payload["game_usage_recent"] = game_usage_recent
+    return jsonify(payload)
 
 
 @app.route("/api/shop/buy", methods=["POST"])
