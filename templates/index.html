@@ -5846,6 +5846,22 @@ function hwPyInputKeydown(e, idx) {
   }
 }
 
+function hwReviewPyInputKeydown(e, idx) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
+    if (nextInput) {
+      nextInput.focus();
+    } else {
+      submitHwReviewPinyin();
+    }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
+    if (nextInput) nextInput.focus();
+  }
+}
+
 function setHwPinyinTone(idx, tone) {
   hwPinyinToneSelections[idx] = tone;
   const area = document.getElementById(`hwPyTypeArea${idx}`);
@@ -6516,23 +6532,67 @@ function showHwReviewQuestion() {
 
   if (q.mode === "pinyin_typing") {
     const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
-    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${q.question}</div>${contextHint}`;
+    const charDisplay = q.question.length > 1
+      ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
+      : q.question;
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}</div>${contextHint}`;
     opts.style.display = "flex";
+    opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
     opts.style.alignItems = "center";
-    opts.style.gap = "10px";
+    opts.style.gap = "12px";
+    const savedPyMode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+    const qChars = q.question.split("");
+    const cellsHTML = qChars.map((ch, i) => `
+      <div class="game-pinyin-cell">
+        <div class="game-pinyin-cell-char">${ch}</div>
+        <div class="pinyin-fourline-box" id="hwPyBox${i}" style="width:100%;height:180px;display:${savedPyMode === 'handwrite' ? 'block' : 'none'}">
+          <div class="pinyin-fourline-lines">
+            <div class="pline pline-1"></div><div class="pline pline-2"></div><div class="pline pline-3"></div>
+          </div>
+          <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
+        </div>
+        <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
+          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwReviewPyInputKeydown(event,${i})">
+          <div class="game-pinyin-tone-row">
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
+            <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
+            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('hwPyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
+          </div>
+        </div>
+        <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
+      </div>`).join('');
     opts.innerHTML = `
-      <input type="text" class="dictation-input" id="hwReviewPinyinInput" placeholder="输入拼音，如 hua1" autocomplete="off" autocapitalize="off">
-      <button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewPinyin()">确认</button>
-      <div style="font-size:12px;color:#a0aec0">可用数字表示声调: hua2=huá，0=轻声；多字请用空格分开</div>
+      <div class="canvas-wrap" style="width:100%">
+        <div class="game-pinyin-mode-toggle">
+          <button id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
+          <button id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
+        </div>
+        <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
+        <div id="pinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
+        <div class="canvas-controls">
+          <button class="canvas-btn" onclick="clearPinyinCanvas()">清除</button>
+          <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
+          <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
+          <button class="canvas-btn" id="pinyinSubmitBtn" onclick="submitHwReviewPinyin()">确认</button>
+        </div>
+        <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
+      </div>
     `;
-    setTimeout(() => document.getElementById("hwReviewPinyinInput")?.focus(), 50);
-    document.getElementById("hwReviewPinyinInput")?.addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        submitHwReviewPinyin();
-      }
-    });
+    hwPinyinCharCount = qChars.length;
+    hwPinyinCellStrokes = Array.from({ length: qChars.length }, () => []);
+    hwPinyinCellRecognized = Array.from({ length: qChars.length }, () => '');
+    hwPinyinCellCandidates = Array.from({ length: qChars.length }, () => []);
+    hwPinyinToneSelections = Array.from({ length: qChars.length }, () => null);
+    hwPinyinBaseInputs = Array.from({ length: qChars.length }, () => '');
+    pinyinState = { recognized: '' };
+    if (savedPyMode === 'handwrite') initHwPinyinCanvases();
+    if (savedPyMode === 'type') {
+      setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+    }
   } else if (q.mode === "dictation_handwrite") {
     const charCount = q.answer.length;
     const cols = charCount >= 3 ? 2 : charCount;
@@ -6597,21 +6657,54 @@ function showHwReviewQuestion() {
   hwReview.answering = true;
 }
 
-function submitHwReviewPinyin() {
+async function submitHwReviewPinyin() {
   if (!hwReview.answering) return;
-  const q = hwReview.questions[hwReview.currentIndex];
-  const input = document.getElementById("hwReviewPinyinInput");
-  const hint = document.getElementById("hwQuizHint");
-  const raw = (input?.value || "").trim();
-  if (!raw) {
-    if (input) input.focus();
+  const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
+  if (mode === 'handwrite') {
+    let anyStrokes = false;
+    for (let i = 0; i < hwPinyinCharCount; i++) {
+      if (hwPinyinCellStrokes[i].length > 0) { anyStrokes = true; break; }
+    }
+    if (!pinyinState.recognized && anyStrokes) {
+      await recognizePinyin();
+    }
+  }
+  const userInput = getHwPinyinAnswer();
+  if (!userInput) {
+    const el = document.getElementById("pinyinRecognized");
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
     return;
   }
-  const userInput = raw.split(/\s+/).map(parseNumberTonePinyin).join(" ");
+  const q = hwReview.questions[hwReview.currentIndex];
+  const hint = document.getElementById("hwQuizHint");
   const qKey = `${q.question}_${q.mode}`;
-  const isCorrect = normalizePinyin(userInput) === normalizePinyin(q.answer);
+  let isCorrect = normalizePinyin(userInput) === normalizePinyin(q.answer);
+  if (!isCorrect && mode === 'handwrite' && Array.isArray(hwPinyinCellCandidates)) {
+    const targetSylls = normalizePinyin(q.answer).split(/\s+/);
+    if (targetSylls.length === hwPinyinCharCount) {
+      let allMatch = true;
+      const matched = [];
+      for (let i = 0; i < hwPinyinCharCount; i++) {
+        const cands = hwPinyinCellCandidates[i] || [];
+        const hit = cands.find(c => normalizePinyin(c) === targetSylls[i]);
+        if (!hit) { allMatch = false; break; }
+        matched.push(hit);
+      }
+      if (allMatch) {
+        isCorrect = true;
+        for (let i = 0; i < hwPinyinCharCount; i++) {
+          hwPinyinCellRecognized[i] = matched[i];
+          const resEl = document.getElementById(`hwPyResult${i}`);
+          if (resEl) resEl.textContent = matched[i];
+        }
+        pinyinState.recognized = matched.join(' ');
+      }
+    }
+  }
+  const btn = document.getElementById("pinyinSubmitBtn");
   if (isCorrect) {
     hwReview.answering = false;
+    if (btn) btn.disabled = true;
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
