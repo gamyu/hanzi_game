@@ -16,6 +16,7 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
+import base64
 import hashlib
 import io
 import json
@@ -409,22 +410,49 @@ def _char_word_examples(char: str, pinyin: str, grade: str) -> list[str]:
     """Return real example words for a single recognition character."""
     if not char or len(char) != 1:
         return []
+
+    def _match_in_word(word: str, word_pinyin: str) -> bool:
+        syllables = (word_pinyin or "").split()
+        if len(word) != len(syllables):
+            return False
+        return any(ch == char and py == pinyin for ch, py in zip(word, syllables))
+
+    examples = []
+
+    def _add_matching_words(words):
+        for w in words:
+            word = w.get("word", "")
+            if len(word) >= 2 and _match_in_word(word, w.get("pinyin", "")) and word not in examples:
+                examples.append(word)
+            if len(examples) >= 2:
+                return True
+        return False
+
+    if _add_matching_words(WORDS.get(grade, [])):
+        return examples
+    for g, ws in WORDS.items():
+        if g != grade and _add_matching_words(ws):
+            return examples
+    if examples:
+        return examples
+
     grade_chars = CHARACTERS.get(grade, [])
     for c in grade_chars:
         if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
-            return c.get("words", [])
-    for c in grade_chars:
-        if c.get("char") == char and c.get("words"):
             return c.get("words", [])
     for chars in CHARACTERS.values():
         for c in chars:
             if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
                 return c.get("words", [])
+    if char in MULTI_PINYIN:
+        return []
+    for c in grade_chars:
+        if c.get("char") == char and c.get("words"):
+            return c.get("words", [])
     for chars in CHARACTERS.values():
         for c in chars:
             if c.get("char") == char and c.get("words"):
                 return c.get("words", [])
-    examples = []
     for w in WORDS.get(grade, []):
         word = w.get("word", "")
         if len(word) >= 2 and char in word:
@@ -449,6 +477,10 @@ def _recognition_word_hint(text: str, pinyin: str, grade: str, existing: str = "
     existing = _string_value(existing)
     if len(text) != 1:
         return ""
+    if text in MULTI_PINYIN:
+        context = _find_context_word(text, pinyin, grade, 0)
+        if context:
+            return context
     if existing and existing != text:
         return existing
     return "、".join(_char_word_examples(text, pinyin, grade))
@@ -1276,6 +1308,12 @@ def init_db():
         db.execute("ALTER TABLE wrong_answer_events ADD COLUMN mastered INTEGER NOT NULL DEFAULT 0")
     if not _col_exists("wrong_answer_events", "mastered_at"):
         db.execute("ALTER TABLE wrong_answer_events ADD COLUMN mastered_at TIMESTAMP")
+    if not _col_exists("contact_messages", "image_name"):
+        db.execute("ALTER TABLE contact_messages ADD COLUMN image_name TEXT NOT NULL DEFAULT ''")
+    if not _col_exists("contact_messages", "image_mime"):
+        db.execute("ALTER TABLE contact_messages ADD COLUMN image_mime TEXT NOT NULL DEFAULT ''")
+    if not _col_exists("contact_messages", "image_data"):
+        db.execute("ALTER TABLE contact_messages ADD COLUMN image_data TEXT NOT NULL DEFAULT ''")
     _backfill_wrong_answer_events(db)
     _backfill_exchange_records(db)
     _seed_linky_game_usage_records(db)
@@ -1343,7 +1381,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "options": options,
             "correct_index": options.index(correct["pinyin"]),
             "answer": correct["pinyin"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         # For 多音字, show a context word so the reader knows which reading is asked
         if correct["char"] in MULTI_PINYIN:
@@ -1363,7 +1401,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "options": options,
             "correct_index": options.index(correct["char"]),
             "answer": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
 
     if mode == "listen_to_char":
@@ -1380,7 +1418,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "options": options,
             "correct_index": options.index(correct["char"]),
             "answer": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
 
     if mode == "read_aloud":
@@ -1390,7 +1428,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "question": correct["char"],
             "answer": correct["pinyin"],
             "answer_char": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
@@ -1404,7 +1442,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "mode": mode,
             "question": correct["char"],
             "answer": correct["pinyin"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
             "display_char": correct["char"],
             "display_pinyin": correct["pinyin"],
         }
@@ -1666,7 +1704,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "mode": mode, "question": correct["char"], "options": options,
             "correct_index": options.index(correct["pinyin"]),
             "answer": correct["pinyin"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
             ln0 = lessons[0] if lessons else 0
@@ -1683,7 +1721,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "mode": mode, "question": correct["pinyin"], "options": options,
             "correct_index": options.index(correct["char"]),
             "answer": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
 
     if mode == "listen_to_char":
@@ -1696,7 +1734,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "question_pinyin": correct["pinyin"],
             "options": options, "correct_index": options.index(correct["char"]),
             "answer": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
 
     if mode == "read_aloud":
@@ -1705,7 +1743,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "question": correct["char"],
             "answer": correct["pinyin"],
             "answer_char": correct["char"],
-            "word_hint": "、".join(correct["words"]),
+            "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
             ln0 = lessons[0] if lessons else 0
@@ -2314,7 +2352,7 @@ def _smtp_config():
     return (host, port, user, pwd, sender, use_ssl)
 
 
-def _send_email(to_email: str, subject: str, body: str, reply_to: str = "") -> tuple[bool, str]:
+def _send_email(to_email: str, subject: str, body: str, reply_to: str = "", attachments=None) -> tuple[bool, str]:
     """Send a plain-text email. Returns (ok, error)."""
     cfg = _smtp_config()
     if cfg is None:
@@ -2327,6 +2365,12 @@ def _send_email(to_email: str, subject: str, body: str, reply_to: str = "") -> t
     if reply_to:
         msg["Reply-To"] = reply_to
     msg.set_content(body)
+    for att in attachments or []:
+        content = att.get("content") or b""
+        mime = att.get("mime") or "application/octet-stream"
+        filename = att.get("filename") or "attachment"
+        maintype, _, subtype = mime.partition("/")
+        msg.add_attachment(content, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=filename)
     try:
         if use_ssl:
             with smtplib.SMTP_SSL(host, port, timeout=10) as s:
@@ -2343,11 +2387,13 @@ def _send_email(to_email: str, subject: str, body: str, reply_to: str = "") -> t
         return False, str(e)[:500]
 
 
-def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str) -> tuple[bool, str]:
+def _send_contact_email(from_name: str, reply_email: str, subject: str, message: str, image_attachment=None) -> tuple[bool, str]:
     """Send a contact-us message to ADMIN_CONTACT_EMAIL via SMTP."""
+    attachments = [image_attachment] if image_attachment else None
     body = "\n".join([
         f"来自用户: {from_name or '(匿名)'}",
         f"回复邮箱: {reply_email or '(未填写)'}",
+        f"图片附件: {image_attachment['filename']}" if image_attachment else "图片附件: 无",
         "",
         message or "",
     ])
@@ -2356,7 +2402,50 @@ def _send_contact_email(from_name: str, reply_email: str, subject: str, message:
         f"[汉字游戏 留言] {subject or '(无主题)'}",
         body,
         reply_to=reply_email,
+        attachments=attachments,
     )
+
+
+def _parse_contact_image(image_data):
+    """Validate and decode one contact-us image attachment."""
+    if not image_data:
+        return None, ""
+    if not isinstance(image_data, dict):
+        return None, "图片数据格式不正确"
+
+    name = os.path.basename((image_data.get("name") or "bug-report-image").strip())[:120]
+    mime = (image_data.get("mime") or "").strip().lower()
+    raw_data = (image_data.get("data") or "").strip()
+    if not raw_data:
+        return None, ""
+
+    if raw_data.startswith("data:"):
+        header, _, raw_data = raw_data.partition(",")
+        if ";base64" not in header:
+            return None, "图片格式不正确"
+        if not mime:
+            mime = header[5:].split(";", 1)[0].lower()
+
+    allowed = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    if mime not in allowed:
+        return None, "图片只能是 PNG、JPG、GIF 或 WebP 格式"
+
+    try:
+        content = base64.b64decode(raw_data, validate=True)
+    except Exception:
+        return None, "图片读取失败，请重新选择"
+    if len(content) > 5 * 1024 * 1024:
+        return None, "图片不能超过 5MB"
+    if not name:
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}[mime]
+        name = f"bug-report.{ext}"
+
+    return {
+        "filename": name,
+        "mime": mime,
+        "data": base64.b64encode(content).decode("ascii"),
+        "content": content,
+    }, ""
 
 
 def _mask_email(email: str) -> str:
@@ -2466,16 +2555,26 @@ def contact_api():
 
     user_id = session.get("user_id")
     username = session.get("username", "") or (data.get("username") or "").strip()[:50]
+    image_attachment, image_error = _parse_contact_image(data.get("image"))
+    if image_error:
+        return jsonify({"error": image_error}), 400
 
     # Send email first — capture result so we can store alongside the message.
-    ok, err = _send_contact_email(username, reply_email, subject, message)
+    ok, err = _send_contact_email(username, reply_email, subject, message, image_attachment=image_attachment)
 
     db = get_db()
     db.execute(
         """INSERT INTO contact_messages
-                (user_id, username, reply_email, subject, message, email_sent, email_error)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (user_id, username, reply_email, subject, message, 1 if ok else 0, "" if ok else err),
+                (user_id, username, reply_email, subject, message,
+                 image_name, image_mime, image_data, email_sent, email_error)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (
+            user_id, username, reply_email, subject, message,
+            image_attachment["filename"] if image_attachment else "",
+            image_attachment["mime"] if image_attachment else "",
+            image_attachment["data"] if image_attachment else "",
+            1 if ok else 0, "" if ok else err,
+        ),
     )
     db.commit()
 
@@ -2493,6 +2592,7 @@ def admin_messages():
     db = get_db()
     rows = db.execute(
         """SELECT id, user_id, username, reply_email, subject, message,
+                  image_name, image_mime, image_data,
                   email_sent, email_error, created_at
            FROM contact_messages ORDER BY created_at DESC LIMIT 100"""
     ).fetchall()
@@ -3811,7 +3911,7 @@ def homework_preview(assignment_id):
                 "mode": mode, "question": correct["char"],
                 "options": options, "correct_index": options.index(correct["pinyin"]),
                 "answer": correct["pinyin"],
-                "word_hint": "、".join(correct["words"]),
+                "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
                 "display_char": correct["char"], "display_pinyin": correct["pinyin"],
             }
             if correct["char"] in MULTI_PINYIN:
@@ -3829,7 +3929,7 @@ def homework_preview(assignment_id):
                 "mode": mode, "question": correct["pinyin"],
                 "options": options, "correct_index": options.index(correct["char"]),
                 "answer": correct["char"],
-                "word_hint": "、".join(correct["words"]),
+                "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
                 "display_char": correct["char"], "display_pinyin": correct["pinyin"],
             })
         elif mode == "listen_to_char":
@@ -3842,7 +3942,7 @@ def homework_preview(assignment_id):
                 "question_pinyin": correct["pinyin"],
                 "options": options, "correct_index": options.index(correct["char"]),
                 "answer": correct["char"],
-                "word_hint": "、".join(correct["words"]),
+                "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
                 "display_char": correct["char"], "display_pinyin": correct["pinyin"],
             })
 

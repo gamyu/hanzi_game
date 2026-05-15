@@ -2552,6 +2552,14 @@ async function loadAdminMessages() {
       const replyLink = m.reply_email
         ? `<a href="mailto:${escape(m.reply_email)}" style="color:#5a67d8;margin-left:6px">✉ 回复 ${escape(m.reply_email)}</a>`
         : '';
+      const imageHtml = m.image_data
+        ? `<div style="margin-top:8px">
+            <a href="data:${escape(m.image_mime)};base64,${m.image_data}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#5a67d8;text-decoration:none">
+              <img src="data:${escape(m.image_mime)};base64,${m.image_data}" alt="${escape(m.image_name || '留言图片')}" style="width:96px;height:72px;object-fit:cover;border:1px solid #e2e8f0;border-radius:6px">
+              <span style="font-size:12px">${escape(m.image_name || '查看图片')}</span>
+            </a>
+          </div>`
+        : '';
       return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
           <div style="font-size:13px;color:#4a5568"><strong>${escape(m.username) || '(匿名)'}</strong> · ${escape(m.created_at)}</div>
@@ -2559,6 +2567,7 @@ async function loadAdminMessages() {
         </div>
         ${m.subject ? `<div style="font-size:14px;font-weight:600;color:#2d3748;margin-bottom:4px">${escape(m.subject)}</div>` : ''}
         <div style="font-size:13px;color:#2d3748;white-space:pre-wrap;line-height:1.5">${escape(m.message)}</div>
+        ${imageHtml}
         <div style="font-size:12px;margin-top:4px">${replyLink}</div>
       </div>`;
     }).join('');
@@ -4391,6 +4400,82 @@ function parseNumberTonePinyin(input) {
   return input;
 }
 
+const PINYIN_VALID_BASES = new Set(`
+  a ai an ang ao ba bai ban bang bao bei ben beng bi bian biao bie bin bing bo bu
+  ca cai can cang cao ce cen ceng cha chai chan chang chao che chen cheng chi chong chou chu chua chuai chuan chuang chui chun chuo ci cong cou cu cuan cui cun cuo
+  da dai dan dang dao de dei den deng di dia dian diao die ding diu dong dou du duan dui dun duo
+  e ei en eng er
+  fa fan fang fei fen feng fo fou fu
+  ga gai gan gang gao ge gei gen geng gong gou gu gua guai guan guang gui gun guo
+  ha hai han hang hao he hei hen heng hng hong hou hu hua huai huan huang hui hun huo
+  ji jia jian jiang jiao jie jin jing jiong jiu ju juan jue jun
+  ka kai kan kang kao ke kei ken keng kong kou ku kua kuai kuan kuang kui kun kuo
+  la lai lan lang lao le lei leng li lia lian liang liao lie lin ling liu lo long lou lu lü luan lüe lun luo
+  m ma mai man mang mao me mei men meng mi mian miao mie min ming miu mo mou mu
+  n na nai nan nang nao ne nei nen neng ng ni nian niang niao nie nin ning niu nong nou nu nü nuan nüe nun nuo
+  o ou
+  pa pai pan pang pao pei pen peng pi pian piao pie pin ping po pou pu
+  qi qia qian qiang qiao qie qin qing qiong qiu qu quan que qun
+  ran rang rao re ren reng ri rong rou ru ruan rui run ruo
+  sa sai san sang sao se sen seng sha shai shan shang shao she shei shen sheng shi shou shu shua shuai shuan shuang shui shun shuo si song sou su suan sui sun suo
+  ta tai tan tang tao te teng ti tian tiao tie ting tong tou tu tuan tui tun tuo
+  wa wai wan wang wei wen weng wo wu
+  xi xia xian xiang xiao xie xin xing xiong xiu xu xuan xue xun
+  ya yan yang yao ye yi yin ying yo yong you yu yuan yue yun
+  za zai zan zang zao ze zei zen zeng zha zhai zhan zhang zhao zhe zhen zheng zhi zhong zhou zhu zhua zhuai zhuan zhuang zhui zhun zhuo zi zong zou zu zuan zui zun zuo
+`.trim().split(/\s+/));
+
+const PINYIN_TONE_STRIP = {
+  'ā':'a','á':'a','ǎ':'a','à':'a',
+  'ē':'e','é':'e','ě':'e','è':'e',
+  'ī':'i','í':'i','ǐ':'i','ì':'i',
+  'ō':'o','ó':'o','ǒ':'o','ò':'o',
+  'ū':'u','ú':'u','ǔ':'u','ù':'u',
+  'ǖ':'ü','ǘ':'ü','ǚ':'ü','ǜ':'ü',
+};
+
+function cleanPinyinToken(s) {
+  return String(s || '').trim().toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/u:/g, 'ü')
+    .replace(/v/g, 'ü');
+}
+
+function stripPinyinTone(s) {
+  return String(s || '').replace(/[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, ch => PINYIN_TONE_STRIP[ch] || ch);
+}
+
+function isValidPinyinSyllable(s) {
+  const clean = cleanPinyinToken(s);
+  if (!clean || /\s/.test(clean)) return false;
+  if (!/^[a-züāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ0-4]+$/.test(clean)) return false;
+  const digitMatch = clean.match(/[0-4]/g);
+  if (digitMatch && (digitMatch.length > 1 || !/[0-4]$/.test(clean))) return false;
+  const withoutToneNumber = clean.replace(/[0-4]$/, '');
+  const base = stripPinyinTone(withoutToneNumber);
+  return PINYIN_VALID_BASES.has(base);
+}
+
+function findInvalidPinyinSyllable(answer) {
+  const parts = String(answer || '').trim().split(/\s+/).filter(Boolean);
+  return parts.find(part => !isValidPinyinSyllable(part)) || '';
+}
+
+function sanitizePinyinCandidates(candidates) {
+  const seen = new Set();
+  const cleaned = [];
+  for (const cand of candidates || []) {
+    const token = cleanPinyinToken(cand).replace(/\s+/g, '');
+    if (!isValidPinyinSyllable(token)) continue;
+    const normalized = parseNumberTonePinyin(token);
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      cleaned.push(normalized);
+    }
+  }
+  return cleaned;
+}
+
 let pinyinEraserMode = false;
 function togglePinyinEraser() {
   pinyinEraserMode = !pinyinEraserMode;
@@ -4553,7 +4638,7 @@ async function recognizeGamePinyin() {
       const data = await res.json();
       try {
         if (data[0] === "SUCCESS") {
-          const cands = (data[1][0][1] || []).filter(Boolean);
+          const cands = sanitizePinyinCandidates((data[1][0][1] || []).filter(Boolean));
           return { top: cands[0] || '', candidates: cands };
         }
       } catch(e) {}
@@ -4567,7 +4652,7 @@ async function recognizeGamePinyin() {
     }
     const combined = results.map(r => r.top).join(' ').trim();
     gamePinyinState.recognized = combined;
-    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
+    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未识别出合法拼音，请重写或改用打字";
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -4597,7 +4682,7 @@ function getGamePinyinAnswer() {
 }
 
 function normalizePinyinGame(s) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ');
+  return String(s || '').toLowerCase().trim().split(/\s+/).map(parseNumberTonePinyin).join(' ');
 }
 
 async function submitGamePinyin() {
@@ -4615,7 +4700,13 @@ async function submitGamePinyin() {
   const userAnswer = getGamePinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("gamePinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    return;
+  }
+  const invalidPinyin = findInvalidPinyinSyllable(userAnswer);
+  if (invalidPinyin) {
+    const el = document.getElementById("gamePinyinRecognized");
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
     return;
   }
   const q = state.currentQ;
@@ -5604,11 +5695,11 @@ function showHwQuizQuestion() {
 
   if (q.mode === "pinyin_typing") {
     // 给汉字注音 mode: per-character cells with handwrite/type toggle
-    const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
+    const contextHint = q.context_word ? `<span style="font-size:24px;color:#718096;margin-left:8px">(${q.context_word})</span>` : '';
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}</div>${contextHint}`;
+    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}${contextHint}</div>`;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -5956,7 +6047,7 @@ async function recognizePinyin() {
       const data = await res.json();
       try {
         if (data[0] === "SUCCESS") {
-          const cands = (data[1][0][1] || []).filter(Boolean);
+          const cands = sanitizePinyinCandidates((data[1][0][1] || []).filter(Boolean));
           return { top: cands[0] || '', candidates: cands };
         }
       } catch(e) {}
@@ -5970,7 +6061,7 @@ async function recognizePinyin() {
     }
     const combined = results.map(r => r.top).join(' ').trim();
     pinyinState.recognized = combined;
-    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未能识别，请清除后重写";
+    if (recEl) recEl.textContent = combined ? `识别结果: ${combined}` : "未识别出合法拼音，请重写或改用打字";
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -5998,7 +6089,7 @@ function getHwPinyinAnswer() {
 }
 
 function normalizePinyin(s) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ');
+  return String(s || '').toLowerCase().trim().split(/\s+/).map(parseNumberTonePinyin).join(' ');
 }
 
 async function hwPinyinSubmit() {
@@ -6016,7 +6107,13 @@ async function hwPinyinSubmit() {
   const userAnswer = getHwPinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    return;
+  }
+  const invalidPinyin = findInvalidPinyinSyllable(userAnswer);
+  if (invalidPinyin) {
+    const el = document.getElementById("pinyinRecognized");
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
     return;
   }
   const q = hwQuiz.questions[hwQuiz.currentIndex];
@@ -6567,11 +6664,11 @@ function showHwReviewQuestion() {
   hint.innerHTML = "";
 
   if (q.mode === "pinyin_typing") {
-    const contextHint = q.context_word ? `<div style="font-size:16px;color:#718096;margin-top:4px">(${q.context_word})</div>` : '';
+    const contextHint = q.context_word ? `<span style="font-size:24px;color:#718096;margin-left:8px">(${q.context_word})</span>` : '';
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}</div>${contextHint}`;
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}${contextHint}</div>`;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -6708,7 +6805,13 @@ async function submitHwReviewPinyin() {
   const userInput = getHwPinyinAnswer();
   if (!userInput) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "请先写拼音";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    return;
+  }
+  const invalidPinyin = findInvalidPinyinSyllable(userInput);
+  if (invalidPinyin) {
+    const el = document.getElementById("pinyinRecognized");
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
     return;
   }
   const q = hwReview.questions[hwReview.currentIndex];

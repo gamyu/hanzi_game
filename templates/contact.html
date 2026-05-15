@@ -51,6 +51,22 @@
     box-shadow: 0 0 0 3px rgba(102,126,234,0.15);
   }
   textarea { min-height: 140px; resize: vertical; }
+  input[type=file] {
+    width: 100%; padding: 9px 11px; border: 1px dashed #a0aec0; border-radius: 8px;
+    font-size: 13px; font-family: inherit; background: #f7fafc; color:#4a5568;
+  }
+  .image-preview {
+    display: none; gap: 10px; align-items: center; margin-top: 8px;
+    padding: 8px; border: 1px solid #e2e8f0; border-radius: 8px; background:#f8fafc;
+  }
+  .image-preview img {
+    width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid #e2e8f0;
+  }
+  .image-preview .meta { flex: 1; min-width: 0; font-size: 12px; color:#4a5568; overflow-wrap:anywhere; }
+  .image-preview button {
+    border: 1px solid #cbd5e0; background:#fff; color:#4a5568;
+    border-radius: 6px; padding: 6px 9px; cursor:pointer;
+  }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
   button.primary {
     background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
@@ -103,6 +119,14 @@
   <textarea id="c-message" maxlength="4000" placeholder="请写下你的建议、问题或反馈..."></textarea>
   <div class="char-counter"><span id="cCount">0</span> / 4000</div>
 
+  <label for="c-image">图片 <span style="color:#a0aec0;font-weight:400">(选填，5MB以内)</span></label>
+  <input type="file" id="c-image" accept="image/png,image/jpeg,image/gif,image/webp" onchange="handleContactImage(event)">
+  <div id="cImagePreview" class="image-preview">
+    <img id="cImageThumb" alt="问题截图预览">
+    <div class="meta" id="cImageMeta"></div>
+    <button type="button" onclick="clearContactImage()">移除</button>
+  </div>
+
   <div class="row">
     <button id="cSubmit" class="primary" onclick="submitContact()">提交留言</button>
     <a class="mailto-btn" id="cMailto" href="#">✉️ 直接发邮件</a>
@@ -116,6 +140,7 @@
 
 <script>
 const ADMIN_EMAIL = "{{ admin_email }}";
+let selectedContactImage = null;
 
 function buildMailtoLink() {
   const name = document.getElementById("c-username").value.trim();
@@ -127,6 +152,10 @@ function buildMailtoLink() {
   if (email) bodyLines.push(`回复邮箱: ${email}`);
   if (bodyLines.length) bodyLines.push("");
   bodyLines.push(message || "");
+  if (selectedContactImage) {
+    bodyLines.push("");
+    bodyLines.push(`已选择图片: ${selectedContactImage.name}（直接邮件发送时请手动附上这张图片）`);
+  }
   const params = new URLSearchParams();
   params.set("subject", subject || "汉字游戏 留言");
   params.set("body", bodyLines.join("\n"));
@@ -145,6 +174,57 @@ document.getElementById("c-message").addEventListener("input", () => {
 });
 refreshMailto();
 
+function showContactMessage(text, type = "err") {
+  const msgEl = document.getElementById("cMsg");
+  msgEl.className = `msg ${type}`;
+  msgEl.textContent = text;
+  msgEl.style.display = "";
+}
+
+function handleContactImage(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) {
+    clearContactImage();
+    return;
+  }
+  const allowed = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  if (!allowed.includes(file.type)) {
+    clearContactImage();
+    showContactMessage("图片只能是 PNG、JPG、GIF 或 WebP 格式");
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    clearContactImage();
+    showContactMessage("图片不能超过 5MB");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = String(reader.result || "");
+    selectedContactImage = {
+      name: file.name,
+      mime: file.type,
+      data: dataUrl,
+    };
+    document.getElementById("cImageThumb").src = dataUrl;
+    document.getElementById("cImageMeta").textContent = `${file.name} · ${Math.round(file.size / 1024)}KB`;
+    document.getElementById("cImagePreview").style.display = "flex";
+    refreshMailto();
+  };
+  reader.onerror = () => showContactMessage("图片读取失败，请重新选择");
+  reader.readAsDataURL(file);
+}
+
+function clearContactImage() {
+  selectedContactImage = null;
+  const input = document.getElementById("c-image");
+  if (input) input.value = "";
+  document.getElementById("cImageThumb").removeAttribute("src");
+  document.getElementById("cImageMeta").textContent = "";
+  document.getElementById("cImagePreview").style.display = "none";
+  refreshMailto();
+}
+
 async function submitContact() {
   const username = document.getElementById("c-username").value.trim();
   const reply_email = document.getElementById("c-email").value.trim();
@@ -155,7 +235,7 @@ async function submitContact() {
 
   msgEl.style.display = "none";
   if (!message) {
-    msgEl.className = "msg err"; msgEl.textContent = "请填写留言内容"; msgEl.style.display = "";
+    showContactMessage("请填写留言内容");
     return;
   }
   btn.disabled = true; btn.textContent = "提交中...";
@@ -163,7 +243,7 @@ async function submitContact() {
     const res = await fetch("/api/contact", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, reply_email, subject, message }),
+      body: JSON.stringify({ username, reply_email, subject, message, image: selectedContactImage }),
     });
     const data = await res.json();
     if (!res.ok || data.error) {
@@ -179,6 +259,7 @@ async function submitContact() {
       document.getElementById("c-subject").value = "";
       document.getElementById("c-message").value = "";
       document.getElementById("cCount").textContent = "0";
+      clearContactImage();
       refreshMailto();
     }
   } catch (e) {
