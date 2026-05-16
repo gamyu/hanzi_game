@@ -858,7 +858,7 @@ function showQuizQuestion() {
 function checkStrokeQuality(strokes, canvas) {
   let totalPoints = 0;
   for (const s of strokes) totalPoints += s[0].length;
-  if (totalPoints < 8) return "笔画太少，请认真书写后再提交";
+  if (totalPoints < 8) return "书写痕迹太短，请写完整后再提交";
   let allX = [], allY = [];
   for (const s of strokes) { allX.push(...s[0]); allY.push(...s[1]); }
   const minX = Math.min(...allX), maxX = Math.max(...allX);
@@ -871,8 +871,11 @@ function checkStrokeQuality(strokes, canvas) {
   return null;
 }
 
-// --- Expected stroke-count check (rejects scribbles even when Google
-// recognises the right answer because user wrote extra strokes around it).
+// --- Character data cache ---
+// Do not use stroke count to decide whether an answer is correct: Chinese has
+// valid one-stroke characters, and children often connect or split strokes.
+// The HanziWriter character data is still used by optional structure/stroke
+// order helpers, never as a correctness gate by raw stroke count.
 const _hwExpectedStrokeCache = {};
 const _hwCharDataCache = {};
 async function getHwCharData(ch) {
@@ -899,13 +902,8 @@ async function getHwExpectedStrokeCount(chars) {
   return total;
 }
 function hwStrokeCountErrorMessage(userCount, expected) {
-  if (expected === null || expected === 0) return null;
-  if (userCount > expected * 1.6) {
-    return `笔画过多 (写了${userCount}笔，应为${expected}笔)，请清除后重写`;
-  }
-  if (userCount < Math.max(2, Math.floor(expected * 0.5))) {
-    return `笔画过少 (写了${userCount}笔，应为${expected}笔)`;
-  }
+  void userCount;
+  void expected;
   return null;
 }
 
@@ -1004,17 +1002,9 @@ async function validateHwStrokeStructure(strokes, layout, answer) {
   return null;
 }
 async function validateHwCellStrokeCounts(strokes, layout, answer) {
-  if (!layout || !answer) return null;
-  const chars = answer.split("");
-  if (chars.length === 0) return null;
-  const cellStrokes = splitStrokesByCells(strokes, layout);
-  for (let i = 0; i < chars.length; i++) {
-    const userCount = cellStrokes[i] ? cellStrokes[i].length : 0;
-    if (userCount === 0) continue;
-    const expected = await getHwExpectedStrokeCount([chars[i]]);
-    const err = hwStrokeCountErrorMessage(userCount, expected);
-    if (err) return `第${i + 1}个字: ${err}`;
-  }
+  void strokes;
+  void layout;
+  void answer;
   return null;
 }
 
@@ -2004,23 +1994,10 @@ async function submitHw() {
     return;
   }
 
-  // Stroke-count sanity check when the recognition claims the right answer.
-  // Catches the case where Google's API ignores extra scribbles next to a
-  // correctly-written character.
+  // If recognition matched the answer, do not reject by raw stroke count.
+  // One-stroke characters and connected handwriting are valid.
   const q = quiz.questions[quiz.currentIndex];
   if (q && hwRecognizedResult === q.answer) {
-    let countErr = null;
-    if (hwCellLayout && hwCellLayout.charCount > 1) {
-      countErr = await validateHwCellStrokeCounts(canvasStrokes, hwCellLayout, q.answer);
-    } else {
-      const expected = await getHwExpectedStrokeCount(q.answer.split(""));
-      countErr = hwStrokeCountErrorMessage(canvasStrokes.length, expected);
-    }
-    if (countErr) {
-      if (statusEl) statusEl.textContent = countErr;
-      hwRecognizedResult = '';
-      return;
-    }
     const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
     if (structureErr) {
       if (statusEl) statusEl.textContent = structureErr;

@@ -3672,8 +3672,8 @@ function checkStrokeQuality(strokes, canvas) {
   // Count total points across all strokes
   let totalPoints = 0;
   for (const s of strokes) totalPoints += s[0].length;
-  // Too few points = random dots/taps
-  if (totalPoints < 8) return "笔画太少，请认真书写后再提交";
+  // Too few sampled points = random dots/taps, not a one-stroke character.
+  if (totalPoints < 8) return "书写痕迹太短，请写完整后再提交";
   // Check if strokes cover too much area (scribble / black blob)
   let allX = [], allY = [];
   for (const s of strokes) { allX.push(...s[0]); allY.push(...s[1]); }
@@ -3690,10 +3690,11 @@ function checkStrokeQuality(strokes, canvas) {
   return null; // OK
 }
 
-// --- Expected stroke count check ---
-// Google's handwriting API can match a character even with extra scribbled
-// strokes, so we double-check that the user's stroke count is in the right
-// ballpark. Caches per-character lookup since loadCharacterData hits the CDN.
+// --- Character data cache ---
+// Do not use stroke count to decide whether an answer is correct: Chinese has
+// valid one-stroke characters, and children often connect or split strokes.
+// The HanziWriter character data is still used by optional structure/stroke
+// order helpers, never as a correctness gate by raw stroke count.
 const _expectedStrokeCache = {};
 const _hanziCharDataCache = {};
 async function getHanziCharDataCached(ch) {
@@ -3720,18 +3721,9 @@ async function getExpectedStrokeCountForChars(chars) {
   return total;
 }
 
-// Returns an error message if user's stroke count is outside the acceptable
-// range vs the expected character(s), else null. Tolerance is intentionally
-// loose on the low side (kids may simplify) but tight on the high side
-// (extra strokes signal scribbling).
 function strokeCountErrorMessage(userCount, expected) {
-  if (expected === null || expected === 0) return null;
-  if (userCount > expected * 1.6) {
-    return `笔画过多 (写了${userCount}笔，应为${expected}笔)，请清除后重写`;
-  }
-  if (userCount < Math.max(2, Math.floor(expected * 0.5))) {
-    return `笔画过少 (写了${userCount}笔，应为${expected}笔)`;
-  }
+  void userCount;
+  void expected;
   return null;
 }
 
@@ -3852,17 +3844,9 @@ async function validateStrokeStructure(strokes, layout, answer, splitFn) {
 
 // Per-cell stroke count validation for multi-char canvases.
 async function validateCellStrokeCounts(strokes, layout, answer) {
-  if (!layout || !answer) return null;
-  const chars = answer.split("");
-  if (chars.length === 0) return null;
-  const cellStrokes = splitStrokesByCellsMain(strokes, layout);
-  for (let i = 0; i < chars.length; i++) {
-    const expected = await getExpectedStrokeCountForChars([chars[i]]);
-    const userCount = cellStrokes[i] ? cellStrokes[i].length : 0;
-    if (userCount === 0) continue; // empty cell handled elsewhere
-    const err = strokeCountErrorMessage(userCount, expected);
-    if (err) return `第${i + 1}个字: ${err}`;
-  }
+  void strokes;
+  void layout;
+  void answer;
   return null;
 }
 
@@ -4188,23 +4172,10 @@ async function submitHandwriting() {
     return;
   }
 
-  // Stroke-count sanity check: only enforced when Google's recognition matched
-  // the answer. If it didn't match, the answer is wrong anyway and the count
-  // doesn't add information.
+  // If recognition matched the answer, do not reject by raw stroke count.
+  // One-stroke characters and connected handwriting are valid.
   if (state.currentQ && hwRecognizedResult === state.currentQ.answer) {
     const statusEl = document.getElementById("hwStatus");
-    let countErr = null;
-    if (mainCellLayout && mainCellLayout.charCount > 1) {
-      countErr = await validateCellStrokeCounts(canvasStrokes, mainCellLayout, state.currentQ.answer);
-    } else {
-      const expected = await getExpectedStrokeCountForChars(state.currentQ.answer.split(""));
-      countErr = strokeCountErrorMessage(canvasStrokes.length, expected);
-    }
-    if (countErr) {
-      if (statusEl) statusEl.textContent = countErr;
-      hwRecognizedResult = ''; // force re-recognition next submit
-      return;
-    }
     const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
     if (structureErr) {
       if (statusEl) statusEl.textContent = structureErr;
@@ -6909,16 +6880,7 @@ async function submitHwReviewHandwrite() {
 
   const qKey = `${q.question}_${q.mode}`;
   if (userInput === q.answer) {
-    // Stroke-count sanity check (catches scribbling around a correct shape).
-    const countErr = hwQuizCellLayout && hwQuizCellLayout.charCount > 1
-      ? await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer)
-      : strokeCountErrorMessage(hwCanvasStrokes.length, await getExpectedStrokeCountForChars(q.answer.split("")));
-    if (countErr) {
-      const recEl = document.getElementById("hwQuizRecognized");
-      if (recEl) recEl.textContent = countErr;
-      hwQuizRecognizedResult = '';
-      return;
-    }
+    // Correct recognition is accepted regardless of raw stroke count.
     const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
     if (structureErr) {
       const recEl = document.getElementById("hwQuizRecognized");
@@ -7170,19 +7132,8 @@ async function submitHwQuiz() {
   }
   // Check stroke order if enabled and answer is correct
   const q = hwQuiz.questions[hwQuiz.currentIndex];
-  // Stroke-count sanity check (only when claiming correct).
+  // Correct recognition is accepted regardless of raw stroke count.
   if (q && hwQuizRecognizedResult2 === q.answer) {
-    const countErr = hwQuizCellLayout && hwQuizCellLayout.charCount > 1
-      ? await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer)
-      : strokeCountErrorMessage(hwCanvasStrokes.length, await getExpectedStrokeCountForChars(q.answer.split("")));
-    if (countErr) {
-      const statusEl = document.getElementById("hwQuizStatus");
-      if (statusEl) statusEl.textContent = countErr;
-      const recEl = document.getElementById("hwQuizRecognized2");
-      if (recEl) recEl.textContent = countErr;
-      hwQuizRecognizedResult2 = '';
-      return;
-    }
     const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
     if (structureErr) {
       const statusEl = document.getElementById("hwQuizStatus");
