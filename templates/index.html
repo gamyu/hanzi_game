@@ -3734,6 +3734,43 @@ function handwritingNotRecognizedMessage(strokes, emptyMessage = "请先写字")
   return emptyMessage;
 }
 
+function hanziTextLength(text) {
+  return Array.from(String(text || "").trim()).length;
+}
+
+function expectedHanziLength(answer, fallback = 1) {
+  return Math.max(1, hanziTextLength(answer) || fallback);
+}
+
+function handwritingCandidatesFromData(data) {
+  try {
+    if (data[0] !== "SUCCESS") return [];
+    return (data[1][0][1] || [])
+      .map(s => String(s || "").trim().replace(/\s+/g, ""))
+      .filter(Boolean);
+  } catch(e) {
+    return [];
+  }
+}
+
+function pickHandwritingCandidate(data, expectedLength) {
+  const candidates = handwritingCandidatesFromData(data);
+  if (expectedLength > 0) {
+    const sameLength = candidates.find(c => hanziTextLength(c) === expectedLength);
+    if (sameLength) return sameLength;
+    return "";
+  }
+  return candidates[0] || "";
+}
+
+function handwritingLengthMismatchMessage(data, expectedLength) {
+  const first = handwritingCandidatesFromData(data)[0] || "";
+  if (first && expectedLength > 0 && hanziTextLength(first) !== expectedLength) {
+    return `识别结果字数不对：应为${expectedLength}个字，识别成${hanziTextLength(first)}个字。请把每个字写在对应田字格里。`;
+  }
+  return "";
+}
+
 function sampleIndexedPoints(xs, ys, maxSamples, transform) {
   if (!xs || !ys || xs.length === 0) return [];
   const count = Math.min(maxSamples, xs.length);
@@ -4068,6 +4105,53 @@ function splitStrokesByCellsMain(strokes, layout) {
   return cellStrokes;
 }
 
+async function fetchHandwritingCandidate(strokes, width, height, expectedLength) {
+  const res = await fetch("/api/handwriting", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ strokes, width, height }),
+  });
+  const data = await res.json();
+  return {
+    text: pickHandwritingCandidate(data, expectedLength),
+    mismatch: handwritingLengthMismatchMessage(data, expectedLength),
+  };
+}
+
+async function recognizeHanziCanvasText(strokes, layout, answer, canvas) {
+  const expectedTotal = expectedHanziLength(answer);
+  if (layout && layout.charCount > 1) {
+    const cellStrokes = splitStrokesByCellsMain(strokes, layout);
+    const results = await Promise.all(cellStrokes.map(async (cell, idx) => {
+      if (idx >= expectedTotal) return { text: "", mismatch: "" };
+      if (cell.length === 0) return { text: "?", mismatch: "" };
+      const r = await fetchHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1);
+      return { text: r.text || "?", mismatch: r.mismatch };
+    }));
+    const badIndex = results.findIndex(r => r.text === "?");
+    if (badIndex >= 0) {
+      return {
+        text: "",
+        message: results[badIndex].mismatch
+          ? `第${badIndex + 1}个字${results[badIndex].mismatch}`
+          : `第${badIndex + 1}个字未能识别，请清除后重写`,
+      };
+    }
+    const combined = results.slice(0, expectedTotal).map(r => r.text).join("");
+    if (hanziTextLength(combined) !== expectedTotal) {
+      return {
+        text: "",
+        message: `识别结果字数不对：应为${expectedTotal}个字，识别成${hanziTextLength(combined)}个字。请把每个字写在对应田字格里。`,
+      };
+    }
+    return { text: combined, message: "" };
+  }
+
+  const r = await fetchHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal);
+  if (r.text) return { text: r.text, message: "" };
+  return { text: "", message: r.mismatch || "未能识别，请清除后重写" };
+}
+
 function clearCanvas() {
   canvasStrokes = [];
   hwRecognizedResult = '';
@@ -4093,68 +4177,24 @@ async function recognizeHandwriting() {
 
   if (recEl) recEl.textContent = "识别中...";
   try {
-    if (mainCellLayout && mainCellLayout.charCount > 1) {
-      // Multi-char: split strokes by cell position then recognize each
-      // independently. This way writing order doesn't matter — a student
-      // who writes the right character before the left still gets each
-      // character recognized in the correct cell.
-      const cellStrokes = splitStrokesByCellsMain(canvasStrokes, mainCellLayout);
-      const sz = mainCellLayout.cellSize;
-      const results = await Promise.all(cellStrokes.map(async (strokes) => {
-        if (strokes.length === 0) return '?';
-        const res = await fetch("/api/handwriting", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ strokes, width: sz, height: sz }),
-        });
-        const data = await res.json();
-        try { if (data[0] === "SUCCESS") { const r = data[1][0][1][0]; return r ? r[0] : '?'; } } catch(e) {}
-        return '?';
-      }));
-      const combined = results.join('');
-      if (combined.includes('?')) {
-        const missing = results.map((r, i) => r === '?' ? (i + 1) : null).filter(Boolean);
-        if (recEl) recEl.textContent = `第${missing.join('、')}个字未能识别，请清除后重写`;
+    const answer = state.currentQ ? state.currentQ.answer : "";
+    const recognized = await recognizeHanziCanvasText(canvasStrokes, mainCellLayout, answer, canvas);
+    if (!recognized.text) {
+      if (recEl) recEl.textContent = recognized.message;
+      hwRecognizedResult = '';
+      return;
+    }
+    if (state.currentQ && recognized.text === state.currentQ.answer) {
+      const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
+      if (structureErr) {
+        if (recEl) recEl.textContent = structureErr;
+        if (statusEl) statusEl.textContent = structureErr;
         hwRecognizedResult = '';
-      } else {
-        if (state.currentQ && combined === state.currentQ.answer) {
-          const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
-          if (structureErr) {
-            if (recEl) recEl.textContent = structureErr;
-            if (statusEl) statusEl.textContent = structureErr;
-            hwRecognizedResult = '';
-            return;
-          }
-        }
-        hwRecognizedResult = combined;
-        if (recEl) recEl.textContent = `识别结果: ${combined}`;
-      }
-    } else {
-      // Single char: send all strokes as one blob
-      const res = await fetch("/api/handwriting", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strokes: canvasStrokes, width: canvas.width, height: canvas.height }),
-      });
-      const data = await res.json();
-      let topResult = null;
-      try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-      if (topResult) {
-        if (state.currentQ && topResult === state.currentQ.answer) {
-          const structureErr = await validateStrokeStructure(canvasStrokes, mainCellLayout, state.currentQ.answer, splitStrokesByCellsMain);
-          if (structureErr) {
-            if (recEl) recEl.textContent = structureErr;
-            if (statusEl) statusEl.textContent = structureErr;
-            hwRecognizedResult = '';
-            return;
-          }
-        }
-        hwRecognizedResult = topResult;
-        if (recEl) recEl.textContent = `识别结果: ${topResult}`;
-      } else {
-        if (recEl) recEl.textContent = "未能识别，请清除后重写";
+        return;
       }
     }
+    hwRecognizedResult = recognized.text;
+    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -7045,28 +7085,23 @@ async function recognizeHwQuiz() {
   const recEl = document.getElementById("hwQuizRecognized");
   if (recEl) recEl.textContent = "识别中...";
   try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-    if (topResult) {
-      const q = hwReview.questions[hwReview.currentIndex];
-      if (q && topResult === q.answer) {
-        const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
-        if (structureErr) {
-          if (recEl) recEl.textContent = structureErr;
-          hwQuizRecognizedResult = '';
-          return;
-        }
-      }
-      hwQuizRecognizedResult = topResult;
-      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
-    } else {
-      if (recEl) recEl.textContent = "未能识别，请清除后重写";
+    const q = hwReview.questions[hwReview.currentIndex];
+    const recognized = await recognizeHanziCanvasText(hwCanvasStrokes, hwQuizCellLayout, q ? q.answer : "", canvas);
+    if (!recognized.text) {
+      if (recEl) recEl.textContent = recognized.message;
+      hwQuizRecognizedResult = '';
+      return;
     }
+    if (q && recognized.text === q.answer) {
+      const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+      if (structureErr) {
+        if (recEl) recEl.textContent = structureErr;
+        hwQuizRecognizedResult = '';
+        return;
+      }
+    }
+    hwQuizRecognizedResult = recognized.text;
+    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -7092,28 +7127,23 @@ async function recognizeHwQuiz2() {
   const recEl = document.getElementById("hwQuizRecognized2");
   if (recEl) recEl.textContent = "识别中...";
   try {
-    const res = await fetch("/api/handwriting", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strokes: hwCanvasStrokes, width: canvas.width, height: canvas.height }),
-    });
-    const data = await res.json();
-    let topResult = null;
-    try { if (data[0] === "SUCCESS") topResult = data[1][0][1][0]; } catch(e) {}
-    if (topResult) {
-      const q = hwQuiz.questions[hwQuiz.currentIndex];
-      if (q && topResult === q.answer) {
-        const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
-        if (structureErr) {
-          if (recEl) recEl.textContent = structureErr;
-          hwQuizRecognizedResult2 = '';
-          return;
-        }
-      }
-      hwQuizRecognizedResult2 = topResult;
-      if (recEl) recEl.textContent = `识别结果: ${topResult}`;
-    } else {
-      if (recEl) recEl.textContent = "未能识别，请清除后重写";
+    const q = hwQuiz.questions[hwQuiz.currentIndex];
+    const recognized = await recognizeHanziCanvasText(hwCanvasStrokes, hwQuizCellLayout, q ? q.answer : "", canvas);
+    if (!recognized.text) {
+      if (recEl) recEl.textContent = recognized.message;
+      hwQuizRecognizedResult2 = '';
+      return;
     }
+    if (q && recognized.text === q.answer) {
+      const structureErr = await validateStrokeStructure(hwCanvasStrokes, hwQuizCellLayout, q.answer, splitStrokesByCellsMain);
+      if (structureErr) {
+        if (recEl) recEl.textContent = structureErr;
+        hwQuizRecognizedResult2 = '';
+        return;
+      }
+    }
+    hwQuizRecognizedResult2 = recognized.text;
+    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
