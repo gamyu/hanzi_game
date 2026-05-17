@@ -1054,6 +1054,13 @@ def _seed_linky_game_usage_records(db):
 
 def init_db():
     db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    # Gunicorn boots multiple workers concurrently and each imports this
+    # module, so without serialization the schema migrations and idempotent
+    # backfills race and deadlock on wrong_answer_events row locks, crashing
+    # every worker. A session-level advisory lock (released when this
+    # connection closes at the end of init_db) makes workers run this
+    # one at a time; the backfills are idempotent so the rest just no-op.
+    db.execute("SELECT pg_advisory_lock(%s)", (873_421_905,))
     db.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
