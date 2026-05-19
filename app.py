@@ -610,6 +610,9 @@ DEFAULT_EXCHANGE_PACKAGES = [
     {"price": 35, "minutes": 50},
 ]
 
+COIN_STREAK_LOOKBACK_BOOKS = 3
+COIN_INELIGIBLE_MESSAGE = "超过范围，不参与金币连击计算"
+
 
 def _get_coin_rules(db):
     row = db.execute("SELECT value FROM settings WHERE key = 'coin_rules'").fetchone()
@@ -3325,37 +3328,46 @@ def coins_api():
     })
 
 
-def _check_coin_eligible(db, user_id, mode, game_grade):
-    """Check if a game at given grade is eligible for coin awards.
+def _coin_eligibility_info(db, user_id, mode, game_grade):
+    """Return coin-streak eligibility for a game grade.
 
-    Anti-cheating: prevent farming easy levels.
-    - Writing (写字): max 4 books back from current homework level
-    - All other modes (认字/听音等): max 2 books back from current homework level
-    Returns True if coins should be awarded.
+    Anti-cheating: prevent farming easy books. Free practice only counts
+    toward the coin streak when it is no more than three books behind the
+    user's current by-lesson homework book for that question type.
     """
     if not game_grade:
-        return True  # homework mode, no grade check needed
+        return {"eligible": True, "message": ""}  # homework mode, no grade check needed
 
     is_writing = mode == "dictation_handwrite"
 
     plans = _active_homework_plans(db, user_id)
     plan = next((p for p in plans if (p["mode"] if "mode" in p.keys() else "by_lesson") == "by_lesson"), None)
-    if not plan and plans:
-        plan = plans[0]
     if not plan:
-        return True  # no homework plan, allow freely
+        return {"eligible": True, "message": ""}  # no by-lesson plan, allow freely
 
     if is_writing:
         hw_grade = plan["writing_grade"] or plan["grade"]
-        max_books_back = 4
     else:
         hw_grade = plan["recognition_grade"] or plan["grade"]
-        max_books_back = 2
+
+    if hw_grade not in GRADE_ORDER or game_grade not in GRADE_ORDER:
+        return {"eligible": True, "message": ""}
 
     hw_idx = GRADE_ORDER.index(hw_grade) if hw_grade in GRADE_ORDER else 0
     game_idx = GRADE_ORDER.index(game_grade) if game_grade in GRADE_ORDER else 0
-    # game_grade must be within max_books_back of hw_grade
-    return game_idx >= hw_idx - max_books_back
+    min_idx = max(0, hw_idx - COIN_STREAK_LOOKBACK_BOOKS)
+    eligible = game_idx >= min_idx
+    return {
+        "eligible": eligible,
+        "message": "" if eligible else COIN_INELIGIBLE_MESSAGE,
+        "homework_grade": hw_grade,
+        "eligible_from_grade": GRADE_ORDER[min_idx],
+        "lookback_books": COIN_STREAK_LOOKBACK_BOOKS,
+    }
+
+
+def _check_coin_eligible(db, user_id, mode, game_grade):
+    return _coin_eligibility_info(db, user_id, mode, game_grade)["eligible"]
 
 
 @app.route("/api/coin-eligible")
@@ -3366,8 +3378,8 @@ def coin_eligible_check():
     mode = request.args.get("mode", "")
     grade = request.args.get("grade", "")
     db = get_db()
-    eligible = _check_coin_eligible(db, session["user_id"], mode, grade)
-    return jsonify({"eligible": eligible})
+    info = _coin_eligibility_info(db, session["user_id"], mode, grade)
+    return jsonify(info)
 
 
 @app.route("/api/streak", methods=["POST"])
@@ -3405,37 +3417,33 @@ def streak_update():
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
-    # Check if this game grade is eligible for coin awards
-    coin_eligible = _check_coin_eligible(db, session["user_id"], mode, game_grade)
+    # Check if this game grade participates in the coin streak.
+    eligibility = _coin_eligibility_info(db, session["user_id"], mode, game_grade)
+    coin_eligible = eligibility["eligible"]
 
     coins_earned = 0
-    if correct:
+    if not coin_eligible:
+        # Out-of-range practice is ignored for the coin streak: it neither
+        # increments nor resets the existing persistent streak.
+        new_streak = user[streak_col]
+    elif correct:
         new_streak = user[streak_col] + 1
-        if coin_eligible:
-            total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
-            coins_earned = total_coins_at_streak - user[awarded_col]
-            if coins_earned > 0:
-                db.execute(
-                    psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
-                        streak=psycopg.sql.Identifier(streak_col),
-                        awarded=psycopg.sql.Identifier(awarded_col),
-                    ),
-                    (new_streak, total_coins_at_streak, coins_earned, session["user_id"]),
-                )
-                db.execute(
-                    "INSERT INTO coin_transactions (user_id, amount, source, mode, grade, details) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (session["user_id"], coins_earned, source, mode, game_grade,
-                     f"连对 {new_streak} 次 · {'写字' if is_writing else '认字'}"),
-                )
-            else:
-                db.execute(
-                    psycopg.sql.SQL("UPDATE users SET {streak} = %s WHERE id = %s").format(
-                        streak=psycopg.sql.Identifier(streak_col),
-                    ),
-                    (new_streak, session["user_id"]),
-                )
+        total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
+        coins_earned = total_coins_at_streak - user[awarded_col]
+        if coins_earned > 0:
+            db.execute(
+                psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
+                    streak=psycopg.sql.Identifier(streak_col),
+                    awarded=psycopg.sql.Identifier(awarded_col),
+                ),
+                (new_streak, total_coins_at_streak, coins_earned, session["user_id"]),
+            )
+            db.execute(
+                "INSERT INTO coin_transactions (user_id, amount, source, mode, grade, details) VALUES (%s, %s, %s, %s, %s, %s)",
+                (session["user_id"], coins_earned, source, mode, game_grade,
+                 f"连对 {new_streak} 次 · {'写字' if is_writing else '认字'}"),
+            )
         else:
-            # Still update streak display but no coins
             db.execute(
                 psycopg.sql.SQL("UPDATE users SET {streak} = %s WHERE id = %s").format(
                     streak=psycopg.sql.Identifier(streak_col),
@@ -3458,6 +3466,7 @@ def streak_update():
         "coins_earned": coins_earned,
         "coins": user["coins"] + coins_earned,
         "coin_eligible": coin_eligible,
+        "coin_eligibility_message": eligibility["message"],
     })
 
 

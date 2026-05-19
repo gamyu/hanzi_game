@@ -1871,6 +1871,7 @@ let state = {
   retryQueue: [],
   retryCount: 0,
   coinEligible: true,
+  coinEligibilityMessage: "",
   wrongItems: [],
 };
 
@@ -1897,6 +1898,13 @@ function reportStreak(correct) {
   }).then(r => r.json()).then(data => {
     if (data.coin_eligible !== undefined) {
       state.coinEligible = data.coin_eligible;
+      state.coinEligibilityMessage = data.coin_eligibility_message || "";
+    }
+    if (Number.isFinite(data.streak)) {
+      state.combo = data.streak;
+      if (state.combo > state.comboMax) state.comboMax = state.combo;
+      updateScoreboard();
+    } else {
       updateStreakBar();
     }
     if (data.coins_earned > 0) {
@@ -1910,13 +1918,19 @@ function reportStreak(correct) {
 }
 
 async function checkCoinEligible() {
-  if (!state.user) { state.coinEligible = true; return; }
+  if (!state.user) {
+    state.coinEligible = true;
+    state.coinEligibilityMessage = "";
+    return;
+  }
   try {
     const res = await fetch(`/api/coin-eligible?mode=${encodeURIComponent(state.mode)}&grade=${encodeURIComponent(state.grade)}`);
     const data = await res.json();
     state.coinEligible = data.eligible;
+    state.coinEligibilityMessage = data.message || "";
   } catch (e) {
     state.coinEligible = true;
+    state.coinEligibilityMessage = "";
   }
   updateScoreboard();
 }
@@ -4866,7 +4880,15 @@ function calcStreakBarState(combo, milestones) {
 function updateStreakBar() {
   const bar = document.getElementById("streakBar");
   if (!state.coinEligible) {
-    if (bar) bar.style.display = "none";
+    if (bar) bar.style.display = "";
+    const fill = document.getElementById("streakFill");
+    const label = document.getElementById("streakLabel");
+    const reward = document.getElementById("streakReward");
+    const markers = document.getElementById("streakMarkers");
+    if (fill) fill.style.width = "0%";
+    if (label) label.textContent = state.coinEligibilityMessage || "超过范围，不参与金币连击计算";
+    if (reward) reward.textContent = "";
+    if (markers) markers.innerHTML = "";
     return;
   }
   if (bar) bar.style.display = "";
