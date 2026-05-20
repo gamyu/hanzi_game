@@ -1459,6 +1459,7 @@
   <div class="hw-quiz-section" id="hwQuizSection" style="display:none">
     <div class="hw-quiz-nav" id="hwQuizNav" style="display:flex;gap:8px;margin-bottom:8px">
       <button onclick="confirmHwBackToList()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回作业列表</button>
+      <button onclick="reportRecognitionIssue()" style="padding:6px 14px;border:1px solid #f6ad55;border-radius:8px;background:#fffaf0;color:#975a16;cursor:pointer;font-size:13px">识别有误</button>
     </div>
     <div class="auto-next-control compact">
       <label>
@@ -2780,6 +2781,13 @@ async function showUserDetail(userId, username) {
   const earnedAdmin = (totalsBySrc.admin && totalsBySrc.admin.earned) || 0;
   const spentShop   = (totalsBySrc.shop && totalsBySrc.shop.spent) || 0;
   html += '<h3 style="font-size:15px;margin:12px 0 8px;border-bottom:1px solid #e2e8f0;padding-bottom:4px">金币来源 <span style="font-size:12px;color:#a0aec0">(当前余额 ' + (data.user.coins || 0) + ')</span></h3>';
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px">
+    <span style="font-weight:700;color:#4a5568">手动调整金币</span>
+    <input type="number" id="adminCoinSet_${userId}" class="admin-input" style="max-width:110px" min="0" value="${data.user.coins || 0}">
+    <input type="text" id="adminCoinReason_${userId}" class="admin-input" style="max-width:180px" placeholder="原因(可选)">
+    <button class="admin-btn" onclick="adjustUserCoins(${userId})" style="padding:7px 12px">保存</button>
+    <span id="adminCoinAdjustMsg_${userId}" style="font-size:12px"></span>
+  </div>`;
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
     <span style="padding:4px 10px;background:#ebf8ff;border-radius:6px;color:#2c5282"><strong>游戏:</strong> +${earnedGame}</span>
     <span style="padding:4px 10px;background:#fefcbf;border-radius:6px;color:#744210"><strong>作业:</strong> +${earnedHw}</span>
@@ -2888,6 +2896,30 @@ async function showUserDetail(userId, username) {
 
   content.innerHTML = html;
   document.getElementById("adminUserDetailModal").classList.remove("hidden");
+}
+
+async function adjustUserCoins(userId) {
+  const input = document.getElementById(`adminCoinSet_${userId}`);
+  const reasonInput = document.getElementById(`adminCoinReason_${userId}`);
+  const msg = document.getElementById(`adminCoinAdjustMsg_${userId}`);
+  const coins = parseInt(input?.value, 10);
+  if (!Number.isFinite(coins) || coins < 0) {
+    if (msg) { msg.textContent = "请输入不小于 0 的金币数"; msg.style.color = "#e53e3e"; }
+    return;
+  }
+  if (msg) { msg.textContent = "保存中..."; msg.style.color = "#718096"; }
+  const res = await fetch(`/api/admin/user/${userId}/coins`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coins, reason: reasonInput?.value || "" }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    if (msg) { msg.textContent = data.error || "保存失败"; msg.style.color = "#e53e3e"; }
+    return;
+  }
+  if (msg) { msg.textContent = `已保存 (${data.delta >= 0 ? "+" : ""}${data.delta})`; msg.style.color = "#38a169"; }
+  refreshAdminUsers();
 }
 
 async function adminLogout() {
@@ -3767,8 +3799,13 @@ function handwritingCandidatesFromData(data) {
   }
 }
 
-function pickHandwritingCandidate(data, expectedLength) {
+function pickHandwritingCandidate(data, expectedLength, expectedText = "") {
   const candidates = handwritingCandidatesFromData(data);
+  const expected = String(expectedText || "").trim().replace(/\s+/g, "");
+  if (expected) {
+    const exact = candidates.find(c => c === expected);
+    if (exact) return exact;
+  }
   if (expectedLength > 0) {
     const sameLength = candidates.find(c => hanziTextLength(c) === expectedLength);
     if (sameLength) return sameLength;
@@ -4086,6 +4123,7 @@ function initCanvas() {
   canvas.addEventListener("touchstart", startStroke);
   canvas.addEventListener("touchmove", moveStroke);
   canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchcancel", endStroke);
 }
 
 function getResponsiveCellSize(cols, maxDesired) {
@@ -4119,7 +4157,7 @@ function splitStrokesByCellsMain(strokes, layout) {
   return cellStrokes;
 }
 
-async function fetchHandwritingCandidate(strokes, width, height, expectedLength) {
+async function fetchHandwritingCandidate(strokes, width, height, expectedLength, expectedText = "") {
   const res = await fetch("/api/handwriting", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4127,7 +4165,7 @@ async function fetchHandwritingCandidate(strokes, width, height, expectedLength)
   });
   const data = await res.json();
   return {
-    text: pickHandwritingCandidate(data, expectedLength),
+    text: pickHandwritingCandidate(data, expectedLength, expectedText),
     mismatch: handwritingLengthMismatchMessage(data, expectedLength),
   };
 }
@@ -4135,11 +4173,12 @@ async function fetchHandwritingCandidate(strokes, width, height, expectedLength)
 async function recognizeHanziCanvasText(strokes, layout, answer, canvas) {
   const expectedTotal = expectedHanziLength(answer);
   if (layout && layout.charCount > 1) {
+    const expectedChars = Array.from(String(answer || ""));
     const cellStrokes = splitStrokesByCellsMain(strokes, layout);
     const results = await Promise.all(cellStrokes.map(async (cell, idx) => {
       if (idx >= expectedTotal) return { text: "", mismatch: "" };
       if (cell.length === 0) return { text: "?", mismatch: "" };
-      const r = await fetchHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1);
+      const r = await fetchHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1, expectedChars[idx] || "");
       return { text: r.text || "?", mismatch: r.mismatch };
     }));
     const badIndex = results.findIndex(r => r.text === "?");
@@ -4161,7 +4200,7 @@ async function recognizeHanziCanvasText(strokes, layout, answer, canvas) {
     return { text: combined, message: "" };
   }
 
-  const r = await fetchHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal);
+  const r = await fetchHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal, answer);
   if (r.text) return { text: r.text, message: "" };
   return { text: "", message: r.mismatch || "未能识别，请清除后重写" };
 }
@@ -4557,7 +4596,7 @@ function initGamePinyinCanvases() {
     }
     canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
     canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
-    canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+    canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke); canvas.addEventListener("touchcancel", endStroke);
   }
 }
 
@@ -5235,6 +5274,9 @@ function sanitizeSavedTimeElapsed(seconds) {
 let hwStreak = 0;
 let hwStreakType = "recognition";
 let hwStreakByType = { recognition: 0, writing: 0 };
+let hwStreakAwardedByType = { recognition: 0, writing: 0 };
+let lastHwStreakReport = null;
+let activeHomeworkFlow = "";
 
 function questionStreakType(q) {
   return q && q.mode === "dictation_handwrite" ? "writing" : "recognition";
@@ -5253,6 +5295,10 @@ async function loadHwStreaks() {
     hwStreakByType = {
       recognition: coinData.recognition_streak || 0,
       writing: coinData.writing_streak || 0,
+    };
+    hwStreakAwardedByType = {
+      recognition: coinData.recognition_coins_awarded || 0,
+      writing: coinData.writing_coins_awarded || 0,
     };
     state.coins = coinData.coins || state.coins || 0;
     const coinsBox = document.getElementById("coinsBox");
@@ -5280,6 +5326,16 @@ function reportHwStreak(correct, type = null) {
   const activeQuestion = hwQuiz.questions && hwQuiz.questions[hwQuiz.currentIndex];
   const streakType = type || questionStreakType(activeQuestion);
   const mode = streakType === "writing" ? "dictation_handwrite" : "pinyin_typing";
+  const previousStreak = hwStreakByType[streakType] || 0;
+  const previousAwarded = hwStreakAwardedByType[streakType] || 0;
+  lastHwStreakReport = {
+    correct,
+    streakType,
+    mode,
+    previousStreak,
+    previousAwarded,
+    questionIndex: activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex,
+  };
   if (correct) hwStreakByType[streakType] = (hwStreakByType[streakType] || 0) + 1;
   else hwStreakByType[streakType] = 0;
   if (hwStreakType === streakType) {
@@ -5292,6 +5348,9 @@ function reportHwStreak(correct, type = null) {
     body: JSON.stringify({ correct, mode, source: "homework" }),
   }).then(r => r.json()).then(data => {
     hwStreakByType[streakType] = data.streak;
+    if (Number.isFinite(data.coins_awarded)) {
+      hwStreakAwardedByType[streakType] = data.coins_awarded;
+    }
     if (hwStreakType === streakType) {
       hwStreak = data.streak;
       updateHwStreakBar();
@@ -5304,6 +5363,187 @@ function reportHwStreak(correct, type = null) {
       spawnStarBurst();
     }
   }).catch(() => {});
+}
+
+function currentHomeworkQuestionForReport() {
+  if (activeHomeworkFlow === "review" && hwReview.questions && hwReview.questions.length) {
+    const q = hwReview.questions[hwReview.currentIndex];
+    return {
+      flow: "review",
+      q,
+      index: hwReview.currentIndex,
+      grade: q?.grade || q?._reviewItem?.grade || "",
+      assignmentId: "",
+      recognized: hwQuizRecognizedResult || pinyinState.recognized || "",
+      streakType: questionStreakType(q),
+    };
+  }
+  if (hwQuiz.questions && hwQuiz.questions.length) {
+    const q = hwQuiz.questions[hwQuiz.currentIndex];
+    return {
+      flow: activeHomeworkFlow || (hwQuiz.isPreview ? "preview" : "homework"),
+      q,
+      index: hwQuiz.currentIndex,
+      grade: hwQuiz.grade || q?.grade || "",
+      assignmentId: hwQuiz.assignmentId || "",
+      recognized: hwQuizRecognizedResult2 || pinyinState.recognized || "",
+      streakType: questionStreakType(q),
+    };
+  }
+  return null;
+}
+
+function homeworkCanvasImageForReport() {
+  const canvas = document.getElementById("hwQuizCanvas");
+  if (!canvas) return null;
+  try {
+    return {
+      name: "recognition-error.png",
+      mime: "image/png",
+      data: canvas.toDataURL("image/png"),
+    };
+  } catch(e) {
+    return null;
+  }
+}
+
+function removeCorrectedWrongItem(list, q, userAnswer) {
+  const expected = q?.answer || "";
+  const mode = q?.mode || "";
+  for (let i = list.length - 1; i >= 0; i--) {
+    const item = list[i] || {};
+    if (item.correct_answer === expected && item.mode === mode) {
+      list.splice(i, 1);
+      return;
+    }
+    if (userAnswer && item.user_answer === userAnswer && item.mode === mode) {
+      list.splice(i, 1);
+      return;
+    }
+  }
+}
+
+function syncCorrectedStreak(ctx, data) {
+  const type = ctx.streakType || "recognition";
+  if (Number.isFinite(data.streak)) {
+    hwStreakByType[type] = data.streak;
+    if (hwStreakType === type) hwStreak = data.streak;
+  }
+  if (Number.isFinite(data.coins_awarded)) {
+    hwStreakAwardedByType[type] = data.coins_awarded;
+  }
+  if (Number.isFinite(data.coins)) {
+    state.coins = data.coins;
+    const coinsBox = document.getElementById("coinsBox");
+    if (coinsBox) coinsBox.textContent = `金币: ${state.coins}`;
+  }
+  updateHwStreakBar();
+  if (data.coins_earned > 0) {
+    showCoinNotification(data.coins_earned, data.streak);
+  }
+}
+
+function applyRecognitionCorrection(ctx, data) {
+  const q = ctx.q;
+  if (!q) return;
+  syncCorrectedStreak(ctx, data || {});
+  if (ctx.flow === "review") {
+    const qKey = `${q.question}_${q.mode}`;
+    if (!hwReview.answeredCorrectly.has(qKey)) {
+      hwReview.correctCount++;
+      hwReview.answeredCorrectly.add(qKey);
+    }
+    hwReview.answering = false;
+    const hint = document.getElementById("hwQuizHint");
+    if (hint) {
+      hint.innerHTML = `<span style="color:#38a169;font-weight:700">已由管理员更正为正确。</span>`;
+      advanceOrWait(nextHwReviewQuestion, hint, 800);
+    }
+    return;
+  }
+
+  const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
+  hwQuiz.firstAttemptWrong.delete(qKey);
+  delete hwQuiz.retryMap[qKey];
+  removeCorrectedWrongItem(hwQuiz.wrongItems, q, ctx.recognized);
+  if (!hwQuiz.answeredCorrectly.has(qKey)) {
+    hwQuiz.correctCount++;
+    hwQuiz.answeredCorrectly.add(qKey);
+  }
+  hwQuiz.answering = false;
+  const submitBtn = document.getElementById("hwQuizSubmitBtn");
+  if (submitBtn) submitBtn.disabled = true;
+  const hint = document.getElementById("hwQuizHint");
+  if (hint) {
+    hint.innerHTML = `<span style="color:#38a169;font-weight:700">已由管理员更正为正确。</span>`;
+    autoSaveHwQuiz(Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
+    saveHwQuizProgressToServer(false, Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1));
+    advanceOrWait(nextHwQuestion, hint, 800);
+  }
+}
+
+async function reportRecognitionIssue() {
+  if (!state.user) {
+    alert("请先登录，再上报识别问题。");
+    return;
+  }
+  const ctx = currentHomeworkQuestionForReport();
+  if (!ctx || !ctx.q) {
+    alert("当前没有可上报的作业题目。");
+    return;
+  }
+  const q = ctx.q;
+  const streakInfo = lastHwStreakReport && lastHwStreakReport.streakType === ctx.streakType
+    ? lastHwStreakReport
+    : { previousStreak: hwStreakByType[ctx.streakType] || 0, previousAwarded: hwStreakAwardedByType[ctx.streakType] || 0 };
+  const payload = {
+    source: ctx.flow,
+    assignment_id: ctx.assignmentId,
+    question_index: ctx.index + 1,
+    grade: ctx.grade,
+    mode: q.mode,
+    question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+    expected: q.answer || "",
+    recognized: ctx.recognized || "",
+    character: q.display_char || q.answer || q.question || "",
+    streak_type: ctx.streakType,
+    previous_streak: streakInfo.previousStreak || 0,
+    previous_awarded: streakInfo.previousAwarded || 0,
+    image: homeworkCanvasImageForReport(),
+  };
+  try {
+    const reportRes = await fetch("/api/recognition/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const reportData = await reportRes.json();
+    if (!reportRes.ok || reportData.error) {
+      alert(reportData.error || "上报失败，请稍后再试。");
+      return;
+    }
+  } catch(e) {
+    alert("上报失败，请稍后再试。");
+    return;
+  }
+
+  const password = prompt("识别问题已上报给管理员。如管理员确认本题应判正确，请输入管理员密码立即更正；不输入则只上报。");
+  if (!password) return;
+  try {
+    const correctRes = await fetch("/api/recognition/correct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, admin_password: password }),
+    });
+    const correctData = await correctRes.json();
+    if (!correctRes.ok || correctData.error) {
+      alert(correctData.error || "更正失败。");
+      return;
+    }
+    applyRecognitionCorrection(ctx, correctData);
+  } catch(e) {
+    alert("更正失败，请稍后再试。");
+  }
 }
 
 let hwQuiz = {
@@ -5588,6 +5828,7 @@ async function doStartPreview(mode) {
   hwQuiz.retryMap = {};
   hwQuiz.isPreview = true;
   hwQuiz.finishing = false;
+  activeHomeworkFlow = "preview";
 
   document.getElementById("hwTodaySection").style.display = "none";
   document.getElementById("hwProgressSection").style.display = "none";
@@ -5599,6 +5840,7 @@ async function doStartPreview(mode) {
   document.getElementById("hwQuizNav").innerHTML = `
     <button onclick="backToPreviewModes()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回预习主页</button>
     <button onclick="hwBackToToday()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">返回作业</button>
+    <button onclick="reportRecognitionIssue()" style="padding:6px 14px;border:1px solid #f6ad55;border-radius:8px;background:#fffaf0;color:#975a16;cursor:pointer;font-size:13px">识别有误</button>
   `;
 
   clearInterval(hwQuiz.timerInterval);
@@ -5632,6 +5874,7 @@ async function startHwQuiz(assignmentId) {
   hwQuiz.firstAttemptWrong = new Set();
   hwQuiz.retryMap = {};
   hwQuiz.finishing = false;
+  activeHomeworkFlow = "homework";
 
   // Restore saved progress from localStorage (auto-saved after every
   // question) or the server response.
@@ -5681,6 +5924,7 @@ async function startHwQuiz(assignmentId) {
   // Restore default nav button for homework
   document.getElementById("hwQuizNav").innerHTML = `
     <button onclick="confirmHwBackToList()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回作业列表</button>
+    <button onclick="reportRecognitionIssue()" style="padding:6px 14px;border:1px solid #f6ad55;border-radius:8px;background:#fffaf0;color:#975a16;cursor:pointer;font-size:13px">识别有误</button>
   `;
 
   // Start timer
@@ -5958,7 +6202,7 @@ function initHwPinyinCanvases() {
     }
     canvas.addEventListener("mousedown", startStroke); canvas.addEventListener("mousemove", moveStroke);
     canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
-    canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke);
+    canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke); canvas.addEventListener("touchend", endStroke); canvas.addEventListener("touchcancel", endStroke);
   }
 }
 
@@ -6593,6 +6837,7 @@ let hwReview = { items: [], questions: [], currentIndex: 0, correctCount: 0, wro
 async function startHwReview() {
   hwQuiz.assignmentId = null;
   hwQuiz.isPreview = false;
+  activeHomeworkFlow = "review";
   // Build review questions from hwReviewItems
   const questions = [];
   hwReviewItems.forEach(item => {
@@ -6671,6 +6916,7 @@ async function startHwReview() {
   // Replace the nav button so save goes to localStorage, not the homework API
   document.getElementById("hwQuizNav").innerHTML = `
     <button onclick="confirmHwReviewBack()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回</button>
+    <button onclick="reportRecognitionIssue()" style="padding:6px 14px;border:1px solid #f6ad55;border-radius:8px;background:#fffaf0;color:#975a16;cursor:pointer;font-size:13px">识别有误</button>
   `;
   clearInterval(hwReview.timerInterval);
   hwReview.timerInterval = setInterval(() => {
@@ -7087,6 +7333,7 @@ function initHwQuizCanvas() {
   canvas.addEventListener("touchstart", startStroke);
   canvas.addEventListener("touchmove", moveStroke);
   canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchcancel", endStroke);
 }
 
 let hwQuizRecognizedResult = '';

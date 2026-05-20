@@ -1076,8 +1076,13 @@ function reviewHandwritingCandidatesFromData(data) {
   }
 }
 
-function pickReviewHandwritingCandidate(data, expectedLength) {
+function pickReviewHandwritingCandidate(data, expectedLength, expectedText = "") {
   const candidates = reviewHandwritingCandidatesFromData(data);
+  const expected = String(expectedText || "").trim().replace(/\s+/g, "");
+  if (expected) {
+    const exact = candidates.find(c => c === expected);
+    if (exact) return exact;
+  }
   if (expectedLength > 0) {
     const sameLength = candidates.find(c => reviewHanziTextLength(c) === expectedLength);
     if (sameLength) return sameLength;
@@ -1163,6 +1168,7 @@ function initReviewCanvas() {
   canvas.addEventListener("touchstart", startStroke);
   canvas.addEventListener("touchmove", moveStroke);
   canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchcancel", endStroke);
 }
 
 function eraseReviewStrokesAt(ex, ey, radius) {
@@ -1298,7 +1304,7 @@ function splitReviewStrokesByCells(strokes, layout) {
   return cellStrokes;
 }
 
-async function fetchReviewHandwritingCandidate(strokes, width, height, expectedLength) {
+async function fetchReviewHandwritingCandidate(strokes, width, height, expectedLength, expectedText = "") {
   const res = await fetch("/api/handwriting", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1306,7 +1312,7 @@ async function fetchReviewHandwritingCandidate(strokes, width, height, expectedL
   });
   const data = await res.json();
   return {
-    text: pickReviewHandwritingCandidate(data, expectedLength),
+    text: pickReviewHandwritingCandidate(data, expectedLength, expectedText),
     mismatch: reviewHandwritingLengthMismatchMessage(data, expectedLength),
   };
 }
@@ -1314,11 +1320,12 @@ async function fetchReviewHandwritingCandidate(strokes, width, height, expectedL
 async function recognizeReviewCanvasText(strokes, layout, answer, canvas) {
   const expectedTotal = reviewExpectedHanziLength(answer);
   if (layout && layout.charCount > 1) {
+    const expectedChars = Array.from(String(answer || ""));
     const cellStrokes = splitReviewStrokesByCells(strokes, layout);
     const results = await Promise.all(cellStrokes.map(async (cell, idx) => {
       if (idx >= expectedTotal) return { text: "", mismatch: "" };
       if (cell.length === 0) return { text: "?", mismatch: "" };
-      const r = await fetchReviewHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1);
+      const r = await fetchReviewHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1, expectedChars[idx] || "");
       return { text: r.text || "?", mismatch: r.mismatch };
     }));
     const badIndex = results.findIndex(r => r.text === "?");
@@ -1340,7 +1347,7 @@ async function recognizeReviewCanvasText(strokes, layout, answer, canvas) {
     return { text: combined, message: "" };
   }
 
-  const r = await fetchReviewHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal);
+  const r = await fetchReviewHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal, answer);
   if (r.text) return { text: r.text, message: "" };
   return { text: "", message: r.mismatch || "未能识别，请清除后重写" };
 }

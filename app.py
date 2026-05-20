@@ -2416,6 +2416,16 @@ def _send_contact_email(from_name: str, reply_email: str, subject: str, message:
     )
 
 
+def _verify_admin_password(password: str) -> bool:
+    """Check an admin password without mutating session state."""
+    password = password or ""
+    if ADMIN_PASSWORD_HASH:
+        return bcrypt.checkpw(password.encode(), ADMIN_PASSWORD_HASH.encode())
+    if _legacy_admin_pw:
+        return _hmac.compare_digest(password, _legacy_admin_pw)
+    return False
+
+
 def _parse_contact_image(image_data):
     """Validate and decode one contact-us image attachment."""
     if not image_data:
@@ -2752,6 +2762,147 @@ def handwriting():
         return jsonify(result)
     except Exception:
         return jsonify({"error": "识别失败"}), 502
+
+
+def _streak_columns_for_mode(mode: str):
+    is_writing = mode == "dictation_handwrite"
+    if is_writing:
+        return "writing_streak", "writing_coins_awarded", True
+    return "recognition_streak", "recognition_coins_awarded", False
+
+
+@app.route("/api/recognition/report", methods=["POST"])
+def recognition_report_api():
+    """Send a handwriting/recognition issue report to the administrator."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    if _rate_limited(f"recognition_report:{session['user_id']}", 8, 300):
+        return jsonify({"error": "提交过于频繁，请稍后再试"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    username = session.get("username", "")
+    subject = "识别错误报告"
+    message = "\n".join([
+        "用户报告作业识别可能出错。",
+        f"用户: {username}",
+        f"来源: {data.get('source', '')}",
+        f"年级/册: {data.get('grade', '')}",
+        f"模式: {data.get('mode', '')}",
+        f"题目: {data.get('question', '')}",
+        f"正确答案: {data.get('expected', '')}",
+        f"识别结果/用户答案: {data.get('recognized', '')}",
+        f"作业ID: {data.get('assignment_id', '')}",
+        f"题号: {data.get('question_index', '')}",
+        f"连击类型: {data.get('streak_type', '')}",
+        f"更正前连击: {data.get('previous_streak', '')}",
+        "",
+        "请在管理员页面或学生当前页面确认后处理。",
+    ])
+
+    image_attachment = None
+    image_error = ""
+    if data.get("image"):
+        image_attachment, image_error = _parse_contact_image(data.get("image"))
+        if image_error:
+            return jsonify({"error": image_error}), 400
+
+    ok, err = _send_contact_email(username, "", subject, message, image_attachment=image_attachment)
+    db = get_db()
+    db.execute(
+        """INSERT INTO contact_messages
+                (user_id, username, reply_email, subject, message,
+                 image_name, image_mime, image_data, email_sent, email_error)
+           VALUES (%s, %s, '', %s, %s, %s, %s, %s, %s, %s)""",
+        (
+            session["user_id"], username, subject, message,
+            image_attachment["filename"] if image_attachment else "",
+            image_attachment["mime"] if image_attachment else "",
+            image_attachment["data"] if image_attachment else "",
+            1 if ok else 0, "" if ok else err,
+        ),
+    )
+    db.commit()
+    return jsonify({"ok": True, "email_sent": ok})
+
+
+@app.route("/api/recognition/correct", methods=["POST"])
+def recognition_correct_api():
+    """Admin-authorized correction for a recognition error during homework."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    if _rate_limited(f"recognition_correct:{session['user_id']}", 10, 300):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
+
+    data = request.get_json(force=True, silent=True) or {}
+    if not _verify_admin_password(data.get("admin_password", "")):
+        return jsonify({"error": "管理员密码错误"}), 401
+
+    mode = data.get("mode", "")
+    streak_col, awarded_col, is_writing = _streak_columns_for_mode(mode)
+    try:
+        previous_streak = max(0, int(data.get("previous_streak") or 0))
+        previous_awarded = max(0, int(data.get("previous_awarded") or 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "连击数据无效"}), 400
+    target_streak = previous_streak + 1
+    restore_streak = data.get("restore_streak", True) is not False
+
+    db = get_db()
+    user = db.execute(
+        psycopg.sql.SQL("SELECT coins, {streak}, {awarded} FROM users WHERE id = %s").format(
+            streak=psycopg.sql.Identifier(streak_col),
+            awarded=psycopg.sql.Identifier(awarded_col),
+        ),
+        (session["user_id"],),
+    ).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+
+    if restore_streak:
+        target_streak = max(target_streak, user[streak_col] or 0)
+        target_awarded = calc_streak_coins(target_streak, is_writing, db)
+        coins_delta = max(0, target_awarded - previous_awarded)
+
+        db.execute(
+            psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
+                streak=psycopg.sql.Identifier(streak_col),
+                awarded=psycopg.sql.Identifier(awarded_col),
+            ),
+            (target_streak, target_awarded, coins_delta, session["user_id"]),
+        )
+        if coins_delta:
+            db.execute(
+                "INSERT INTO coin_transactions (user_id, amount, source, mode, grade, details) VALUES (%s, %s, 'admin', %s, %s, %s)",
+                (
+                    session["user_id"], coins_delta, mode, data.get("grade", ""),
+                    f"识别错误更正 · 连击恢复到 {target_streak}",
+                ),
+            )
+    else:
+        target_streak = user[streak_col] or 0
+        target_awarded = user[awarded_col] or 0
+        coins_delta = 0
+
+    character = (data.get("character") or data.get("expected") or "").strip()
+    if character:
+        db.execute(
+            """DELETE FROM wrong_answers
+               WHERE id IN (
+                 SELECT id FROM wrong_answers
+                 WHERE user_id = %s AND character = %s AND mode = %s
+                 ORDER BY created_at DESC LIMIT 3
+               )""",
+            (session["user_id"], character, mode),
+        )
+
+    db.commit()
+    return jsonify({
+        "ok": True,
+        "streak": target_streak,
+        "coins": user["coins"] + coins_delta,
+        "coins_earned": coins_delta,
+        "coins_awarded": target_awarded,
+    })
 
 
 @app.route("/api/wrong_answers", methods=["GET", "POST"])
@@ -3103,15 +3254,10 @@ def admin_login():
     data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({"error": "无效的请求数据"}), 400
-    password = data.get("password", "")
-    if ADMIN_PASSWORD_HASH:
-        if not bcrypt.checkpw(password.encode(), ADMIN_PASSWORD_HASH.encode()):
-            return jsonify({"error": "管理员密码错误"}), 401
-    elif _legacy_admin_pw:
-        if not _hmac.compare_digest(password, _legacy_admin_pw):
-            return jsonify({"error": "管理员密码错误"}), 401
-    else:
+    if not (ADMIN_PASSWORD_HASH or _legacy_admin_pw):
         return jsonify({"error": "管理员认证未配置"}), 500
+    if not _verify_admin_password(data.get("password", "")):
+        return jsonify({"error": "管理员密码错误"}), 401
     session["is_admin"] = True
     return jsonify({"ok": True})
 
@@ -3257,6 +3403,34 @@ def admin_user_details(user_id):
     })
 
 
+@app.route("/api/admin/user/<int:user_id>/coins", methods=["POST"])
+def admin_adjust_user_coins(user_id):
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        target_coins = int(data.get("coins"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "请输入有效的金币数"}), 400
+    if target_coins < 0:
+        return jsonify({"error": "金币数不能小于 0"}), 400
+    reason = (data.get("reason") or "管理员手动调整").strip()[:200]
+
+    db = get_db()
+    user = db.execute("SELECT coins FROM users WHERE id = %s", (user_id,)).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+    delta = target_coins - (user["coins"] or 0)
+    db.execute("UPDATE users SET coins = %s WHERE id = %s", (target_coins, user_id))
+    if delta:
+        db.execute(
+            "INSERT INTO coin_transactions (user_id, amount, source, details) VALUES (%s, %s, 'admin', %s)",
+            (user_id, delta, f"{reason} · 余额调整为 {target_coins}"),
+        )
+    db.commit()
+    return jsonify({"ok": True, "coins": target_coins, "delta": delta})
+
+
 @app.route("/admin/user/<int:user_id>/wrong")
 def admin_user_wrong_page(user_id):
     """Full-page view of a user's wrong answers (admin only)."""
@@ -3318,13 +3492,19 @@ def coins_api():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
     db = get_db()
-    row = db.execute("SELECT coins, game_minutes, recognition_streak, writing_streak FROM users WHERE id = %s",
+    row = db.execute(
+        """SELECT coins, game_minutes,
+                  recognition_streak, writing_streak,
+                  recognition_coins_awarded, writing_coins_awarded
+           FROM users WHERE id = %s""",
                      (session["user_id"],)).fetchone()
     return jsonify({
         "coins": row["coins"] if row else 0,
         "game_minutes": row["game_minutes"] if row else 0,
         "recognition_streak": row["recognition_streak"] if row else 0,
         "writing_streak": row["writing_streak"] if row else 0,
+        "recognition_coins_awarded": row["recognition_coins_awarded"] if row else 0,
+        "writing_coins_awarded": row["writing_coins_awarded"] if row else 0,
     })
 
 
@@ -3422,6 +3602,7 @@ def streak_update():
     coin_eligible = eligibility["eligible"]
 
     coins_earned = 0
+    new_awarded = user[awarded_col]
     if not coin_eligible:
         # Out-of-range practice is ignored for the coin streak: it neither
         # increments nor resets the existing persistent streak.
@@ -3430,6 +3611,7 @@ def streak_update():
         new_streak = user[streak_col] + 1
         total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
         coins_earned = total_coins_at_streak - user[awarded_col]
+        new_awarded = total_coins_at_streak
         if coins_earned > 0:
             db.execute(
                 psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
@@ -3452,6 +3634,7 @@ def streak_update():
             )
     else:
         new_streak = 0
+        new_awarded = 0
         db.execute(
             psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0 WHERE id = %s").format(
                 streak=psycopg.sql.Identifier(streak_col),
@@ -3467,6 +3650,7 @@ def streak_update():
         "coins": user["coins"] + coins_earned,
         "coin_eligible": coin_eligible,
         "coin_eligibility_message": eligibility["message"],
+        "coins_awarded": new_awarded,
     })
 
 

@@ -326,8 +326,9 @@
 
 <!-- Quiz Section (hidden until started) -->
 <div class="quiz-section" id="quizSection">
-  <div style="text-align:left;margin-bottom:8px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
     <button onclick="confirmBackToList()" style="padding:6px 14px;border:1px solid #a0aec0;border-radius:8px;background:#fff;color:#718096;cursor:pointer;font-size:13px">← 返回作业列表</button>
+    <button onclick="reportStandaloneRecognitionIssue()" style="padding:6px 14px;border:1px solid #f6ad55;border-radius:8px;background:#fffaf0;color:#975a16;cursor:pointer;font-size:13px">识别有误</button>
   </div>
   <div class="auto-next-control">
     <label>
@@ -420,6 +421,8 @@ function advanceOrWait(nextFn, hintEl, delay) {
 
 let quiz = {
   assignmentId: null,
+  grade: "",
+  lessonNum: "",
   questions: [],
   currentIndex: 0,
   correctCount: 0,
@@ -581,6 +584,8 @@ async function startQuiz(assignmentId) {
   if (data.error) { alert(data.error); return; }
 
   quiz.assignmentId = assignmentId;
+  quiz.grade = data.grade || "";
+  quiz.lessonNum = data.lesson_num || "";
   quiz.questions = data.questions;
   quiz.currentIndex = 0;
   quiz.correctCount = 0;
@@ -933,8 +938,13 @@ function handwritingCandidatesFromData(data) {
   }
 }
 
-function pickHandwritingCandidate(data, expectedLength) {
+function pickHandwritingCandidate(data, expectedLength, expectedText = "") {
   const candidates = handwritingCandidatesFromData(data);
+  const expected = String(expectedText || "").trim().replace(/\s+/g, "");
+  if (expected) {
+    const exact = candidates.find(c => c === expected);
+    if (exact) return exact;
+  }
   if (expectedLength > 0) {
     const sameLength = candidates.find(c => hanziTextLength(c) === expectedLength);
     if (sameLength) return sameLength;
@@ -1231,6 +1241,7 @@ function initPinyinCellCanvas(idx) {
   canvas.addEventListener("mouseup", endStroke); canvas.addEventListener("mouseleave", endStroke);
   canvas.addEventListener("touchstart", startStroke); canvas.addEventListener("touchmove", moveStroke);
   canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchcancel", endStroke);
 }
 
 function switchPinyinMode(mode) {
@@ -1552,6 +1563,129 @@ function handleHwAnswer(userInput) {
     skipBtn.onclick = () => nextQuestion();
     hint.appendChild(skipBtn);
     setTimeout(() => skipBtn.focus(), 0);
+  }
+}
+
+function currentStandaloneRecognitionContext() {
+  if (!isQuizProcessActive()) return null;
+  const q = quiz.questions[quiz.currentIndex];
+  if (!q) return null;
+  let recognized = "";
+  if (q.mode === "dictation_handwrite") {
+    recognized = hwRecognizedResult || (document.getElementById("hwRecognized")?.textContent || "").replace(/^识别结果:\s*/, "");
+  } else if (q.mode === "pinyin_typing") {
+    recognized = getPinyinAnswer() || (document.getElementById("pinyinRecognized2")?.textContent || "").replace(/^识别结果:\s*/, "");
+  } else {
+    recognized = document.getElementById("quizHint")?.textContent || "";
+  }
+  return {
+    q,
+    qKey: quiz.currentIndex,
+    expected: q.answer || "",
+    recognized: recognized.trim(),
+    character: q.display_char || (q.mode === "dictation_handwrite" ? q.answer : q.question) || "",
+    question: q.context_word ? `${q.question}（${q.context_word}）` : (q.question || ""),
+    streakType: q.mode === "dictation_handwrite" ? "writing" : "recognition",
+  };
+}
+
+function standaloneRecognitionReportImage(ctx) {
+  try {
+    if (ctx?.q?.mode === "dictation_handwrite" && canvasStrokes.length > 0) {
+      const data = document.getElementById("hwCanvas")?.toDataURL("image/png") || "";
+      return data ? { name: "recognition-error.png", mime: "image/png", data } : null;
+    }
+    if (ctx?.q?.mode === "pinyin_typing" && Array.isArray(pinyinCellStrokes)) {
+      const idx = pinyinCellStrokes.findIndex(strokes => strokes && strokes.length > 0);
+      if (idx >= 0) {
+        const data = document.getElementById(`pyCanvas${idx}`)?.toDataURL("image/png") || "";
+        return data ? { name: "recognition-error.png", mime: "image/png", data } : null;
+      }
+    }
+  } catch(e) {}
+  return null;
+}
+
+function removeStandaloneWrongItem(ctx) {
+  if (!ctx) return;
+  quiz.wrongItems = quiz.wrongItems.filter(item => {
+    const sameQuestion = (item.question || "") === ctx.question || (item.correct_answer || "") === ctx.expected;
+    const sameMode = !item.mode || item.mode === ctx.q.mode;
+    return !(sameQuestion && sameMode);
+  });
+}
+
+function applyStandaloneRecognitionCorrection(ctx) {
+  if (!ctx) return;
+  removeStandaloneWrongItem(ctx);
+  quiz.firstAttemptWrong.delete(ctx.qKey);
+  if (!quiz.answeredCorrectly.has(ctx.qKey)) {
+    quiz.correctCount++;
+    quiz.answeredCorrectly.add(ctx.qKey);
+  }
+  quiz.answering = false;
+  const submitBtn = document.getElementById("hwSubmitBtn") || document.getElementById("pinyinSubmitBtn");
+  if (submitBtn) submitBtn.disabled = true;
+  document.querySelectorAll(".quiz-opt-btn").forEach(btn => btn.classList.add("disabled"));
+  const hint = document.getElementById("quizHint");
+  if (hint) hint.innerHTML = `<span style="color:#38a169;font-weight:700">已由管理员更正为正确。</span>`;
+  autoSaveQuiz(Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
+  saveQuizProgressToServer(false, Math.min(quiz.currentIndex + 1, quiz.questions.length - 1));
+  advanceOrWait(nextQuestion, hint, 500);
+}
+
+async function reportStandaloneRecognitionIssue() {
+  const ctx = currentStandaloneRecognitionContext();
+  if (!ctx) {
+    alert("当前没有正在进行的题目。");
+    return;
+  }
+  try {
+    const reportRes = await fetch("/api/recognition/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "独立作业页面",
+        grade: quiz.grade || "",
+        mode: ctx.q.mode || "",
+        question: ctx.question,
+        expected: ctx.expected,
+        recognized: ctx.recognized,
+        assignment_id: quiz.assignmentId,
+        question_index: ctx.qKey + 1,
+        streak_type: ctx.streakType,
+        previous_streak: "",
+        image: standaloneRecognitionReportImage(ctx),
+      }),
+    });
+    const reportData = await reportRes.json();
+    if (!reportRes.ok || reportData.error) {
+      alert(reportData.error || "上报失败，请稍后再试。");
+      return;
+    }
+    const password = prompt("识别问题已上报给管理员。如管理员确认本题应判正确，请输入管理员密码立即更正；不输入则只上报。");
+    if (!password) return;
+    const correctRes = await fetch("/api/recognition/correct", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        admin_password: password,
+        restore_streak: false,
+        mode: ctx.q.mode || "",
+        grade: quiz.grade || "",
+        character: ctx.character,
+        expected: ctx.expected,
+        recognized: ctx.recognized,
+      }),
+    });
+    const correctData = await correctRes.json();
+    if (!correctRes.ok || correctData.error) {
+      alert(correctData.error || "管理员更正失败。");
+      return;
+    }
+    applyStandaloneRecognitionCorrection(ctx);
+  } catch(e) {
+    alert("上报失败，请检查网络后重试。");
   }
 }
 
@@ -1890,6 +2024,7 @@ function initHwCanvas() {
   canvas.addEventListener("touchstart", startStroke);
   canvas.addEventListener("touchmove", moveStroke);
   canvas.addEventListener("touchend", endStroke);
+  canvas.addEventListener("touchcancel", endStroke);
 }
 
 let hwRecognizedResult = '';
@@ -1935,7 +2070,7 @@ function splitStrokesByCells(strokes, layout) {
   return cellStrokes;
 }
 
-async function fetchHandwritingCandidate(strokes, width, height, expectedLength) {
+async function fetchHandwritingCandidate(strokes, width, height, expectedLength, expectedText = "") {
   const res = await fetch("/api/handwriting", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1943,7 +2078,7 @@ async function fetchHandwritingCandidate(strokes, width, height, expectedLength)
   });
   const data = await res.json();
   return {
-    text: pickHandwritingCandidate(data, expectedLength),
+    text: pickHandwritingCandidate(data, expectedLength, expectedText),
     mismatch: handwritingLengthMismatchMessage(data, expectedLength),
   };
 }
@@ -1951,11 +2086,12 @@ async function fetchHandwritingCandidate(strokes, width, height, expectedLength)
 async function recognizeHanziCanvasText(strokes, layout, answer, canvas) {
   const expectedTotal = expectedHanziLength(answer);
   if (layout && layout.charCount > 1) {
+    const expectedChars = Array.from(String(answer || ""));
     const cellStrokes = splitStrokesByCells(strokes, layout);
     const results = await Promise.all(cellStrokes.map(async (cell, idx) => {
       if (idx >= expectedTotal) return { text: "", mismatch: "" };
       if (cell.length === 0) return { text: "?", mismatch: "" };
-      const r = await fetchHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1);
+      const r = await fetchHandwritingCandidate(cell, layout.cellSize, layout.cellSize, 1, expectedChars[idx] || "");
       return { text: r.text || "?", mismatch: r.mismatch };
     }));
     const badIndex = results.findIndex(r => r.text === "?");
@@ -1977,7 +2113,7 @@ async function recognizeHanziCanvasText(strokes, layout, answer, canvas) {
     return { text: combined, message: "" };
   }
 
-  const r = await fetchHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal);
+  const r = await fetchHandwritingCandidate(strokes, canvas.width, canvas.height, expectedTotal, answer);
   if (r.text) return { text: r.text, message: "" };
   return { text: "", message: r.mismatch || "未能识别，请清除后重写" };
 }
