@@ -5321,11 +5321,29 @@ function updateHwStreakBar() {
   renderStreakBarUI(barState, "hwStreakFill", "hwStreakLabel", "hwStreakReward", "hwStreakMarkers");
 }
 
+function currentHomeworkStreakMeta() {
+  if (activeHomeworkFlow === "review" && hwReview.questions && hwReview.questions.length) {
+    const q = hwReview.questions[hwReview.currentIndex];
+    return {
+      flow: "review",
+      grade: q?.grade || q?._reviewItem?.grade || "",
+      assignmentId: "",
+    };
+  }
+  const q = hwQuiz.questions && hwQuiz.questions[hwQuiz.currentIndex];
+  return {
+    flow: activeHomeworkFlow || (hwQuiz.isPreview ? "preview" : "homework"),
+    grade: hwQuiz.grade || q?.grade || q?._reviewItem?.grade || "",
+    assignmentId: activeHomeworkFlow === "homework" ? (hwQuiz.assignmentId || "") : "",
+  };
+}
+
 function reportHwStreak(correct, type = null) {
   if (!state.user) return;
   const activeQuestion = hwQuiz.questions && hwQuiz.questions[hwQuiz.currentIndex];
   const streakType = type || questionStreakType(activeQuestion);
   const mode = streakType === "writing" ? "dictation_handwrite" : "pinyin_typing";
+  const meta = currentHomeworkStreakMeta();
   const previousStreak = hwStreakByType[streakType] || 0;
   const previousAwarded = hwStreakAwardedByType[streakType] || 0;
   lastHwStreakReport = {
@@ -5345,8 +5363,19 @@ function reportHwStreak(correct, type = null) {
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ correct, mode, source: "homework" }),
+    body: JSON.stringify({
+      correct,
+      mode,
+      source: "homework",
+      grade: meta.grade,
+      assignment_id: meta.assignmentId,
+      flow: meta.flow,
+    }),
   }).then(r => r.json()).then(data => {
+    if (!Number.isFinite(data.streak)) {
+      updateHwStreakBar();
+      return;
+    }
     hwStreakByType[streakType] = data.streak;
     if (Number.isFinite(data.coins_awarded)) {
       hwStreakAwardedByType[streakType] = data.coins_awarded;
@@ -6847,6 +6876,7 @@ async function startHwReview() {
         mode: "pinyin_typing",
         question: item.character,
         answer: item.pinyin,
+        grade: item.grade || "",
         word_hint: item.words || "",
         display_char: item.character,
         display_pinyin: item.pinyin,
@@ -6858,6 +6888,7 @@ async function startHwReview() {
         mode: "dictation_handwrite",
         question: item.pinyin,
         answer: item.character,
+        grade: item.grade || "",
         display_char: item.character,
         display_pinyin: item.pinyin,
         _reviewItem: item,

@@ -612,6 +612,7 @@ DEFAULT_EXCHANGE_PACKAGES = [
 
 COIN_STREAK_LOOKBACK_BOOKS = 3
 COIN_INELIGIBLE_MESSAGE = "超过范围，不参与金币连击计算"
+COIN_UNVERIFIED_MESSAGE = "无法确认作业范围，不参与金币连击计算"
 
 
 def _get_coin_rules(db):
@@ -3516,14 +3517,14 @@ def _coin_eligibility_info(db, user_id, mode, game_grade):
     user's current by-lesson homework book for that question type.
     """
     if not game_grade:
-        return {"eligible": True, "message": ""}  # homework mode, no grade check needed
+        return {"eligible": False, "message": COIN_UNVERIFIED_MESSAGE}
 
     is_writing = mode == "dictation_handwrite"
 
     plans = _active_homework_plans(db, user_id)
     plan = next((p for p in plans if (p["mode"] if "mode" in p.keys() else "by_lesson") == "by_lesson"), None)
     if not plan:
-        return {"eligible": True, "message": ""}  # no by-lesson plan, allow freely
+        return {"eligible": False, "message": COIN_UNVERIFIED_MESSAGE}
 
     if is_writing:
         hw_grade = plan["writing_grade"] or plan["grade"]
@@ -3531,7 +3532,7 @@ def _coin_eligibility_info(db, user_id, mode, game_grade):
         hw_grade = plan["recognition_grade"] or plan["grade"]
 
     if hw_grade not in GRADE_ORDER or game_grade not in GRADE_ORDER:
-        return {"eligible": True, "message": ""}
+        return {"eligible": False, "message": COIN_UNVERIFIED_MESSAGE}
 
     hw_idx = GRADE_ORDER.index(hw_grade) if hw_grade in GRADE_ORDER else 0
     game_idx = GRADE_ORDER.index(game_grade) if game_grade in GRADE_ORDER else 0
@@ -3567,6 +3568,8 @@ def streak_update():
     """Update persistent streak on each answer. Awards coins at milestones."""
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
+    if _rate_limited(f"streak:{session['user_id']}", 240, 600):
+        return jsonify({"error": "请求过于频繁，请稍后再试"}), 429
 
     data = request.get_json(force=True, silent=True)
     if not data:
@@ -3575,6 +3578,7 @@ def streak_update():
     correct = data.get("correct", False)
     mode = data.get("mode", "")
     game_grade = data.get("grade", "")  # grade of the game being played
+    forced_ineligible_message = ""
     # source: 'game' | 'homework' — defaults to 'game' for legacy clients
     source = data.get("source", "game")
     if source not in ("game", "homework"):
@@ -3597,8 +3601,26 @@ def streak_update():
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
+    if source == "homework" and data.get("assignment_id"):
+        try:
+            assignment_id = int(data.get("assignment_id"))
+        except (TypeError, ValueError):
+            assignment_id = 0
+        assignment = db.execute(
+            "SELECT grade FROM daily_assignments WHERE id = %s AND user_id = %s",
+            (assignment_id, session["user_id"]),
+        ).fetchone() if assignment_id else None
+        if assignment:
+            game_grade = assignment["grade"]
+        else:
+            forced_ineligible_message = COIN_UNVERIFIED_MESSAGE
+
     # Check if this game grade participates in the coin streak.
-    eligibility = _coin_eligibility_info(db, session["user_id"], mode, game_grade)
+    eligibility = (
+        {"eligible": False, "message": forced_ineligible_message}
+        if forced_ineligible_message
+        else _coin_eligibility_info(db, session["user_id"], mode, game_grade)
+    )
     coin_eligible = eligibility["eligible"]
 
     coins_earned = 0
