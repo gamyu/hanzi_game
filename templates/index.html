@@ -2500,7 +2500,7 @@ async function buyItem(itemId, name, price) {
   state.coins = data.coins;
   state.gameMinutes = data.game_minutes;
   document.getElementById("coinsBox").textContent = `金币: ${state.coins}`;
-  alert(`兑换成功!`);
+  alert(`兑换成功，已记录为已使用。`);
   showShop(); // Refresh
 }
 
@@ -2842,9 +2842,14 @@ async function showUserDetail(userId, username) {
     html += '<div style="color:#a0aec0;font-size:13px;padding:8px 0">暂无游戏使用记录</div>';
   } else {
     html += '<div style="max-height:160px;overflow-y:auto;font-size:13px">';
-    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>分钟</th><th>目的</th></tr>';
+    html += '<table style="width:100%;border-collapse:collapse"><tr style="background:#f7fafc"><th style="padding:4px 6px;text-align:left">日期</th><th>分钟</th><th>目的</th><th>操作</th></tr>';
     usageRecent.forEach(r => {
-      html += `<tr style="border-bottom:1px solid #f0f0f0"><td style="padding:4px 6px">${r.usage_date}</td><td style="text-align:center">${r.minutes}</td><td style="text-align:center">${escapeHtml(r.purpose)}</td></tr>`;
+      html += `<tr style="border-bottom:1px solid #f0f0f0">
+        <td style="padding:4px 6px">${r.usage_date}</td>
+        <td style="text-align:center">${r.minutes}</td>
+        <td style="text-align:center">${escapeHtml(r.purpose)}</td>
+        <td style="text-align:center"><button class="admin-btn" style="padding:3px 8px;font-size:12px" onclick="voidGameUsageRecord(${userId}, ${r.id})">撤销</button></td>
+      </tr>`;
     });
     html += '</table></div>';
   }
@@ -3197,6 +3202,25 @@ async function addGameUsageRecord() {
   msg.style.color = "#38a169";
   document.getElementById("dailyGameUsageMinutes").value = "";
   document.getElementById("dailyGameUsagePurposeOther").value = "";
+  await loadDailyLog();
+}
+
+async function voidGameUsageRecord(userId, recordId) {
+  if (!confirm("确定撤销这条游戏使用记录？")) return;
+  const res = await fetch(`/api/admin/user/${userId}/game_usage_records/${recordId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    alert(data.error || "撤销失败");
+    return;
+  }
+  const modal = document.getElementById("adminUserDetailModal");
+  if (modal && !modal.classList.contains("hidden")) {
+    const title = document.getElementById("adminUserDetailTitle")?.textContent || "";
+    await showUserDetail(userId, title.replace(/^用户详情:\s*/, ""));
+  }
   await loadDailyLog();
 }
 

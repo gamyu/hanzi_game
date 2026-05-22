@@ -1056,6 +1056,49 @@ def _seed_linky_game_usage_records(db):
         )
 
 
+def _backfill_exchange_usage_records(db):
+    """Treat existing exchanges as immediately used once, with an undo trail."""
+    rows = db.execute(
+        """SELECT er.id, er.user_id, er.exchange_date, er.minutes, er.created_at
+           FROM exchange_records er
+           LEFT JOIN game_usage_records gur ON gur.source_exchange_id = er.id
+           WHERE gur.id IS NULL
+           ORDER BY er.id"""
+    ).fetchall()
+    for row in rows:
+        if (row["minutes"] or 0) <= 0:
+            continue
+        inserted = db.execute(
+            """INSERT INTO game_usage_records
+                   (user_id, usage_date, minutes, purpose, source_exchange_id,
+                    affects_balance, created_at)
+               VALUES (%s, %s, %s, %s, %s, 1, %s)
+               ON CONFLICT DO NOTHING
+               RETURNING id""",
+            (
+                row["user_id"], row["exchange_date"], row["minutes"],
+                "兑换后自动使用", row["id"], row["created_at"],
+            ),
+        ).fetchone()
+        if inserted:
+            db.execute(
+                "UPDATE users SET game_minutes = GREATEST(game_minutes - %s, 0) WHERE id = %s",
+                (row["minutes"], row["user_id"]),
+            )
+
+
+def _normalize_linky_game_minutes(db):
+    """Policy change: Linky's exchanged game time has been consumed."""
+    migration_key = "linky_game_minutes_normalized_2026_05_22"
+    if db.execute("SELECT 1 FROM settings WHERE key = %s", (migration_key,)).fetchone():
+        return
+    db.execute("UPDATE users SET game_minutes = 0 WHERE LOWER(username) = 'linky'")
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (%s, '1') ON CONFLICT (key) DO NOTHING",
+        (migration_key,),
+    )
+
+
 def init_db():
     db = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     # Gunicorn boots multiple workers concurrently and each imports this
@@ -1216,11 +1259,16 @@ def init_db():
             usage_date TEXT NOT NULL,
             minutes INTEGER NOT NULL,
             purpose TEXT NOT NULL DEFAULT '',
+            source_exchange_id INTEGER UNIQUE,
+            affects_balance INTEGER NOT NULL DEFAULT 0,
+            voided_at TIMESTAMP,
+            void_reason TEXT NOT NULL DEFAULT '',
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_game_usage_user_date ON game_usage_records(user_id, usage_date)")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_game_usage_exchange ON game_usage_records(source_exchange_id) WHERE source_exchange_id IS NOT NULL")
     db.execute("""
         CREATE TABLE IF NOT EXISTS contact_messages (
             id SERIAL PRIMARY KEY,
@@ -1325,9 +1373,20 @@ def init_db():
         db.execute("ALTER TABLE contact_messages ADD COLUMN image_mime TEXT NOT NULL DEFAULT ''")
     if not _col_exists("contact_messages", "image_data"):
         db.execute("ALTER TABLE contact_messages ADD COLUMN image_data TEXT NOT NULL DEFAULT ''")
+    if not _col_exists("game_usage_records", "source_exchange_id"):
+        db.execute("ALTER TABLE game_usage_records ADD COLUMN source_exchange_id INTEGER")
+    if not _col_exists("game_usage_records", "affects_balance"):
+        db.execute("ALTER TABLE game_usage_records ADD COLUMN affects_balance INTEGER NOT NULL DEFAULT 0")
+    if not _col_exists("game_usage_records", "voided_at"):
+        db.execute("ALTER TABLE game_usage_records ADD COLUMN voided_at TIMESTAMP")
+    if not _col_exists("game_usage_records", "void_reason"):
+        db.execute("ALTER TABLE game_usage_records ADD COLUMN void_reason TEXT NOT NULL DEFAULT ''")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_game_usage_exchange ON game_usage_records(source_exchange_id) WHERE source_exchange_id IS NOT NULL")
     _backfill_wrong_answer_events(db)
     _backfill_exchange_records(db)
     _seed_linky_game_usage_records(db)
+    _backfill_exchange_usage_records(db)
+    _normalize_linky_game_minutes(db)
     db.commit()
     db.close()
 
@@ -2200,9 +2259,9 @@ def _game_time_records(db, user_id, limit=50):
         (user_id, limit),
     ).fetchall()
     usage = db.execute(
-        """SELECT usage_date, minutes, purpose
+        """SELECT id, usage_date, minutes, purpose, source_exchange_id
            FROM game_usage_records
-           WHERE user_id = %s
+           WHERE user_id = %s AND voided_at IS NULL
            ORDER BY usage_date DESC, created_at DESC, id DESC
            LIMIT %s""",
         (user_id, limit),
@@ -3385,8 +3444,9 @@ def admin_user_details(user_id):
         (user_id,),
     ).fetchall()
     game_usage_recent = db.execute(
-        """SELECT usage_date, minutes, purpose, created_at
+        """SELECT id, usage_date, minutes, purpose, source_exchange_id, created_at
            FROM game_usage_records WHERE user_id = %s
+             AND voided_at IS NULL
            ORDER BY usage_date DESC, created_at DESC, id DESC LIMIT 100""",
         (user_id,),
     ).fetchall()
@@ -3706,8 +3766,8 @@ def shop_buy():
     if user["coins"] < package["price"]:
         return jsonify({"error": "金币不足"}), 400
 
-    db.execute("UPDATE users SET coins = coins - %s, game_minutes = game_minutes + %s WHERE id = %s",
-               (package["price"], package["minutes"], session["user_id"]))
+    db.execute("UPDATE users SET coins = coins - %s WHERE id = %s",
+               (package["price"], session["user_id"]))
     tx = db.execute(
         """INSERT INTO coin_transactions (user_id, amount, source, details)
            VALUES (%s, %s, 'shop', %s)
@@ -3723,9 +3783,22 @@ def shop_buy():
            ON CONFLICT (source_transaction_id) DO NOTHING""",
         (session["user_id"], exchange_date, package["price"], package["minutes"], tx["id"], tx_created_at),
     )
+    db.execute(
+        """INSERT INTO game_usage_records
+              (user_id, usage_date, minutes, purpose, source_exchange_id,
+               affects_balance, created_at)
+           SELECT %s, %s, %s, %s, id, 1, %s
+           FROM exchange_records
+           WHERE source_transaction_id = %s
+           ON CONFLICT DO NOTHING""",
+        (
+            session["user_id"], exchange_date, package["minutes"],
+            "兑换后自动使用", tx_created_at, tx["id"],
+        ),
+    )
     db.commit()
     new_coins = user["coins"] - package["price"]
-    new_minutes = user["game_minutes"] + package["minutes"]
+    new_minutes = user["game_minutes"]
     return jsonify({"ok": True, "coins": new_coins, "game_minutes": new_minutes})
 
 
@@ -4629,9 +4702,9 @@ def admin_user_daily_log(user_id):
         (user_id, start_date),
     ).fetchall()
     usage_rows = db.execute(
-        """SELECT usage_date as date, minutes, purpose, created_at
+        """SELECT id, usage_date as date, minutes, purpose, source_exchange_id, created_at
            FROM game_usage_records
-           WHERE user_id = %s AND usage_date >= %s
+           WHERE user_id = %s AND usage_date >= %s AND voided_at IS NULL
            ORDER BY usage_date DESC, created_at DESC, id DESC""",
         (user_id, start_date),
     ).fetchall()
@@ -4700,10 +4773,48 @@ def admin_add_game_usage_record(user_id):
     if not user:
         return jsonify({"error": "用户不存在"}), 404
     db.execute(
-        """INSERT INTO game_usage_records (user_id, usage_date, minutes, purpose)
-           VALUES (%s, %s, %s, %s)""",
+        """INSERT INTO game_usage_records
+              (user_id, usage_date, minutes, purpose, affects_balance)
+           VALUES (%s, %s, %s, %s, 1)""",
         (user_id, usage_date, minutes, purpose),
     )
+    db.execute(
+        "UPDATE users SET game_minutes = GREATEST(game_minutes - %s, 0) WHERE id = %s",
+        (minutes, user_id),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/user/<int:user_id>/game_usage_records/<int:record_id>", methods=["DELETE"])
+def admin_void_game_usage_record(user_id, record_id):
+    """Void a game usage record; balance is restored only when it had affected it."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+
+    db = get_db()
+    record = db.execute(
+        """SELECT id, minutes, affects_balance, voided_at
+           FROM game_usage_records
+           WHERE id = %s AND user_id = %s""",
+        (record_id, user_id),
+    ).fetchone()
+    if not record:
+        return jsonify({"error": "使用记录不存在"}), 404
+    if record["voided_at"] is not None:
+        return jsonify({"ok": True})
+
+    db.execute(
+        """UPDATE game_usage_records
+           SET voided_at = CURRENT_TIMESTAMP, void_reason = %s
+           WHERE id = %s AND user_id = %s""",
+        ("管理员撤销", record_id, user_id),
+    )
+    if record["affects_balance"]:
+        db.execute(
+            "UPDATE users SET game_minutes = game_minutes + %s WHERE id = %s",
+            (record["minutes"], user_id),
+        )
     db.commit()
     return jsonify({"ok": True})
 
