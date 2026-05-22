@@ -942,8 +942,8 @@ function pickHandwritingCandidate(data, expectedLength, expectedText = "") {
   const candidates = handwritingCandidatesFromData(data);
   const expected = String(expectedText || "").trim().replace(/\s+/g, "");
   if (expected) {
-    const exact = candidates.find(c => c === expected);
-    if (exact) return exact;
+    const exactIndex = candidates.findIndex(c => c === expected);
+    if (exactIndex >= 0 && exactIndex <= 1) return expected;
   }
   if (expectedLength > 0) {
     const sameLength = candidates.find(c => hanziTextLength(c) === expectedLength);
@@ -1048,10 +1048,72 @@ async function validateHwStrokeStructure(strokes, layout, answer) {
   }
   return null;
 }
+
+function hwCompletenessGrid(points, cells = 4) {
+  const grid = Array(cells * cells).fill(0);
+  for (const [x, y] of points || []) {
+    const col = Math.max(0, Math.min(cells - 1, Math.floor(x * cells)));
+    const row = Math.max(0, Math.min(cells - 1, Math.floor(y * cells)));
+    grid[row * cells + col]++;
+  }
+  const total = Math.max(1, points ? points.length : 0);
+  return grid.map(v => v / total);
+}
+
+function hwMissingCoverage(expectedPoints, userPoints) {
+  const exp = hwCompletenessGrid(expectedPoints);
+  const got = hwCompletenessGrid(userPoints);
+  let missingCells = 0;
+  let missingWeight = 0;
+  for (let i = 0; i < exp.length; i++) {
+    if (exp[i] >= 0.055 && got[i] <= 0.012) {
+      missingCells++;
+      missingWeight += exp[i];
+    }
+  }
+  return { missingCells, missingWeight };
+}
+
+function hwCompletenessMessage(charData, userStrokes) {
+  const expectedStrokeCount = (charData.strokes || charData.medians || []).length;
+  const userStrokeCount = (userStrokes || []).filter(s => s && s[0] && s[0].length > 1).length;
+  if (expectedStrokeCount < 6 || userStrokeCount === 0) return null;
+
+  if (expectedStrokeCount >= 8 && userStrokeCount <= Math.max(2, Math.floor(expectedStrokeCount * 0.28))) {
+    return "这个字看起来还没写完整，请补全后再确认";
+  }
+
+  const expected = hwNormalizedReferenceStructurePoints(charData);
+  const user = hwNormalizedUserStructurePoints(userStrokes);
+  if (!expected || !user) return null;
+  const missing = hwMissingCoverage(expected, user);
+
+  if (expectedStrokeCount >= 8
+      && userStrokeCount <= Math.ceil(expectedStrokeCount * 0.5)
+      && missing.missingCells >= 3
+      && missing.missingWeight >= 0.24) {
+    return "这个字可能少了部件，请写工整、补全后再确认";
+  }
+  if (expectedStrokeCount >= 6
+      && userStrokeCount <= Math.ceil(expectedStrokeCount * 0.45)
+      && missing.missingCells >= 4
+      && missing.missingWeight >= 0.30) {
+    return "这个字可能少了部件，请写工整、补全后再确认";
+  }
+  return null;
+}
+
 async function validateHwCellStrokeCounts(strokes, layout, answer) {
-  void strokes;
-  void layout;
-  void answer;
+  if (!answer || !strokes || strokes.length === 0) return null;
+  const chars = Array.from(answer);
+  const cellStrokes = layout && chars.length > 1 ? splitStrokesByCells(strokes, layout) : [strokes];
+  for (let i = 0; i < chars.length; i++) {
+    const userStrokes = cellStrokes[i] || [];
+    const charData = await getHwCharData(chars[i]);
+    if (!charData || !charData.medians) continue;
+    const msg = hwCompletenessMessage(charData, userStrokes);
+    if (msg) return chars.length > 1 ? `第${i + 1}个字(${chars[i]}): ${msg}` : msg;
+  }
   return null;
 }
 
@@ -1232,8 +1294,17 @@ function initPinyinCellCanvas(idx) {
     _pyDrawingCell = -1;
     ctx.globalCompositeOperation = "source-over";
     if (pyEraserMode) { const [x, y] = getPos(e); eraseStrokesAt(pinyinCellStrokes[idx], x, y, 8); }
+    const changed = pyEraserMode || (_pyCurrentStroke && _pyCurrentStroke[0].length > 0);
     if (_pyCurrentStroke && _pyCurrentStroke[0].length > 0) {
       pinyinCellStrokes[idx].push(_pyCurrentStroke);
+    }
+    if (changed) {
+      pinyinRecognized2 = '';
+      pinyinCellRecognized[idx] = '';
+      const resEl = document.getElementById(`pyResult${idx}`);
+      const recEl = document.getElementById("pinyinRecognized2");
+      if (resEl) resEl.textContent = '';
+      if (recEl) recEl.textContent = '';
     }
     _pyCurrentStroke = null;
   }
@@ -1297,6 +1368,81 @@ function applyTone(base, tone) {
   const ch = base[target];
   const toned = _toneMap[ch] ? _toneMap[ch][tone - 1] : ch;
   return base.substring(0, target) + toned + base.substring(target + 1);
+}
+
+const _localToneStrip = {
+  'ā':'a','á':'a','ǎ':'a','à':'a',
+  'ē':'e','é':'e','ě':'e','è':'e',
+  'ī':'i','í':'i','ǐ':'i','ì':'i',
+  'ō':'o','ó':'o','ǒ':'o','ò':'o',
+  'ū':'u','ú':'u','ǔ':'u','ù':'u',
+  'ǖ':'ü','ǘ':'ü','ǚ':'ü','ǜ':'ü',
+};
+
+function stripLocalPinyinTone(s) {
+  return String(s || '').replace(/[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, ch => _localToneStrip[ch] || ch);
+}
+
+function parseNumberToneLocal(input) {
+  const clean = String(input || '').toLowerCase().trim().replace(/v/g, 'ü');
+  if (!clean) return '';
+  const last = clean[clean.length - 1];
+  if (last >= '0' && last <= '4') return applyTone(clean.slice(0, -1), parseInt(last, 10));
+  return clean;
+}
+
+function isLikelyPinyinBase(base) {
+  const b = String(base || '').toLowerCase().replace(/v/g, 'ü');
+  if (!b || !/^[a-zü]+$/.test(b)) return false;
+  const initial = '(?:zh|ch|sh|[bpmfdtnlgkhjqxzcsryw])?';
+  const finals = '(?:a|o|e|ai|ei|ao|ou|an|en|ang|eng|ong|er|i|ia|ie|iao|iu|ian|in|iang|ing|iong|u|ua|uo|uai|ui|uan|un|uang|ueng|ue|ü|üe|üan|ün)';
+  return new RegExp(`^${initial}${finals}$`).test(b);
+}
+
+function pinyinTokenHasToneLocal(token) {
+  const clean = String(token || '').toLowerCase().trim();
+  return /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/.test(clean) || /[0-4]$/.test(clean);
+}
+
+function detectFirstToneStrokeLocal(strokes, width, height) {
+  const allY = [];
+  for (const s of strokes || []) {
+    if (!s || !s[0] || !s[1]) continue;
+    allY.push(...s[1]);
+  }
+  if (allY.length < 8) return false;
+  const minY = Math.min(...allY);
+  const maxY = Math.max(...allY);
+  const fullHeight = Math.max(1, maxY - minY);
+  for (const s of strokes || []) {
+    if (!s || !s[0] || s[0].length < 2) continue;
+    const xs = s[0], ys = s[1];
+    const sxMin = Math.min(...xs), sxMax = Math.max(...xs);
+    const syMin = Math.min(...ys), syMax = Math.max(...ys);
+    const sw = sxMax - sxMin, sh = syMax - syMin;
+    const dx = xs[xs.length - 1] - xs[0];
+    const dy = ys[ys.length - 1] - ys[0];
+    if (sw < Math.max(14, width * 0.09)) continue;
+    if (sh > Math.max(8, height * 0.075)) continue;
+    if (Math.abs(dy) > Math.max(4, Math.abs(dx) * 0.35)) continue;
+    if ((syMin + syMax) / 2 > minY + fullHeight * 0.32) continue;
+    if (maxY - syMax < Math.max(24, height * 0.18)) continue;
+    return true;
+  }
+  return false;
+}
+
+function normalizePinyinCandidateLocal(raw, strokes, width, height) {
+  const token = String(raw || '').toLowerCase().trim()
+    .replace(/[’']/g, '')
+    .replace(/u:/g, 'ü')
+    .replace(/v/g, 'ü')
+    .replace(/\s+/g, '');
+  if (!token || !/^[a-züāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ0-4]+$/.test(token)) return '';
+  const base = stripLocalPinyinTone(token.replace(/[0-4]$/, ''));
+  if (!isLikelyPinyinBase(base)) return '';
+  if (pinyinTokenHasToneLocal(token)) return parseNumberToneLocal(token);
+  return detectFirstToneStrokeLocal(strokes, width, height) ? applyTone(base, 1) : parseNumberToneLocal(token);
 }
 
 function setPinyinTone(idx, tone) {
@@ -1365,7 +1511,14 @@ async function recognizePinyin2() {
         body: JSON.stringify({ strokes, width: w, height: h }),
       });
       const data = await res.json();
-      try { if (data[0] === "SUCCESS") return data[1][0][1][0]; } catch(e) {}
+      try {
+        if (data[0] === "SUCCESS") {
+          const cands = (data[1][0][1] || [])
+            .map(c => normalizePinyinCandidateLocal(c, strokes, w, h))
+            .filter(Boolean);
+          return cands[0] || '';
+        }
+      } catch(e) {}
       return '';
     }));
     for (let i = 0; i < pinyinCharCount; i++) {
@@ -2006,14 +2159,11 @@ function initHwCanvas() {
     isDrawing = false;
     ctx.globalCompositeOperation = "source-over";
     if (hwEraserMode) { const [x, y] = getPos(e); eraseStrokesAt(canvasStrokes, x, y, 10); }
+    const changed = hwEraserMode || (currentStroke && currentStroke[0].length > 0);
     if (currentStroke && currentStroke[0].length > 0) {
       canvasStrokes.push(currentStroke);
-      hwRecognizedResult = '';
-      const recEl = document.getElementById("hwRecognized");
-      const statusEl = document.getElementById("hwStatus");
-      if (recEl) recEl.textContent = '';
-      if (statusEl) statusEl.textContent = '';
     }
+    if (changed) clearHwRecognition();
     currentStroke = null;
   }
 
@@ -2029,6 +2179,14 @@ function initHwCanvas() {
 
 let hwRecognizedResult = '';
 let hwCellLayout = null; // {cellSize, cols, rows, charCount}
+
+function clearHwRecognition() {
+  hwRecognizedResult = '';
+  const recEl = document.getElementById("hwRecognized");
+  const statusEl = document.getElementById("hwStatus");
+  if (recEl) recEl.textContent = '';
+  if (statusEl) statusEl.textContent = '';
+}
 
 function clearHwCanvas() {
   canvasStrokes = [];
@@ -2140,6 +2298,13 @@ async function recognizeHw() {
       return;
     }
     if (q && recognized.text === q.answer) {
+      const completenessErr = await validateHwCellStrokeCounts(canvasStrokes, hwCellLayout, q.answer);
+      if (completenessErr) {
+        if (recEl) recEl.textContent = completenessErr;
+        if (statusEl) statusEl.textContent = completenessErr;
+        hwRecognizedResult = '';
+        return;
+      }
       const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
       if (structureErr) {
         if (recEl) recEl.textContent = structureErr;
@@ -2175,6 +2340,14 @@ async function submitHw() {
   // One-stroke characters and connected handwriting are valid.
   const q = quiz.questions[quiz.currentIndex];
   if (q && hwRecognizedResult === q.answer) {
+    const completenessErr = await validateHwCellStrokeCounts(canvasStrokes, hwCellLayout, q.answer);
+    if (completenessErr) {
+      if (statusEl) statusEl.textContent = completenessErr;
+      const recEl = document.getElementById("hwRecognized");
+      if (recEl) recEl.textContent = completenessErr;
+      hwRecognizedResult = '';
+      return;
+    }
     const structureErr = await validateHwStrokeStructure(canvasStrokes, hwCellLayout, q.answer);
     if (structureErr) {
       if (statusEl) statusEl.textContent = structureErr;

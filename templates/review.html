@@ -1080,8 +1080,8 @@ function pickReviewHandwritingCandidate(data, expectedLength, expectedText = "")
   const candidates = reviewHandwritingCandidatesFromData(data);
   const expected = String(expectedText || "").trim().replace(/\s+/g, "");
   if (expected) {
-    const exact = candidates.find(c => c === expected);
-    if (exact) return exact;
+    const exactIndex = candidates.findIndex(c => c === expected);
+    if (exactIndex >= 0 && exactIndex <= 1) return expected;
   }
   if (expectedLength > 0) {
     const sameLength = candidates.find(c => reviewHanziTextLength(c) === expectedLength);
@@ -1155,8 +1155,18 @@ function initReviewCanvas() {
     e.preventDefault();
     reviewIsDrawing = false;
     ctx.globalCompositeOperation = "source-over";
+    if (reviewEraserMode) {
+      const [x, y] = getPos(e);
+      eraseReviewStrokesAt(x, y, 12);
+    }
+    const changed = reviewEraserMode || (reviewCurrentStroke && reviewCurrentStroke[0].length > 0);
     if (reviewCurrentStroke && reviewCurrentStroke[0].length > 0) {
       reviewCanvasStrokes.push(reviewCurrentStroke);
+    }
+    if (changed) {
+      reviewRecognizedText = "";
+      const recEl = document.getElementById("reviewRecognized");
+      if (recEl) recEl.textContent = "";
     }
     reviewCurrentStroke = null;
   }
@@ -1352,6 +1362,74 @@ async function recognizeReviewCanvasText(strokes, layout, answer, canvas) {
   return { text: "", message: r.mismatch || "未能识别，请清除后重写" };
 }
 
+function reviewCompletenessGrid(points, cells = 4) {
+  const grid = Array(cells * cells).fill(0);
+  for (const [x, y] of points || []) {
+    const col = Math.max(0, Math.min(cells - 1, Math.floor(x * cells)));
+    const row = Math.max(0, Math.min(cells - 1, Math.floor(y * cells)));
+    grid[row * cells + col]++;
+  }
+  const total = Math.max(1, points ? points.length : 0);
+  return grid.map(v => v / total);
+}
+
+function reviewMissingCoverage(expectedPoints, userPoints) {
+  const exp = reviewCompletenessGrid(expectedPoints);
+  const got = reviewCompletenessGrid(userPoints);
+  let missingCells = 0;
+  let missingWeight = 0;
+  for (let i = 0; i < exp.length; i++) {
+    if (exp[i] >= 0.055 && got[i] <= 0.012) {
+      missingCells++;
+      missingWeight += exp[i];
+    }
+  }
+  return { missingCells, missingWeight };
+}
+
+function reviewCompletenessMessage(charData, userStrokes) {
+  const expectedStrokeCount = (charData.strokes || charData.medians || []).length;
+  const userStrokeCount = (userStrokes || []).filter(s => s && s[0] && s[0].length > 1).length;
+  if (expectedStrokeCount < 6 || userStrokeCount === 0) return null;
+
+  if (expectedStrokeCount >= 8 && userStrokeCount <= Math.max(2, Math.floor(expectedStrokeCount * 0.28))) {
+    return "这个字看起来还没写完整，请补全后再确认";
+  }
+
+  const expected = reviewNormalizedReferenceStructurePoints(charData);
+  const user = reviewNormalizedUserStructurePoints(userStrokes);
+  if (!expected || !user) return null;
+  const missing = reviewMissingCoverage(expected, user);
+
+  if (expectedStrokeCount >= 8
+      && userStrokeCount <= Math.ceil(expectedStrokeCount * 0.5)
+      && missing.missingCells >= 3
+      && missing.missingWeight >= 0.24) {
+    return "这个字可能少了部件，请写工整、补全后再确认";
+  }
+  if (expectedStrokeCount >= 6
+      && userStrokeCount <= Math.ceil(expectedStrokeCount * 0.45)
+      && missing.missingCells >= 4
+      && missing.missingWeight >= 0.30) {
+    return "这个字可能少了部件，请写工整、补全后再确认";
+  }
+  return null;
+}
+
+async function validateReviewStrokeCompleteness(strokes, layout, answer) {
+  if (!answer || !strokes || strokes.length === 0) return null;
+  const chars = Array.from(answer);
+  const cellStrokes = layout && chars.length > 1 ? splitReviewStrokesByCells(strokes, layout) : [strokes];
+  for (let i = 0; i < chars.length; i++) {
+    const userStrokes = cellStrokes[i] || [];
+    const charData = await getReviewCharData(chars[i]);
+    if (!charData || !charData.medians) continue;
+    const msg = reviewCompletenessMessage(charData, userStrokes);
+    if (msg) return chars.length > 1 ? `第${i + 1}个字(${chars[i]}): ${msg}` : msg;
+  }
+  return null;
+}
+
 async function validateReviewStrokeStructure(strokes, layout, answer) {
   if (!answer || !strokes || strokes.length === 0) return null;
   const chars = answer.split("");
@@ -1384,6 +1462,12 @@ async function recognizeReviewCanvas() {
       return;
     }
     if (recognized.text === answer) {
+      const completenessErr = await validateReviewStrokeCompleteness(reviewCanvasStrokes, reviewCellLayout, answer);
+      if (completenessErr) {
+        reviewRecognizedText = "";
+        recEl.textContent = completenessErr;
+        return;
+      }
       const structureErr = await validateReviewStrokeStructure(reviewCanvasStrokes, reviewCellLayout, answer);
       if (structureErr) {
         reviewRecognizedText = "";
@@ -1408,10 +1492,18 @@ async function checkReviewHandwriting(btn) {
     await recognizeReviewCanvas();
   }
   if (!reviewRecognizedText) {
-    document.getElementById("reviewRecognized").textContent = "请先写字";
+    document.getElementById("reviewRecognized").textContent = reviewCanvasStrokes.length > 0
+      ? "已经检测到书写，但暂时没有识别出汉字。请写工整一些后再点确认。"
+      : "请先写字";
     return;
   }
   if (reviewRecognizedText === answer) {
+    const completenessErr = await validateReviewStrokeCompleteness(reviewCanvasStrokes, reviewCellLayout, answer);
+    if (completenessErr) {
+      document.getElementById("reviewRecognized").textContent = completenessErr;
+      reviewRecognizedText = "";
+      return;
+    }
     const structureErr = await validateReviewStrokeStructure(reviewCanvasStrokes, reviewCellLayout, answer);
     if (structureErr) {
       document.getElementById("reviewRecognized").textContent = structureErr;
