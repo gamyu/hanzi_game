@@ -2677,7 +2677,38 @@ def admin_messages():
                   email_sent, email_error, created_at
            FROM contact_messages ORDER BY created_at DESC LIMIT 100"""
     ).fetchall()
-    return jsonify({"messages": [dict(r) for r in rows]})
+    messages = []
+    for row in rows:
+        msg = dict(row)
+        msg["has_image"] = bool(msg.get("image_data"))
+        msg.pop("image_data", None)
+        messages.append(msg)
+    return jsonify({"messages": messages})
+
+
+@app.route("/api/admin/messages/<int:message_id>/image")
+def admin_message_image(message_id):
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+    db = get_db()
+    row = db.execute(
+        "SELECT image_name, image_mime, image_data FROM contact_messages WHERE id = %s",
+        (message_id,),
+    ).fetchone()
+    if not row or not row["image_data"]:
+        return jsonify({"error": "图片不存在或已损坏"}), 404
+    try:
+        content = base64.b64decode(row["image_data"], validate=True)
+    except Exception:
+        return jsonify({"error": "图片不存在或已损坏"}), 404
+    mime = row["image_mime"] or "application/octet-stream"
+    filename = (row["image_name"] or "message-image.png").replace('"', "")
+    disposition = "attachment" if request.args.get("download") else "inline"
+    return Response(
+        content,
+        mimetype=mime,
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
 
 
 @app.route("/api/scores", methods=["GET", "POST"])
@@ -3601,7 +3632,7 @@ def _coin_eligibility_info(db, user_id, mode, game_grade):
     eligible = game_idx >= min_idx
     return {
         "eligible": eligible,
-        "message": "" if eligible else COIN_INELIGIBLE_MESSAGE,
+        "message": "" if eligible else f"{game_grade}超过范围，不参与金币连击计算（当前可计金币范围：{GRADE_ORDER[min_idx]}及以后）",
         "homework_grade": hw_grade,
         "eligible_from_grade": GRADE_ORDER[min_idx],
         "lookback_books": COIN_STREAK_LOOKBACK_BOOKS,
@@ -3621,6 +3652,7 @@ def coin_eligible_check():
     grade = request.args.get("grade", "")
     db = get_db()
     info = _coin_eligibility_info(db, session["user_id"], mode, grade)
+    info["game_grade"] = grade
     return jsonify(info)
 
 
@@ -3733,6 +3765,10 @@ def streak_update():
         "coins": user["coins"] + coins_earned,
         "coin_eligible": coin_eligible,
         "coin_eligibility_message": eligibility["message"],
+        "game_grade": game_grade,
+        "homework_grade": eligibility.get("homework_grade", ""),
+        "eligible_from_grade": eligibility.get("eligible_from_grade", ""),
+        "lookback_books": eligibility.get("lookback_books", COIN_STREAK_LOOKBACK_BOOKS),
         "coins_awarded": new_awarded,
     })
 

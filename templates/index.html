@@ -71,15 +71,21 @@
   .streak-info {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
+    gap: 8px;
     margin-bottom: 4px;
   }
   .streak-label {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 12px;
     color: rgba(255,255,255,0.7);
     font-weight: 600;
+    line-height: 1.35;
+    white-space: normal;
   }
   .streak-reward {
+    flex: 0 0 auto;
     font-size: 12px;
     color: #fbd38d;
     font-weight: 700;
@@ -1834,6 +1840,86 @@ function syncAutoNextToggles() {
     el.checked = on;
   });
 }
+
+function isGameViewVisible() {
+  const gameView = document.getElementById("gameView");
+  return !!gameView && gameView.style.display !== "none";
+}
+
+function isGameQuestionPending() {
+  return isGameViewVisible()
+    && !!state.currentQ
+    && state.answering
+    && !state.currentQuestionAttempted;
+}
+
+function unansweredQuestionWarningText() {
+  const autoNextTip = isAutoNext()
+    ? "如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块、切换书册或学习模式。"
+    : "答完当前题后，就可以随时退出当前模块、切换书册或学习模式。";
+  return {
+    title: "当前题目还没有作答",
+    body: "请先回答当前题目，以保证金币连击数。现在离开或切换会把当前题按未答处理，金币连击会中断。",
+    tip: autoNextTip,
+  };
+}
+
+function showUnansweredQuestionDialog() {
+  return new Promise(resolve => {
+    const text = unansweredQuestionWarningText();
+    const overlay = document.createElement("div");
+    overlay.className = "hw-exit-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:16px;padding:22px;max-width:380px;width:100%;text-align:left;box-shadow:0 10px 40px rgba(0,0,0,0.28);line-height:1.45";
+    box.innerHTML = `
+      <div style="font-size:18px;font-weight:800;color:#2d3748;margin-bottom:10px">${text.title}</div>
+      <div style="font-size:14px;color:#4a5568;margin-bottom:10px">${text.body}</div>
+      <div style="font-size:13px;color:#718096;margin-bottom:18px">${text.tip}</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button id="_questionStay" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:700;cursor:pointer">继续做题</button>
+        ${isAutoNext() ? '<button id="_questionAutoOff" style="padding:10px;border:1px solid #cbd5e0;border-radius:10px;background:#fff;color:#4a5568;font-size:15px;font-weight:700;cursor:pointer">关闭自动下一题</button>' : ''}
+        <button id="_questionLeave" style="padding:10px;border:none;border-radius:10px;background:#fed7d7;color:#9b2c2c;font-size:15px;font-weight:700;cursor:pointer">不答，继续离开</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const close = value => {
+      if (overlay.parentNode) document.body.removeChild(overlay);
+      resolve(value);
+    };
+    document.getElementById("_questionStay").onclick = () => close("stay");
+    const autoOff = document.getElementById("_questionAutoOff");
+    if (autoOff) autoOff.onclick = () => {
+      setAutoNext(false);
+      close("stay");
+    };
+    document.getElementById("_questionLeave").onclick = () => close("leave");
+    overlay.onclick = e => { if (e.target === overlay) close("stay"); };
+  });
+}
+
+async function confirmLeavingGameQuestion() {
+  if (!isGameQuestionPending()) return true;
+  const choice = await showUnansweredQuestionDialog();
+  if (choice !== "leave") return false;
+  reportUnansweredGameQuestion();
+  saveScoreAsync();
+  return true;
+}
+
+async function navigateWithQuestionPrompt(url) {
+  if (!(await confirmLeavingGameQuestion())) return;
+  location.href = url;
+}
+
+async function openReviewNav(event) {
+  if (event) event.preventDefault();
+  if (await confirmLeavingGameQuestion()) {
+    window.open("/review", "_blank", "noopener");
+  }
+  return false;
+}
+
 function advanceOrWait(nextFn, hintEl, delay) {
   if (isAutoNext()) {
     setTimeout(nextFn, delay || 800);
@@ -1873,8 +1959,56 @@ let state = {
   retryCount: 0,
   coinEligible: true,
   coinEligibilityMessage: "",
+  coinEligibleFromGrade: "",
+  coinHomeworkGrade: "",
+  currentQuestionAttempted: false,
   wrongItems: [],
 };
+
+const FRONTEND_GRADE_ORDER = [
+  "一年级上", "一年级下", "二年级上", "二年级下",
+  "三年级上", "三年级下", "四年级上", "四年级下",
+  "五年级上", "五年级下", "六年级上", "六年级下",
+];
+
+function deriveEligibleFromGrade(homeworkGrade, lookbackBooks) {
+  const idx = FRONTEND_GRADE_ORDER.indexOf(homeworkGrade);
+  if (idx < 0) return "";
+  const lookback = Number.isFinite(Number(lookbackBooks)) ? Number(lookbackBooks) : 3;
+  return FRONTEND_GRADE_ORDER[Math.max(0, idx - lookback)] || "";
+}
+
+function detailedCoinEligibilityMessage(data = {}, fallbackGrade = state.grade) {
+  const raw = data.coin_eligibility_message || data.message || state.coinEligibilityMessage || "";
+  const gameGrade = data.game_grade || data.grade || fallbackGrade || state.grade || "";
+  const homeworkGrade = data.homework_grade || data.homeworkGrade || state.coinHomeworkGrade || "";
+  const eligibleFromGrade = data.eligible_from_grade
+    || data.eligibleFromGrade
+    || state.coinEligibleFromGrade
+    || deriveEligibleFromGrade(homeworkGrade, data.lookback_books);
+
+  if (gameGrade && eligibleFromGrade && raw.includes("超过范围")) {
+    return `${gameGrade}超过范围，不参与金币连击计算（当前可计金币范围：${eligibleFromGrade}及以后）`;
+  }
+  if (gameGrade && eligibleFromGrade && !raw) {
+    return `${gameGrade}超过范围，不参与金币连击计算（当前可计金币范围：${eligibleFromGrade}及以后）`;
+  }
+  return raw || "超过范围，不参与金币连击计算";
+}
+
+function applyCoinEligibilityFromResponse(data, fallbackGrade = state.grade) {
+  if (!data) return;
+  const hasCoinEligible = data.coin_eligible !== undefined;
+  const hasEligible = data.eligible !== undefined;
+  if (!hasCoinEligible && !hasEligible) return;
+
+  const eligible = hasCoinEligible ? data.coin_eligible : data.eligible;
+  if (data.eligible_from_grade) state.coinEligibleFromGrade = data.eligible_from_grade;
+  if (data.homework_grade) state.coinHomeworkGrade = data.homework_grade;
+
+  state.coinEligible = Boolean(eligible);
+  state.coinEligibilityMessage = state.coinEligible ? "" : detailedCoinEligibilityMessage(data, fallbackGrade);
+}
 
 // Streak milestone coin rules (loaded from server, these are defaults)
 let COIN_MILESTONES = {
@@ -1897,10 +2031,7 @@ function reportStreak(correct) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ correct, mode: state.mode, grade: state.grade, source: "game" }),
   }).then(r => r.json()).then(data => {
-    if (data.coin_eligible !== undefined) {
-      state.coinEligible = data.coin_eligible;
-      state.coinEligibilityMessage = data.coin_eligibility_message || "";
-    }
+    applyCoinEligibilityFromResponse(data);
     if (Number.isFinite(data.streak)) {
       state.combo = data.streak;
       if (state.combo > state.comboMax) state.comboMax = state.combo;
@@ -1918,20 +2049,54 @@ function reportStreak(correct) {
   }).catch(() => {});
 }
 
+function reportUnansweredGameQuestion() {
+  if (!state.user || !state.answering || !state.currentQ || state.currentQuestionAttempted) return false;
+  const mode = state.mode;
+  const grade = state.grade;
+  state.currentQuestionAttempted = true;
+  state.answering = false;
+  const hint = document.getElementById("hintArea");
+  if (hint && isGameViewVisible()) {
+    hint.innerHTML = `<span class="wrong-text">当前题已按未答处理，金币连击已中断。</span>`;
+  }
+  fetch("/api/streak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ correct: false, mode, grade, source: "game" }),
+    keepalive: true,
+  }).then(r => r.json()).then(data => {
+    if (mode !== state.mode || grade !== state.grade) return;
+    applyCoinEligibilityFromResponse(data, grade);
+    if (Number.isFinite(data.streak)) {
+      state.combo = data.streak;
+      state.comboMax = Math.max(state.comboMax, state.combo);
+      updateScoreboard();
+    }
+  }).catch(() => {});
+  if (state.coinEligible) {
+    state.combo = 0;
+    updateScoreboard();
+  }
+  return true;
+}
+
 async function checkCoinEligible() {
   if (!state.user) {
     state.coinEligible = true;
     state.coinEligibilityMessage = "";
+    state.coinEligibleFromGrade = "";
+    state.coinHomeworkGrade = "";
     return;
   }
   try {
     const res = await fetch(`/api/coin-eligible?mode=${encodeURIComponent(state.mode)}&grade=${encodeURIComponent(state.grade)}`);
     const data = await res.json();
-    state.coinEligible = data.eligible;
-    state.coinEligibilityMessage = data.message || "";
+    applyCoinEligibilityFromResponse(data, state.grade);
   } catch (e) {
     state.coinEligible = true;
     state.coinEligibilityMessage = "";
+    state.coinEligibleFromGrade = "";
+    state.coinHomeworkGrade = "";
   }
   updateScoreboard();
 }
@@ -2006,20 +2171,20 @@ function renderUserBar() {
   if (state.user) {
     bar.innerHTML = `
       <span style="cursor:pointer" onclick="switchToHomeworkView()">${state.user}</span>
-      <a class="user-btn" href="/review" target="_blank" rel="noopener">复习</a>
+      <a class="user-btn" href="/review" target="_blank" rel="noopener" onclick="return openReviewNav(event)">复习</a>
       <button class="user-btn" onclick="showShop()">商店</button>
       <button class="user-btn" onclick="showLeaderboard()">排行榜</button>
       <button class="user-btn" onclick="showScores()">历史成绩</button>
       <button class="user-btn" onclick="showChangePasswordModal()">修改密码</button>
-      <button class="user-btn" onclick="location.href='/parent'">家长登录</button>
-      <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
+      <button class="user-btn" onclick="navigateWithQuestionPrompt('/parent')">家长登录</button>
+      <button class="user-btn" onclick="navigateWithQuestionPrompt('/contact')">联系管理员</button>
       <button class="user-btn" onclick="doLogout()">退出</button>
       ${adminBtn}
     `;
   } else {
     bar.innerHTML = `
-      <button class="user-btn" onclick="location.href='/parent'">家长登录</button>
-      <button class="user-btn" onclick="location.href='/contact'">联系管理员</button>
+      <button class="user-btn" onclick="navigateWithQuestionPrompt('/parent')">家长登录</button>
+      <button class="user-btn" onclick="navigateWithQuestionPrompt('/contact')">联系管理员</button>
       <button class="user-btn" onclick="showAuthModal()">登录 / 注册</button>
     `;
   }
@@ -2043,6 +2208,7 @@ function hideAuthModal() {
 let _cpwTab = "current"; // "current" or "code"
 
 async function showChangePasswordModal() {
+  if (!(await confirmLeavingGameQuestion())) return;
   // Reset fields
   ["cpwCurrent","cpwNew1","cpwNew2","cpwCode","cpwEmailInput","cpwEmailCurrent"].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = "";
@@ -2269,10 +2435,11 @@ async function submitAuth() {
   renderUserBar();
   hideAuthModal();
   // Switch to homework view after login
-  switchToHomeworkView();
+  await switchToHomeworkView();
 }
 
 async function doLogout() {
+  if (!(await confirmLeavingGameQuestion())) return;
   await saveScore();
   await fetch("/api/logout", { method: "POST" });
   state.user = null;
@@ -2348,7 +2515,8 @@ function saveScoreAsync() {
   }).catch(() => {});
 }
 
-function showScores() {
+async function showScores() {
+  if (!(await confirmLeavingGameQuestion())) return;
   saveScoreAsync();
   window.open("/history", "_blank");
 }
@@ -2364,6 +2532,7 @@ const MODE_LABELS = {
 };
 
 async function showLeaderboard() {
+  if (!(await confirmLeavingGameQuestion())) return;
   await saveScore();
   const modal = document.getElementById("lbModal");
   modal.classList.remove("hidden");
@@ -2413,6 +2582,7 @@ async function loadLeaderboard(mode, tabBtn) {
 
 // --- Shop ---
 async function showShop() {
+  if (!(await confirmLeavingGameQuestion())) return;
   const modal = document.getElementById("shopModal");
   modal.classList.remove("hidden");
 
@@ -2505,7 +2675,8 @@ async function buyItem(itemId, name, price) {
 }
 
 // --- Admin ---
-function showAdminLogin() {
+async function showAdminLogin() {
+  if (!(await confirmLeavingGameQuestion())) return;
   document.getElementById("adminLoginModal").classList.remove("hidden");
   document.getElementById("adminLoginError").textContent = "";
   document.getElementById("adminPassword").value = "";
@@ -2567,12 +2738,14 @@ async function loadAdminMessages() {
       const replyLink = m.reply_email
         ? `<a href="mailto:${escape(m.reply_email)}" style="color:#5a67d8;margin-left:6px">✉ 回复 ${escape(m.reply_email)}</a>`
         : '';
-      const imageHtml = m.image_data
+      const imageUrl = `/api/admin/messages/${m.id}/image`;
+      const imageHtml = m.has_image
         ? `<div style="margin-top:8px">
-            <a href="data:${escape(m.image_mime)};base64,${m.image_data}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#5a67d8;text-decoration:none">
-              <img src="data:${escape(m.image_mime)};base64,${m.image_data}" alt="${escape(m.image_name || '留言图片')}" style="width:96px;height:72px;object-fit:cover;border:1px solid #e2e8f0;border-radius:6px">
+            <a href="${imageUrl}" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;color:#5a67d8;text-decoration:none">
+              <img src="${imageUrl}" alt="${escape(m.image_name || '留言图片')}" style="width:96px;height:72px;object-fit:cover;border:1px solid #e2e8f0;border-radius:6px;background:#fff">
               <span style="font-size:12px">${escape(m.image_name || '查看图片')}</span>
             </a>
+            <a href="${imageUrl}?download=1" style="font-size:12px;color:#718096;margin-left:10px">下载</a>
           </div>`
         : '';
       return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff">
@@ -2592,6 +2765,7 @@ async function loadAdminMessages() {
 }
 
 async function showAdminPanel() {
+  if (!(await confirmLeavingGameQuestion())) return;
   // If we just logged in (state.isAdmin is true), trust it;
   // otherwise verify with server
   if (!state.isAdmin) {
@@ -3301,7 +3475,7 @@ async function init() {
     if (lastView === "game") {
       await switchToGameView();
     } else {
-      switchToHomeworkView();
+      await switchToHomeworkView();
     }
   } else {
     // Must login to use — hide everything and show auth modal
@@ -3326,6 +3500,7 @@ function renderGrades(grades) {
     btn.className = "grade-btn" + (g === state.grade ? " active" : "");
     btn.textContent = g;
     btn.onclick = async () => {
+      if (!(await confirmLeavingGameQuestion())) return;
       saveScoreAsync();
       state.grade = g;
       localStorage.setItem("hanzi_grade", g);
@@ -3350,6 +3525,7 @@ function renderModes() {
     btn.className = "mode-btn" + (m.id === state.mode ? " active" : "");
     btn.textContent = m.label;
     btn.onclick = async () => {
+      if (!(await confirmLeavingGameQuestion())) return;
       saveScoreAsync();
       state.mode = m.id;
       localStorage.setItem("hanzi_mode", m.id);
@@ -3414,6 +3590,9 @@ function renderQuestion(q) {
   const area = document.getElementById("questionArea");
   const opts = document.getElementById("optionsArea");
   mainCellLayout = null; // reset — only set for dictation_handwrite multi-char
+  state.currentQ = q;
+  state.answering = true;
+  state.currentQuestionAttempted = false;
 
   // Question display
   if (q.mode === "char_to_pinyin") {
@@ -3644,6 +3823,7 @@ function handleAnswer(selected, q, btn) {
   const hint = document.getElementById("hintArea");
 
   state.totalQuestions += 1;
+  state.currentQuestionAttempted = true;
   if (isCorrect) {
     btn.classList.add("correct");
     state.correctAnswers += 1;
@@ -3688,6 +3868,7 @@ function handleAnswer(selected, q, btn) {
 // --- Dictation ---
 function handleDictationAnswer(userInput, q) {
   if (!state.answering) return;
+  state.currentQuestionAttempted = true;
 
   const isCorrect = userInput === q.answer;
   const hint = document.getElementById("hintArea");
@@ -4971,6 +5152,7 @@ async function submitGamePinyin() {
     }
   }
   state.totalQuestions += 1;
+  state.currentQuestionAttempted = true;
 
   if (isCorrect) {
     state.answering = false;
@@ -5091,7 +5273,7 @@ function updateStreakBar() {
     const reward = document.getElementById("streakReward");
     const markers = document.getElementById("streakMarkers");
     if (fill) fill.style.width = "0%";
-    if (label) label.textContent = state.coinEligibilityMessage || "超过范围，不参与金币连击计算";
+    if (label) label.textContent = detailedCoinEligibilityMessage();
     if (reward) reward.textContent = "";
     if (markers) markers.innerHTML = "";
     return;
@@ -5275,6 +5457,7 @@ async function handleReadAloudAnswer(alternatives) {
   }
 
   state.totalQuestions += 1;
+  state.currentQuestionAttempted = true;
   if (isCorrect) {
     state.correctAnswers += 1;
     state.combo += 1;
@@ -5350,6 +5533,45 @@ function isHomeworkProcessActive() {
   return !!(hwReview && hwReview.questions && hwReview.questions.length > 0 && !hwQuiz.isPreview);
 }
 
+function currentHomeworkQuestionContext() {
+  if (!isHomeworkProcessActive()) return null;
+  if (activeHomeworkFlow === "review" && hwReview && hwReview.questions && hwReview.questions.length) {
+    return {
+      flow: "review",
+      q: hwReview.questions[hwReview.currentIndex],
+      index: hwReview.currentIndex,
+      answering: hwReview.answering,
+    };
+  }
+  if (hwQuiz && hwQuiz.questions && hwQuiz.questions.length && hwQuiz.currentIndex < hwQuiz.questions.length) {
+    return {
+      flow: activeHomeworkFlow || "homework",
+      q: hwQuiz.questions[hwQuiz.currentIndex],
+      index: hwQuiz.currentIndex,
+      answering: hwQuiz.answering,
+    };
+  }
+  return null;
+}
+
+function isHomeworkQuestionPending() {
+  const ctx = currentHomeworkQuestionContext();
+  if (!ctx || !ctx.q || !ctx.answering) return false;
+  return !(lastHwStreakReport
+    && lastHwStreakReport.flow === ctx.flow
+    && lastHwStreakReport.questionIndex === ctx.index);
+}
+
+function reportUnansweredHomeworkQuestion() {
+  if (!isHomeworkQuestionPending()) return false;
+  const ctx = currentHomeworkQuestionContext();
+  if (!ctx || !ctx.q) return false;
+  reportHwStreak(false, questionStreakType(ctx.q));
+  if (ctx.flow === "review") hwReview.answering = false;
+  else hwQuiz.answering = false;
+  return true;
+}
+
 async function saveActiveHomeworkProgress(keepalive = false) {
   if (!isHomeworkProcessActive()) return;
   const saves = [];
@@ -5380,6 +5602,7 @@ async function promptBeforeLeavingHomework() {
   if (!isHomeworkProcessActive()) return true;
   const choice = await showHwExitDialog();
   if (choice === 0) return false;
+  reportUnansweredHomeworkQuestion();
   if (choice === 1) await saveActiveHomeworkProgress();
   if (choice === 2) {
     try {
@@ -5395,7 +5618,7 @@ async function promptBeforeLeavingHomework() {
 // Save score when leaving the page or switching away
 window.addEventListener("beforeunload", (event) => {
   saveScoreAsync();
-  if (isHomeworkProcessActive()) {
+  if (isGameQuestionPending() || isHomeworkProcessActive()) {
     saveActiveHomeworkProgress(true);
     event.preventDefault();
     event.returnValue = "";
@@ -5404,9 +5627,17 @@ window.addEventListener("beforeunload", (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
+    reportUnansweredGameQuestion();
+    reportUnansweredHomeworkQuestion();
     saveScoreAsync();
     saveActiveHomeworkProgress(true);
   }
+});
+window.addEventListener("pagehide", () => {
+  reportUnansweredGameQuestion();
+  reportUnansweredHomeworkQuestion();
+  saveScoreAsync();
+  saveActiveHomeworkProgress(true);
 });
 
 document.addEventListener("click", async event => {
@@ -5518,6 +5749,7 @@ function reportHwStreak(correct, type = null) {
     mode,
     previousStreak,
     previousAwarded,
+    flow: activeHomeworkFlow || (hwQuiz.isPreview ? "preview" : "homework"),
     questionIndex: activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex,
   };
   if (correct) hwStreakByType[streakType] = (hwStreakByType[streakType] || 0) + 1;
@@ -5588,14 +5820,27 @@ function currentHomeworkQuestionForReport() {
   return null;
 }
 
+function canvasToReportImage(canvas) {
+  if (!canvas) return "";
+  const out = document.createElement("canvas");
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const ctx = out.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.drawImage(canvas, 0, 0);
+  return out.toDataURL("image/png");
+}
+
 function homeworkCanvasImageForReport() {
-  const canvas = document.getElementById("hwQuizCanvas");
+  const canvas = document.getElementById("hwQuizCanvas")
+    || document.querySelector("#hwQuizQuestionArea canvas, #hwQuizOptionsArea canvas");
   if (!canvas) return null;
   try {
     return {
       name: "recognition-error.png",
       mime: "image/png",
-      data: canvas.toDataURL("image/png"),
+      data: canvasToReportImage(canvas),
     };
   } catch(e) {
     return null;
@@ -5773,7 +6018,9 @@ let hwCurrentStroke = null;
 let hwIsDrawing = false;
 
 // --- View switching ---
-function switchToHomeworkView() {
+async function switchToHomeworkView(options = {}) {
+  if (!options.skipQuestionPrompt && !(await confirmLeavingGameQuestion())) return;
+  saveScoreAsync();
   localStorage.setItem("hanzi_view", "homework");
   const hwView = document.getElementById("homeworkView");
   hwView.style.display = "flex";
@@ -5791,6 +6038,7 @@ function switchToHomeworkView() {
 }
 
 async function switchToGameView() {
+  if (isHomeworkProcessActive() && !(await promptBeforeLeavingHomework())) return;
   localStorage.setItem("hanzi_view", "game");
   document.getElementById("homeworkView").style.display = "none";
   document.getElementById("gameView").style.display = "";
@@ -6971,6 +7219,7 @@ async function confirmHwBackToList() {
   // Show save dialog for homework
   const choice = await showHwExitDialog();
   if (choice === 0) return; // cancelled
+  reportUnansweredHomeworkQuestion();
   clearInterval(hwQuiz.timerInterval);
   if (choice === 1) {
     // Auto-save already wrote to localStorage; also push to server as backup
@@ -6987,6 +7236,7 @@ async function confirmHwBackToList() {
 async function confirmHwReviewBack() {
   const choice = await showHwExitDialog();
   if (choice === 0) return;
+  reportUnansweredHomeworkQuestion();
   clearInterval(hwReview.timerInterval);
   if (choice === 1) {
     const timeElapsed = Math.floor((Date.now() - hwReview.startTime) / 1000);
@@ -7005,6 +7255,15 @@ async function confirmHwReviewBack() {
 
 function showHwExitDialog() {
   return new Promise(resolve => {
+    const ctx = currentHomeworkQuestionContext();
+    const total = activeHomeworkFlow === "review" ? (hwReview.questions || []).length : (hwQuiz.questions || []).length;
+    const index = ctx ? ctx.index : (activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex);
+    const progressIndex = total ? Math.min(index + 1, total) : 0;
+    const warning = isHomeworkQuestionPending()
+      ? `<div style="font-size:13px;color:#9b2c2c;background:#fff5f5;border:1px solid #fed7d7;border-radius:10px;padding:10px;margin-bottom:14px;text-align:left">
+          当前题目还没有作答。请先回答当前题目，以保证金币连击数；如果现在退出，会把当前题按未答处理，金币连击会中断。${isAutoNext() ? '<br>如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块或切换学习模式。' : ''}
+        </div>`
+      : '';
     const overlay = document.createElement("div");
     overlay.className = "hw-exit-overlay";
     overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center";
@@ -7012,7 +7271,8 @@ function showHwExitDialog() {
     box.style.cssText = "background:#fff;border-radius:16px;padding:24px;max-width:320px;width:90%;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,0.3)";
     box.innerHTML = `
       <div style="font-size:18px;font-weight:700;margin-bottom:8px">退出作业</div>
-      <div style="font-size:14px;color:#718096;margin-bottom:20px">当前进度: ${hwQuiz.currentIndex}/${hwQuiz.questions.length} 题</div>
+      <div style="font-size:14px;color:#718096;margin-bottom:14px">当前进度: ${progressIndex}/${total} 题</div>
+      ${warning}
       <div style="display:flex;flex-direction:column;gap:10px">
         <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">保存进度并退出</button>
         <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">不保存，直接退出</button>
