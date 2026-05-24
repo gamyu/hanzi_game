@@ -1268,7 +1268,8 @@ def init_db():
         )
     """)
     db.execute("CREATE INDEX IF NOT EXISTS idx_game_usage_user_date ON game_usage_records(user_id, usage_date)")
-    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_game_usage_exchange ON game_usage_records(source_exchange_id) WHERE source_exchange_id IS NOT NULL")
+    # NOTE: idx_game_usage_exchange is created at the end of init_db(), after the
+    # ALTER TABLE migrations that add source_exchange_id to pre-existing tables.
     db.execute("""
         CREATE TABLE IF NOT EXISTS contact_messages (
             id SERIAL PRIMARY KEY,
