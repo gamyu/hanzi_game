@@ -450,6 +450,30 @@ let currentStroke = null;
 let isDrawing = false;
 
 // --- Load today's data ---
+function bookReviewCompleteHtml(plan) {
+  const grade = plan?.grade_short || plan?.grade || "";
+  return `<div style="margin-bottom:12px;padding:14px 16px;background:#ebf8ff;border:1px solid #90cdf4;border-radius:12px;color:#2c5282">
+    <div style="font-size:18px;font-weight:800;margin-bottom:6px">该册已复习完</div>
+    <div style="font-size:14px;line-height:1.6">${grade} 已复习过一遍，可以选择重新开始复习，系统会从第1天开始布置。</div>
+    <button type="button" onclick="restartBookReviewPlan()" style="margin-top:10px;padding:8px 16px;border:none;border-radius:8px;background:#4299e1;color:#fff;font-weight:700;cursor:pointer">重新开始分册复习</button>
+  </div>`;
+}
+
+async function restartBookReviewPlan() {
+  if (!confirm("确定重新开始分册复习吗？系统会从第1天开始布置。")) return;
+  const res = await fetch("/api/homework/book_review/restart", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    alert(data.error || "重新开始失败，请稍后再试。");
+    return;
+  }
+  await loadToday();
+}
+
 async function loadToday() {
   const res = await fetch("/api/homework/today");
   const data = await res.json();
@@ -467,15 +491,17 @@ async function loadToday() {
   }
 
   const assignments = data.assignments;
+  const completedBookReviews = plans.filter(p => p.mode === "book_review" && p.book_review_completed);
+  const completeNotice = completedBookReviews.map(bookReviewCompleteHtml).join("");
 
   if (!assignments || assignments.length === 0) {
-    content.innerHTML = `<div class="no-plan">
+    content.innerHTML = completeNotice || `<div class="no-plan">
       <p>今日无作业</p>
     </div>`;
     return;
   }
 
-  let html = '';
+  let html = completeNotice;
   const hasByLesson = plans.some(p => (p.mode || "by_lesson") === "by_lesson");
   const hasBookReview = plans.some(p => p.mode === "book_review");
   if (hasByLesson && hasBookReview) {
@@ -2006,7 +2032,7 @@ async function finishQuiz() {
 
   document.getElementById("resultIcon").textContent = acc >= 80 ? "🎉" : acc >= 60 ? "💪" : "📚";
   const resultTitle = acc >= 80 ? "太棒了!" : acc >= 60 ? "继续努力!" : "需要加油哦!";
-  document.getElementById("resultTitle").textContent = data.all_done ? "当天作业已完成" : resultTitle;
+  document.getElementById("resultTitle").textContent = data.book_review_completed ? "该册已复习完" : (data.all_done ? "当天作业已完成" : resultTitle);
   document.getElementById("resultStats").innerHTML = `正确率: <span>${correct}/${total} (${acc}%)</span> · 用时: <span>${formatHomeworkMinutes(timeSpent)}</span>`;
 
   if (data.coins_earned > 0) {
@@ -2026,6 +2052,9 @@ async function finishQuiz() {
   if (data.all_done) {
     document.getElementById("resultStats").innerHTML += `<br><span style="color:#38a169">当天作业已完成!</span>`;
   }
+  if (data.book_review_completed) {
+    document.getElementById("resultStats").innerHTML += `<br><span style="color:#3182ce">已复习过一遍，可以选择重新开始复习。</span>`;
+  }
 
   const actionsDiv = document.getElementById("resultActions");
   if (data.next_assignment) {
@@ -2037,7 +2066,10 @@ async function finishQuiz() {
       <button class="result-btn" onclick="backToToday()">返回</button>
       <button class="result-btn next" onclick="startQuiz(${data.next_assignment.id})">${nextAction} · ${typeLabel}第${data.next_assignment.lesson_num}${nextUnit} →</button>`;
   } else {
-    actionsDiv.innerHTML = `<button class="result-btn" onclick="backToToday()">返回</button>`;
+    actionsDiv.innerHTML = data.book_review_completed
+      ? `<button class="result-btn" onclick="backToToday()">返回</button>
+         <button class="result-btn next" onclick="restartBookReviewPlan()">重新开始分册复习</button>`
+      : `<button class="result-btn" onclick="backToToday()">返回</button>`;
   }
 }
 

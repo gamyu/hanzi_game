@@ -523,6 +523,7 @@ def lesson_counts_by_grade():
 # grade (seeded by grade name) so all students get the same day-N content
 # and it stays stable across restarts.
 BOOK_REVIEW_DAYS = 7
+BOOK_REVIEW_COMPLETE_DAY = BOOK_REVIEW_DAYS + 1
 _BOOK_REVIEW_CACHE: dict = {}
 
 
@@ -589,6 +590,141 @@ def find_next_book_review_day(grade, current_day, hw_type):
         if day - 1 < len(split) and split[day - 1]:
             return day
     return None
+
+
+def _book_review_last_day(grade, hw_type):
+    key = "recognition" if hw_type == "recognition" else "writing"
+    split = get_book_review_split(grade).get(key, [])
+    for idx in range(min(len(split), BOOK_REVIEW_DAYS) - 1, -1, -1):
+        if split[idx]:
+            return idx + 1
+    return 0
+
+
+def _book_review_day_has_content(grade, hw_type, day):
+    key = "recognition" if hw_type == "recognition" else "writing"
+    split = get_book_review_split(grade).get(key, [])
+    return 1 <= day <= BOOK_REVIEW_DAYS and day - 1 < len(split) and bool(split[day - 1])
+
+
+def _book_review_type_completed(grade, hw_type, lesson_value):
+    last_day = _book_review_last_day(grade, hw_type)
+    if last_day <= 0:
+        return True
+    try:
+        lesson_value = int(lesson_value)
+    except (TypeError, ValueError):
+        lesson_value = 1
+    return lesson_value > last_day
+
+
+def _book_review_plan_completed(plan):
+    grade = plan["grade"]
+    return (
+        _book_review_type_completed(grade, "recognition", plan["recognition_lesson"])
+        and _book_review_type_completed(grade, "writing", plan["writing_lesson"])
+    )
+
+
+def _book_review_type_completed_by_history(db, user_id, grade, hw_type):
+    last_day = _book_review_last_day(grade, hw_type)
+    if last_day <= 0:
+        return True
+    row = db.execute(
+        """SELECT id FROM daily_assignments
+           WHERE user_id = %s AND mode = 'book_review' AND type = %s
+             AND grade = %s AND lesson_num = %s AND status = 'completed'
+           LIMIT 1""",
+        (user_id, hw_type, grade, last_day),
+    ).fetchone()
+    return row is not None
+
+
+def _book_review_assignment_stale_after_completion(db, user_id, assignment):
+    """Return True for pending review assignments from a finished pass."""
+    grade = assignment["grade"]
+    hw_type = assignment["type"]
+    last_day = _book_review_last_day(grade, hw_type)
+    if last_day <= 0:
+        return True
+    try:
+        assignment_day = int(assignment["lesson_num"])
+    except (TypeError, ValueError):
+        assignment_day = 0
+
+    plan = db.execute(
+        """SELECT * FROM homework_plans
+           WHERE user_id = %s AND active = 1 AND mode = 'book_review'
+           ORDER BY id DESC LIMIT 1""",
+        (user_id,),
+    ).fetchone()
+    if plan:
+        day_col = "recognition_lesson" if hw_type == "recognition" else "writing_lesson"
+        try:
+            plan_day = int(plan[day_col])
+        except (TypeError, ValueError):
+            plan_day = 1
+        if _book_review_type_completed(grade, hw_type, plan_day):
+            return True
+        # After a restart, old pending day-7 rows must not remain playable.
+        if assignment_day != plan_day:
+            return True
+        if plan_day < last_day:
+            return False
+
+    return assignment_day >= last_day and _book_review_type_completed_by_history(
+        db, user_id, grade, hw_type
+    )
+
+
+def _sync_book_review_plan_completion(db, plan, commit=False):
+    """Mark a book-review plan complete once its last day was completed.
+
+    Older plans used to stay on day 7 forever. This sync step repairs those
+    plans from assignment history and removes duplicated pending final-day
+    work so it cannot be used to farm coin streaks.
+    """
+    plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+    if plan_mode != "book_review":
+        return plan, False
+
+    updated = dict(plan)
+    changed = False
+    for hw_type, day_col in [
+        ("recognition", "recognition_lesson"),
+        ("writing", "writing_lesson"),
+    ]:
+        last_day = _book_review_last_day(updated["grade"], hw_type)
+        try:
+            current_day = int(updated[day_col])
+        except (TypeError, ValueError):
+            current_day = 1
+        if _book_review_type_completed(updated["grade"], hw_type, updated[day_col]):
+            continue
+        if last_day > 0 and current_day < last_day:
+            continue
+        if not _book_review_type_completed_by_history(db, updated["user_id"], updated["grade"], hw_type):
+            continue
+        updated[day_col] = BOOK_REVIEW_COMPLETE_DAY
+        if last_day:
+            db.execute(
+                """DELETE FROM daily_assignments
+                   WHERE user_id = %s AND mode = 'book_review' AND type = %s
+                     AND grade = %s AND lesson_num = %s AND status = 'pending'""",
+                (updated["user_id"], hw_type, updated["grade"], last_day),
+            )
+        changed = True
+
+    if changed:
+        db.execute(
+            """UPDATE homework_plans
+               SET recognition_lesson = %s, writing_lesson = %s
+               WHERE id = %s""",
+            (updated["recognition_lesson"], updated["writing_lesson"], updated["id"]),
+        )
+        if commit:
+            db.commit()
+    return updated, changed
 
 
 DEFAULT_COIN_RULES = {
@@ -1928,9 +2064,19 @@ def _homework_plan_info(plan):
     rec_grade = plan["recognition_grade"] or plan["grade"]
     wrt_grade = plan["writing_grade"] or plan["grade"]
     p_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+    rec_lesson = plan["recognition_lesson"]
+    wrt_lesson = plan["writing_lesson"]
+    book_review_completed = False
+    rec_completed = False
+    wrt_completed = False
     if p_mode == "book_review":
         rec_total = BOOK_REVIEW_DAYS
         wrt_total = BOOK_REVIEW_DAYS
+        rec_completed = _book_review_type_completed(plan["grade"], "recognition", rec_lesson)
+        wrt_completed = _book_review_type_completed(plan["grade"], "writing", wrt_lesson)
+        book_review_completed = rec_completed and wrt_completed
+        rec_lesson = min(rec_lesson, BOOK_REVIEW_DAYS)
+        wrt_lesson = min(wrt_lesson, BOOK_REVIEW_DAYS)
     else:
         rec_total = len(HOMEWORK_LESSONS.get(rec_grade, {}))
         wrt_total = len(HOMEWORK_LESSONS.get(wrt_grade, {}))
@@ -1940,13 +2086,16 @@ def _homework_plan_info(plan):
         "grade_short": grade_short_name(plan["grade"]),
         "recognition_grade": rec_grade,
         "writing_grade": wrt_grade,
-        "recognition_lesson": plan["recognition_lesson"],
-        "writing_lesson": plan["writing_lesson"],
+        "recognition_lesson": rec_lesson,
+        "writing_lesson": wrt_lesson,
         "rec_total_lessons": rec_total,
         "wrt_total_lessons": wrt_total,
         "total_lessons": max(rec_total, wrt_total),
         "mode": p_mode,
         "active": plan["active"] if "active" in plan.keys() else 1,
+        "book_review_completed": book_review_completed,
+        "recognition_completed": rec_completed,
+        "writing_completed": wrt_completed,
     }
 
 
@@ -3689,11 +3838,19 @@ def streak_update():
         except (TypeError, ValueError):
             assignment_id = 0
         assignment = db.execute(
-            "SELECT grade FROM daily_assignments WHERE id = %s AND user_id = %s",
+            """SELECT grade, type, lesson_num, mode, status
+               FROM daily_assignments WHERE id = %s AND user_id = %s""",
             (assignment_id, session["user_id"]),
         ).fetchone() if assignment_id else None
         if assignment:
             game_grade = assignment["grade"]
+            asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
+            if assignment["status"] != "pending":
+                forced_ineligible_message = "该作业已完成，不参与金币连击计算"
+            elif asn_mode == "book_review" and _book_review_assignment_stale_after_completion(
+                db, session["user_id"], assignment
+            ):
+                forced_ineligible_message = "该册已复习完，不参与金币连击计算"
         else:
             forced_ineligible_message = COIN_UNVERIFIED_MESSAGE
 
@@ -3895,6 +4052,13 @@ def _get_or_create_today_assignments(db, user_id):
 
     for plan in plans:
         plan_mode = plan["mode"] if "mode" in plan.keys() else "by_lesson"
+        if plan_mode == "book_review":
+            plan, sync_changed = _sync_book_review_plan_completion(db, plan, commit=True)
+            if sync_changed:
+                existing = db.execute(
+                    "SELECT * FROM daily_assignments WHERE user_id = %s AND date = %s",
+                    (user_id, today),
+                ).fetchall()
         plan_existing = [
             r for r in existing
             if (r["mode"] if "mode" in r.keys() else "by_lesson") == plan_mode
@@ -3902,6 +4066,8 @@ def _get_or_create_today_assignments(db, user_id):
         has_pending = any(r["status"] == "pending" for r in plan_existing)
 
         if plan_mode == "book_review":
+            if _book_review_plan_completed(plan):
+                continue
             # Ensure the plan's current review day exists for each type. This
             # also recovers gracefully if a prior submit advanced the plan but
             # the newly-created assignment was lost before commit.
@@ -3914,12 +4080,15 @@ def _get_or_create_today_assignments(db, user_id):
                 if any(r["status"] == "pending" for r in type_rows):
                     continue
                 target_day = plan[day_col]
-                split_key = "recognition" if hw_type == "recognition" else "writing"
-                split = get_book_review_split(plan["grade"]).get(split_key, [])
-                has_content = 1 <= target_day <= BOOK_REVIEW_DAYS and target_day - 1 < len(split) and bool(split[target_day - 1])
+                if _book_review_type_completed(plan["grade"], hw_type, target_day):
+                    continue
+                has_content = _book_review_day_has_content(plan["grade"], hw_type, target_day)
                 if not has_content:
                     continue
-                exists = any(r["grade"] == plan["grade"] and r["lesson_num"] == target_day for r in type_rows)
+                exists = any(
+                    r["status"] == "pending" and r["grade"] == plan["grade"] and r["lesson_num"] == target_day
+                    for r in type_rows
+                )
                 if exists:
                     continue
                 db.execute(
@@ -4029,6 +4198,54 @@ def homework_today():
     })
 
 
+@app.route("/api/homework/book_review/restart", methods=["POST"])
+def homework_book_review_restart():
+    """Restart the active book-review plan from day 1 after one full pass."""
+    if "user_id" not in session:
+        return jsonify({"error": "未登录"}), 401
+    db = get_db()
+    plan = db.execute(
+        """SELECT * FROM homework_plans
+           WHERE user_id = %s AND active = 1 AND mode = 'book_review'
+           ORDER BY id DESC LIMIT 1""",
+        (session["user_id"],),
+    ).fetchone()
+    if not plan:
+        return jsonify({"error": "没有正在使用的分册复习计划"}), 404
+
+    plan, _ = _sync_book_review_plan_completion(db, plan, commit=False)
+    if not _book_review_plan_completed(plan):
+        return jsonify({"error": "该册还没有复习完，完成后才能重新开始"}), 400
+
+    today = date.today().isoformat()
+    db.execute(
+        """DELETE FROM daily_assignments
+           WHERE user_id = %s AND date = %s AND mode = 'book_review'
+             AND status = 'pending'""",
+        (session["user_id"], today),
+    )
+    db.execute(
+        """UPDATE homework_plans
+           SET recognition_lesson = 1, writing_lesson = 1
+           WHERE id = %s""",
+        (plan["id"],),
+    )
+    created = []
+    for hw_type in ("recognition", "writing"):
+        if not _book_review_day_has_content(plan["grade"], hw_type, 1):
+            continue
+        row = db.execute(
+            """INSERT INTO daily_assignments
+               (user_id, date, type, grade, lesson_num, mode)
+               VALUES (%s, %s, %s, %s, 1, 'book_review')
+               RETURNING id, type, grade, lesson_num, mode, status""",
+            (session["user_id"], today, hw_type, plan["grade"]),
+        ).fetchone()
+        created.append(dict(row))
+    db.commit()
+    return jsonify({"ok": True, "assignments": created})
+
+
 @app.route("/api/homework/review_submit", methods=["POST"])
 def homework_review_submit():
     """Mark review items as reviewed after completing review quiz."""
@@ -4075,6 +4292,18 @@ def homework_start(assignment_id):
     lesson_num = assignment["lesson_num"]
     hw_type = assignment["type"]
     asn_mode = assignment["mode"] if "mode" in assignment.keys() else "by_lesson"
+
+    if assignment["status"] == "completed":
+        return jsonify({"error": "这份作业已经完成"}), 400
+    if asn_mode == "book_review" and _book_review_assignment_stale_after_completion(
+        db, session["user_id"], assignment
+    ):
+        db.execute(
+            "DELETE FROM daily_assignments WHERE id = %s AND status = 'pending'",
+            (assignment_id,),
+        )
+        db.commit()
+        return jsonify({"error": "该册已复习完，请重新开始复习后再做题"}), 400
 
     # Collect raw entries for this assignment (both modes produce the same
     # {word, pinyin} shape, question-building then diverges by hw_type)
@@ -4344,18 +4573,24 @@ def homework_submit():
         (session["user_id"], asn_mode),
     ).fetchone()
     first_completion = bool(plan and assignment["status"] == "pending")
+    book_review_completed = False
     if first_completion:
         if asn_mode == "book_review":
             next_day = find_next_book_review_day(
                 assignment["grade"], assignment["lesson_num"], assignment["type"]
             )
-            if next_day:
-                if assignment["type"] == "recognition":
-                    db.execute("UPDATE homework_plans SET recognition_lesson = %s WHERE id = %s",
-                               (next_day, plan["id"]))
-                else:
-                    db.execute("UPDATE homework_plans SET writing_lesson = %s WHERE id = %s",
-                               (next_day, plan["id"]))
+            target_day = next_day or BOOK_REVIEW_COMPLETE_DAY
+            if assignment["type"] == "recognition":
+                db.execute("UPDATE homework_plans SET recognition_lesson = %s WHERE id = %s",
+                           (target_day, plan["id"]))
+            else:
+                db.execute("UPDATE homework_plans SET writing_lesson = %s WHERE id = %s",
+                           (target_day, plan["id"]))
+            synced_plan = db.execute(
+                "SELECT * FROM homework_plans WHERE id = %s", (plan["id"],)
+            ).fetchone()
+            synced_plan, _ = _sync_book_review_plan_completion(db, synced_plan, commit=False)
+            book_review_completed = _book_review_plan_completed(synced_plan)
         else:
             content_key = "识字" if assignment["type"] == "recognition" else "词语"
             if assignment["type"] == "recognition":
@@ -4421,11 +4656,13 @@ def homework_submit():
             "SELECT * FROM homework_plans WHERE id = %s", (plan["id"],)
         ).fetchone()
         if asn_mode == "book_review":
+            updated_plan, _ = _sync_book_review_plan_completion(db, updated_plan, commit=False)
             next_grade = updated_plan["grade"]
             next_lesson = updated_plan["recognition_lesson"] if assignment["type"] == "recognition" else updated_plan["writing_lesson"]
-            split_key = "recognition" if assignment["type"] == "recognition" else "writing"
-            split = get_book_review_split(next_grade).get(split_key, [])
-            has_content = 1 <= next_lesson <= BOOK_REVIEW_DAYS and next_lesson - 1 < len(split) and bool(split[next_lesson - 1])
+            has_content = (
+                not _book_review_type_completed(next_grade, assignment["type"], next_lesson)
+                and _book_review_day_has_content(next_grade, assignment["type"], next_lesson)
+            )
         else:
             if assignment["type"] == "recognition":
                 next_grade = updated_plan["recognition_grade"] or updated_plan["grade"]
@@ -4469,7 +4706,13 @@ def homework_submit():
 
     all_done = pending["cnt"] == 0
 
-    return jsonify({"ok": True, "coins_earned": coins_earned, "all_done": all_done, "next_assignment": next_assignment})
+    return jsonify({
+        "ok": True,
+        "coins_earned": coins_earned,
+        "all_done": all_done,
+        "next_assignment": next_assignment,
+        "book_review_completed": book_review_completed,
+    })
 
 
 @app.route("/api/homework/save_progress", methods=["POST"])
