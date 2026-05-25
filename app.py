@@ -604,10 +604,9 @@ DEFAULT_COIN_RULES = {
     ],
 }
 
+COINS_PER_GAME_MINUTE = 2
 DEFAULT_EXCHANGE_PACKAGES = [
-    {"price": 15, "minutes": 20},
-    {"price": 20, "minutes": 30},
-    {"price": 35, "minutes": 50},
+    {"price": COINS_PER_GAME_MINUTE, "minutes": 1},
 ]
 
 COIN_STREAK_LOOKBACK_BOOKS = 3
@@ -626,17 +625,6 @@ def _get_coin_rules(db):
 
 
 def _get_exchange_packages(db):
-    row = db.execute("SELECT value FROM settings WHERE key = 'exchange_packages'").fetchone()
-    if row:
-        try:
-            pkgs = json.loads(row["value"])
-            # Add id and name for API compatibility
-            for i, p in enumerate(pkgs):
-                p["id"] = i + 1
-                p["name"] = f"{p['minutes']}分钟游戏时间"
-            return pkgs
-        except (json.JSONDecodeError, TypeError):
-            pass
     pkgs = [dict(p) for p in DEFAULT_EXCHANGE_PACKAGES]
     for i, p in enumerate(pkgs):
         p["id"] = i + 1
@@ -3575,6 +3563,7 @@ def admin_settings():
     return jsonify({
         "coin_rules": _get_coin_rules(db),
         "exchange_packages": _get_exchange_packages(db),
+        "exchange_rate": {"coins_per_minute": COINS_PER_GAME_MINUTE},
     })
 
 
@@ -3778,7 +3767,11 @@ def shop_api():
     db = get_db()
     packages = _get_exchange_packages(db)
     rules = _get_coin_rules(db)
-    payload = {"items": packages, "coin_rules": rules}
+    payload = {
+        "items": packages,
+        "coin_rules": rules,
+        "exchange_rate": {"coins_per_minute": COINS_PER_GAME_MINUTE},
+    }
     if "user_id" in session:
         exchange_recent, game_usage_recent = _game_time_records(db, session["user_id"], limit=50)
         payload["exchange_recent"] = exchange_recent
@@ -3790,26 +3783,37 @@ def shop_api():
 def shop_buy():
     if "user_id" not in session:
         return jsonify({"error": "未登录"}), 401
-    data = request.get_json()
-    package_id = data.get("item_id")
+    data = request.get_json(force=True, silent=True) or {}
 
     db = get_db()
-    packages = _get_exchange_packages(db)
-    package = next((p for p in packages if p["id"] == package_id), None)
-    if not package:
-        return jsonify({"error": "套餐不存在"}), 404
+    spent_coins = data.get("coins")
+    if spent_coins is None and data.get("item_id") is not None:
+        packages = _get_exchange_packages(db)
+        package = next((p for p in packages if p["id"] == data.get("item_id")), None)
+        if not package:
+            return jsonify({"error": "套餐不存在"}), 404
+        spent_coins = package["price"]
+    try:
+        spent_coins = int(spent_coins)
+    except (TypeError, ValueError):
+        return jsonify({"error": "请选择要兑换的金币数量"}), 400
+    if spent_coins < COINS_PER_GAME_MINUTE:
+        return jsonify({"error": f"至少需要 {COINS_PER_GAME_MINUTE} 个金币兑换 1 分钟"}), 400
+    if spent_coins % COINS_PER_GAME_MINUTE != 0:
+        return jsonify({"error": f"请选择 {COINS_PER_GAME_MINUTE} 的倍数金币"}), 400
+    minutes = spent_coins // COINS_PER_GAME_MINUTE
 
     user = db.execute("SELECT coins, game_minutes FROM users WHERE id = %s", (session["user_id"],)).fetchone()
-    if user["coins"] < package["price"]:
+    if user["coins"] < spent_coins:
         return jsonify({"error": "金币不足"}), 400
 
     db.execute("UPDATE users SET coins = coins - %s WHERE id = %s",
-               (package["price"], session["user_id"]))
+               (spent_coins, session["user_id"]))
     tx = db.execute(
         """INSERT INTO coin_transactions (user_id, amount, source, details)
            VALUES (%s, %s, 'shop', %s)
            RETURNING id, created_at""",
-        (session["user_id"], -package["price"], f"兑换 {package['minutes']} 分钟游戏时间"),
+        (session["user_id"], -spent_coins, f"兑换 {minutes} 分钟游戏时间"),
     ).fetchone()
     tx_created_at = tx["created_at"]
     exchange_date = tx_created_at.date().isoformat() if hasattr(tx_created_at, "date") else str(tx_created_at)[:10]
@@ -3818,7 +3822,7 @@ def shop_buy():
            (user_id, exchange_date, coins, minutes, source_transaction_id, created_at)
            VALUES (%s, %s, %s, %s, %s, %s)
            ON CONFLICT (source_transaction_id) DO NOTHING""",
-        (session["user_id"], exchange_date, package["price"], package["minutes"], tx["id"], tx_created_at),
+        (session["user_id"], exchange_date, spent_coins, minutes, tx["id"], tx_created_at),
     )
     db.execute(
         """INSERT INTO game_usage_records
@@ -3829,14 +3833,20 @@ def shop_buy():
            WHERE source_transaction_id = %s
            ON CONFLICT DO NOTHING""",
         (
-            session["user_id"], exchange_date, package["minutes"],
+            session["user_id"], exchange_date, minutes,
             "兑换后自动使用", tx_created_at, tx["id"],
         ),
     )
     db.commit()
-    new_coins = user["coins"] - package["price"]
+    new_coins = user["coins"] - spent_coins
     new_minutes = user["game_minutes"]
-    return jsonify({"ok": True, "coins": new_coins, "game_minutes": new_minutes})
+    return jsonify({
+        "ok": True,
+        "coins": new_coins,
+        "game_minutes": new_minutes,
+        "spent_coins": spent_coins,
+        "minutes": minutes,
+    })
 
 
 # === Homework System ===
