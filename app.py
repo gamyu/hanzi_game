@@ -3550,7 +3550,14 @@ def admin_user_details(user_id):
         return jsonify({"error": "无管理员权限"}), 403
 
     db = get_db()
-    user = db.execute("SELECT id, username, coins, game_minutes, created_at FROM users WHERE id = %s", (user_id,)).fetchone()
+    user = db.execute(
+        """SELECT id, username, coins, game_minutes,
+                  recognition_streak, writing_streak,
+                  recognition_coins_awarded, writing_coins_awarded,
+                  created_at
+           FROM users WHERE id = %s""",
+        (user_id,),
+    ).fetchone()
     if not user:
         return jsonify({"error": "用户不存在"}), 404
 
@@ -3659,6 +3666,42 @@ def admin_adjust_user_coins(user_id):
         )
     db.commit()
     return jsonify({"ok": True, "coins": target_coins, "delta": delta})
+
+
+@app.route("/api/admin/user/<int:user_id>/streaks", methods=["POST"])
+def admin_adjust_user_streaks(user_id):
+    """Overwrite a user's coin streak counters after admin-verified issues."""
+    if not session.get("is_admin"):
+        return jsonify({"error": "无管理员权限"}), 403
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        recognition_streak = int(data.get("recognition_streak"))
+        writing_streak = int(data.get("writing_streak"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "请输入有效的连击数"}), 400
+    if recognition_streak < 0 or writing_streak < 0:
+        return jsonify({"error": "连击数不能小于 0"}), 400
+
+    db = get_db()
+    user = db.execute("SELECT id FROM users WHERE id = %s", (user_id,)).fetchone()
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
+
+    recognition_awarded = calc_streak_coins(recognition_streak, False, db)
+    writing_awarded = calc_streak_coins(writing_streak, True, db)
+    row = db.execute(
+        """UPDATE users
+           SET recognition_streak = %s,
+               recognition_coins_awarded = %s,
+               writing_streak = %s,
+               writing_coins_awarded = %s
+           WHERE id = %s
+           RETURNING recognition_streak, recognition_coins_awarded,
+                     writing_streak, writing_coins_awarded""",
+        (recognition_streak, recognition_awarded, writing_streak, writing_awarded, user_id),
+    ).fetchone()
+    db.commit()
+    return jsonify({"ok": True, "streaks": dict(row)})
 
 
 @app.route("/admin/user/<int:user_id>/wrong")

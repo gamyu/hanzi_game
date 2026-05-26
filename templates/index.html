@@ -3010,6 +3010,17 @@ async function showUserDetail(userId, username) {
     <button class="admin-btn" onclick="adjustUserCoins(${userId})" style="padding:7px 12px">保存</button>
     <span id="adminCoinAdjustMsg_${userId}" style="font-size:12px"></span>
   </div>`;
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;font-size:13px;background:#f7fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px">
+    <span style="font-weight:700;color:#4a5568">手动设置金币连击</span>
+    <label style="display:flex;align-items:center;gap:4px;color:#4a5568">认字
+      <input type="number" id="adminRecStreak_${userId}" class="admin-input" style="max-width:90px" min="0" value="${data.user.recognition_streak || 0}">
+    </label>
+    <label style="display:flex;align-items:center;gap:4px;color:#4a5568">写字
+      <input type="number" id="adminWrtStreak_${userId}" class="admin-input" style="max-width:90px" min="0" value="${data.user.writing_streak || 0}">
+    </label>
+    <button class="admin-btn" onclick="adjustUserStreaks(${userId})" style="padding:7px 12px">保存连击</button>
+    <span id="adminStreakAdjustMsg_${userId}" style="font-size:12px"></span>
+  </div>`;
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
     <span style="padding:4px 10px;background:#ebf8ff;border-radius:6px;color:#2c5282"><strong>游戏:</strong> +${earnedGame}</span>
     <span style="padding:4px 10px;background:#fefcbf;border-radius:6px;color:#744210"><strong>作业:</strong> +${earnedHw}</span>
@@ -3147,6 +3158,38 @@ async function adjustUserCoins(userId) {
   }
   if (msg) { msg.textContent = `已保存 (${data.delta >= 0 ? "+" : ""}${data.delta})`; msg.style.color = "#38a169"; }
   refreshAdminUsers();
+}
+
+async function adjustUserStreaks(userId) {
+  const recInput = document.getElementById(`adminRecStreak_${userId}`);
+  const wrtInput = document.getElementById(`adminWrtStreak_${userId}`);
+  const msg = document.getElementById(`adminStreakAdjustMsg_${userId}`);
+  const recognitionStreak = parseInt(recInput?.value, 10);
+  const writingStreak = parseInt(wrtInput?.value, 10);
+  if (!Number.isFinite(recognitionStreak) || !Number.isFinite(writingStreak)
+      || recognitionStreak < 0 || writingStreak < 0) {
+    if (msg) { msg.textContent = "请输入不小于 0 的连击数"; msg.style.color = "#e53e3e"; }
+    return;
+  }
+  if (!confirm(`确定将认字连击设为 ${recognitionStreak}，写字连击设为 ${writingStreak}？`)) return;
+  if (msg) { msg.textContent = "保存中..."; msg.style.color = "#718096"; }
+  const res = await fetch(`/api/admin/user/${userId}/streaks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recognition_streak: recognitionStreak,
+      writing_streak: writingStreak,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    if (msg) { msg.textContent = data.error || "保存失败"; msg.style.color = "#e53e3e"; }
+    return;
+  }
+  if (msg) {
+    msg.textContent = `已保存：认字 ${data.streaks.recognition_streak}，写字 ${data.streaks.writing_streak}`;
+    msg.style.color = "#38a169";
+  }
 }
 
 async function adminLogout() {
