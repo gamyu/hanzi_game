@@ -746,6 +746,7 @@ DEFAULT_EXCHANGE_PACKAGES = [
 ]
 
 COIN_STREAK_LOOKBACK_BOOKS = 3
+UNANSWERED_STREAK_GRACE_LIMIT = 2
 COIN_INELIGIBLE_MESSAGE = "超过范围，不参与金币连击计算"
 COIN_UNVERIFIED_MESSAGE = "无法确认作业范围，不参与金币连击计算"
 
@@ -1453,6 +1454,10 @@ def init_db():
         db.execute("ALTER TABLE users ADD COLUMN recognition_coins_awarded INTEGER NOT NULL DEFAULT 0")
     if not _col_exists("users", "writing_coins_awarded"):
         db.execute("ALTER TABLE users ADD COLUMN writing_coins_awarded INTEGER NOT NULL DEFAULT 0")
+    if not _col_exists("users", "recognition_unanswered_exits"):
+        db.execute("ALTER TABLE users ADD COLUMN recognition_unanswered_exits INTEGER NOT NULL DEFAULT 0")
+    if not _col_exists("users", "writing_unanswered_exits"):
+        db.execute("ALTER TABLE users ADD COLUMN writing_unanswered_exits INTEGER NOT NULL DEFAULT 0")
     # Parental control: each user can set a separate password that grants
     # a read+plan-edit session scoped to just that user's data.
     if not _col_exists("users", "parent_password_hash"):
@@ -3693,8 +3698,10 @@ def admin_adjust_user_streaks(user_id):
         """UPDATE users
            SET recognition_streak = %s,
                recognition_coins_awarded = %s,
+               recognition_unanswered_exits = 0,
                writing_streak = %s,
-               writing_coins_awarded = %s
+               writing_coins_awarded = %s,
+               writing_unanswered_exits = 0
            WHERE id = %s
            RETURNING recognition_streak, recognition_coins_awarded,
                      writing_streak, writing_coins_awarded""",
@@ -3769,7 +3776,8 @@ def coins_api():
     row = db.execute(
         """SELECT coins, game_minutes,
                   recognition_streak, writing_streak,
-                  recognition_coins_awarded, writing_coins_awarded
+                  recognition_coins_awarded, writing_coins_awarded,
+                  recognition_unanswered_exits, writing_unanswered_exits
            FROM users WHERE id = %s""",
                      (session["user_id"],)).fetchone()
     return jsonify({
@@ -3779,6 +3787,9 @@ def coins_api():
         "writing_streak": row["writing_streak"] if row else 0,
         "recognition_coins_awarded": row["recognition_coins_awarded"] if row else 0,
         "writing_coins_awarded": row["writing_coins_awarded"] if row else 0,
+        "recognition_unanswered_exits": row["recognition_unanswered_exits"] if row else 0,
+        "writing_unanswered_exits": row["writing_unanswered_exits"] if row else 0,
+        "unanswered_grace_limit": UNANSWERED_STREAK_GRACE_LIMIT,
     })
 
 
@@ -3850,6 +3861,7 @@ def streak_update():
         return jsonify({"error": "无效的请求数据"}), 400
 
     correct = data.get("correct", False)
+    is_unanswered = data.get("unanswered") is True
     mode = data.get("mode", "")
     game_grade = data.get("grade", "")  # grade of the game being played
     forced_ineligible_message = ""
@@ -3859,16 +3871,17 @@ def streak_update():
         source = "game"
     is_writing = mode == "dictation_handwrite"
     STREAK_COLS = {
-        "writing": ("writing_streak", "writing_coins_awarded"),
-        "recognition": ("recognition_streak", "recognition_coins_awarded"),
+        "writing": ("writing_streak", "writing_coins_awarded", "writing_unanswered_exits"),
+        "recognition": ("recognition_streak", "recognition_coins_awarded", "recognition_unanswered_exits"),
     }
-    streak_col, awarded_col = STREAK_COLS["writing" if is_writing else "recognition"]
+    streak_col, awarded_col, unanswered_col = STREAK_COLS["writing" if is_writing else "recognition"]
 
     db = get_db()
     user = db.execute(
-        psycopg.sql.SQL("SELECT {streak}, {awarded}, coins FROM users WHERE id = %s").format(
+        psycopg.sql.SQL("SELECT {streak}, {awarded}, {unanswered}, coins FROM users WHERE id = %s").format(
             streak=psycopg.sql.Identifier(streak_col),
             awarded=psycopg.sql.Identifier(awarded_col),
+            unanswered=psycopg.sql.Identifier(unanswered_col),
         ),
         (session["user_id"],),
     ).fetchone()
@@ -3907,6 +3920,9 @@ def streak_update():
 
     coins_earned = 0
     new_awarded = user[awarded_col]
+    unanswered_count = user[unanswered_col] or 0
+    unanswered_grace = False
+    streak_broken = False
     if not coin_eligible:
         # Out-of-range practice is ignored for the coin streak: it neither
         # increments nor resets the existing persistent streak.
@@ -3936,13 +3952,41 @@ def streak_update():
                 ),
                 (new_streak, session["user_id"]),
             )
+    elif is_unanswered:
+        next_unanswered = unanswered_count + 1
+        if next_unanswered <= UNANSWERED_STREAK_GRACE_LIMIT:
+            new_streak = user[streak_col]
+            unanswered_count = next_unanswered
+            unanswered_grace = True
+            db.execute(
+                psycopg.sql.SQL("UPDATE users SET {unanswered} = %s WHERE id = %s").format(
+                    unanswered=psycopg.sql.Identifier(unanswered_col),
+                ),
+                (unanswered_count, session["user_id"]),
+            )
+        else:
+            new_streak = 0
+            new_awarded = 0
+            unanswered_count = 0
+            streak_broken = True
+            db.execute(
+                psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0, {unanswered} = 0 WHERE id = %s").format(
+                    streak=psycopg.sql.Identifier(streak_col),
+                    awarded=psycopg.sql.Identifier(awarded_col),
+                    unanswered=psycopg.sql.Identifier(unanswered_col),
+                ),
+                (session["user_id"],),
+            )
     else:
         new_streak = 0
         new_awarded = 0
+        unanswered_count = 0
+        streak_broken = True
         db.execute(
-            psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0 WHERE id = %s").format(
+            psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0, {unanswered} = 0 WHERE id = %s").format(
                 streak=psycopg.sql.Identifier(streak_col),
                 awarded=psycopg.sql.Identifier(awarded_col),
+                unanswered=psycopg.sql.Identifier(unanswered_col),
             ),
             (session["user_id"],),
         )
@@ -3959,6 +4003,10 @@ def streak_update():
         "eligible_from_grade": eligibility.get("eligible_from_grade", ""),
         "lookback_books": eligibility.get("lookback_books", COIN_STREAK_LOOKBACK_BOOKS),
         "coins_awarded": new_awarded,
+        "unanswered_count": unanswered_count,
+        "unanswered_limit": UNANSWERED_STREAK_GRACE_LIMIT,
+        "unanswered_grace": unanswered_grace,
+        "streak_broken": streak_broken,
     })
 
 

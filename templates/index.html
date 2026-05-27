@@ -1898,14 +1898,44 @@ function isGameQuestionPending() {
     && !state.currentQuestionAttempted;
 }
 
+function streakTypeForMode(mode) {
+  return mode === "dictation_handwrite" ? "writing" : "recognition";
+}
+
+function currentGameStreakType() {
+  return streakTypeForMode(state.mode);
+}
+
+function unansweredCountForType(type) {
+  const count = state.unansweredByType?.[type] || 0;
+  return Number.isFinite(count) ? count : 0;
+}
+
+function syncUnansweredGrace(data, type) {
+  if (!data || !type) return;
+  if (Number.isFinite(data.unanswered_count)) {
+    state.unansweredByType[type] = data.unanswered_count;
+  }
+  if (Number.isFinite(data.unanswered_limit)) {
+    state.unansweredGraceLimit = data.unanswered_limit;
+  }
+}
+
 function unansweredQuestionWarningText() {
+  const type = currentGameStreakType();
+  const used = unansweredCountForType(type);
+  const limit = state.unansweredGraceLimit || 2;
+  const willBreak = used >= limit;
   const autoNextTip = isAutoNext()
     ? "如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块、切换书册或学习模式。"
     : "答完当前题后，就可以随时退出当前模块、切换书册或学习模式。";
   return {
     title: "当前题目还没有作答",
-    body: "请先回答当前题目，以保证金币连击数。选择不作答离开会把当前题按未答处理，并丢失当前金币连击记录。",
+    body: willBreak
+      ? `你已经有 ${used} 次看到题目后未作答离开。请先回答当前题目；如果现在不作答离开，会丢失当前金币连击记录。`
+      : `本轮金币连击中，前 ${limit} 次看到题目后临时离开不会断连击。本次未答离开会被记录为第 ${used + 1}/${limit} 次，金币连击会保留。`,
     tip: autoNextTip,
+    leaveLabel: willBreak ? "丢失连击，继续离开" : "先离开，保留连击",
   };
 }
 
@@ -1924,7 +1954,7 @@ function showUnansweredQuestionDialog() {
       <div style="display:flex;flex-direction:column;gap:10px">
         <button id="_questionStay" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:700;cursor:pointer">继续做题</button>
         ${isAutoNext() ? '<button id="_questionAutoOff" style="padding:10px;border:1px solid #cbd5e0;border-radius:10px;background:#fff;color:#4a5568;font-size:15px;font-weight:700;cursor:pointer">关闭自动下一题</button>' : ''}
-        <button id="_questionLeave" style="padding:10px;border:none;border-radius:10px;background:#fed7d7;color:#9b2c2c;font-size:15px;font-weight:700;cursor:pointer">丢失连击，继续离开</button>
+        <button id="_questionLeave" style="padding:10px;border:none;border-radius:10px;background:#fed7d7;color:#9b2c2c;font-size:15px;font-weight:700;cursor:pointer">${text.leaveLabel}</button>
       </div>`;
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -1947,7 +1977,7 @@ async function confirmLeavingGameQuestion() {
   if (!isGameQuestionPending()) return true;
   const choice = await showUnansweredQuestionDialog();
   if (choice !== "leave") return false;
-  reportUnansweredGameQuestion();
+  await reportUnansweredGameQuestion();
   saveScoreAsync();
   return true;
 }
@@ -1998,6 +2028,8 @@ let state = {
   authTab: "login",
   coins: 0,
   gameMinutes: 0,
+  unansweredByType: { recognition: 0, writing: 0 },
+  unansweredGraceLimit: 2,
   isAdmin: false,
   seenQuestions: new Set(),
   retryQueue: [],
@@ -2071,11 +2103,13 @@ let COIN_MILESTONES = {
 
 function reportStreak(correct) {
   if (!state.user) return;
+  const streakType = currentGameStreakType();
   fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ correct, mode: state.mode, grade: state.grade, source: "game" }),
   }).then(r => r.json()).then(data => {
+    syncUnansweredGrace(data, streakType);
     applyCoinEligibilityFromResponse(data);
     if (Number.isFinite(data.streak)) {
       state.combo = data.streak;
@@ -2094,33 +2128,44 @@ function reportStreak(correct) {
   }).catch(() => {});
 }
 
-function reportUnansweredGameQuestion() {
+async function reportUnansweredGameQuestion() {
   if (!state.user || !state.answering || !state.currentQ || state.currentQuestionAttempted) return false;
   const mode = state.mode;
   const grade = state.grade;
+  const streakType = streakTypeForMode(mode);
   state.currentQuestionAttempted = true;
   state.answering = false;
   const hint = document.getElementById("hintArea");
   if (hint && isGameViewVisible()) {
-    hint.innerHTML = `<span class="wrong-text">当前题已按未答处理，当前金币连击记录已丢失。</span>`;
+    hint.innerHTML = `<span style="color:#718096;font-weight:700">正在记录未答离开...</span>`;
   }
-  fetch("/api/streak", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ correct: false, mode, grade, source: "game" }),
-    keepalive: true,
-  }).then(r => r.json()).then(data => {
+  try {
+    const res = await fetch("/api/streak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ correct: false, unanswered: true, mode, grade, source: "game" }),
+      keepalive: true,
+    });
+    const data = await res.json();
     if (mode !== state.mode || grade !== state.grade) return;
+    syncUnansweredGrace(data, streakType);
     applyCoinEligibilityFromResponse(data, grade);
     if (Number.isFinite(data.streak)) {
       state.combo = data.streak;
       state.comboMax = Math.max(state.comboMax, state.combo);
       updateScoreboard();
     }
-  }).catch(() => {});
-  if (state.coinEligible) {
-    state.combo = 0;
-    updateScoreboard();
+    if (hint && isGameViewVisible()) {
+      if (data.unanswered_grace) {
+        hint.innerHTML = `<span style="color:#38a169;font-weight:700">本次未答离开已记录 (${data.unanswered_count}/${data.unanswered_limit})，金币连击已保留。</span>`;
+      } else {
+        hint.innerHTML = `<span class="wrong-text">当前题已按未答处理，当前金币连击记录已丢失。</span>`;
+      }
+    }
+  } catch(e) {
+    if (hint && isGameViewVisible()) {
+      hint.innerHTML = `<span style="color:#d69e2e;font-weight:700">未答离开记录暂时没有保存，请稍后确认网络。</span>`;
+    }
   }
   return true;
 }
@@ -2197,6 +2242,11 @@ async function loadCoins() {
   if (!data.error) {
     state.coins = data.coins;
     state.gameMinutes = data.game_minutes || 0;
+    state.unansweredByType = {
+      recognition: data.recognition_unanswered_exits || 0,
+      writing: data.writing_unanswered_exits || 0,
+    };
+    state.unansweredGraceLimit = data.unanswered_grace_limit || state.unansweredGraceLimit || 2;
     // Load persistent streak for current mode
     const isWriting = state.mode === "dictation_handwrite";
     state.combo = isWriting ? (data.writing_streak || 0) : (data.recognition_streak || 0);
@@ -5653,11 +5703,11 @@ function isHomeworkQuestionPending() {
     && lastHwStreakReport.questionIndex === ctx.index);
 }
 
-function reportUnansweredHomeworkQuestion() {
+async function reportUnansweredHomeworkQuestion(keepalive = false) {
   if (!isHomeworkQuestionPending()) return false;
   const ctx = currentHomeworkQuestionContext();
   if (!ctx || !ctx.q) return false;
-  reportHwStreak(false, questionStreakType(ctx.q));
+  await reportHwStreak(false, questionStreakType(ctx.q), { unanswered: true, keepalive });
   if (ctx.flow === "review") hwReview.answering = false;
   else hwQuiz.answering = false;
   return true;
@@ -5693,7 +5743,7 @@ async function promptBeforeLeavingHomework() {
   if (!isHomeworkProcessActive()) return true;
   const choice = await showHwExitDialog();
   if (choice === 0) return false;
-  reportUnansweredHomeworkQuestion();
+  await reportUnansweredHomeworkQuestion();
   if (choice === 1) await saveActiveHomeworkProgress();
   if (choice === 2) {
     try {
@@ -5719,14 +5769,14 @@ window.addEventListener("beforeunload", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") {
     reportUnansweredGameQuestion();
-    reportUnansweredHomeworkQuestion();
+    reportUnansweredHomeworkQuestion(true);
     saveScoreAsync();
     saveActiveHomeworkProgress(true);
   }
 });
 window.addEventListener("pagehide", () => {
   reportUnansweredGameQuestion();
-  reportUnansweredHomeworkQuestion();
+  reportUnansweredHomeworkQuestion(true);
   saveScoreAsync();
   saveActiveHomeworkProgress(true);
 });
@@ -5788,6 +5838,11 @@ async function loadHwStreaks() {
       recognition: coinData.recognition_coins_awarded || 0,
       writing: coinData.writing_coins_awarded || 0,
     };
+    state.unansweredByType = {
+      recognition: coinData.recognition_unanswered_exits || 0,
+      writing: coinData.writing_unanswered_exits || 0,
+    };
+    state.unansweredGraceLimit = coinData.unanswered_grace_limit || state.unansweredGraceLimit || 2;
     state.coins = coinData.coins || state.coins || 0;
     const coinsBox = document.getElementById("coinsBox");
     if (coinsBox) coinsBox.textContent = `金币: ${state.coins}`;
@@ -5826,16 +5881,20 @@ function currentHomeworkStreakMeta() {
   };
 }
 
-function reportHwStreak(correct, type = null) {
-  if (!state.user) return;
+function reportHwStreak(correct, type = null, options = {}) {
+  if (!state.user) return Promise.resolve(null);
   const activeQuestion = hwQuiz.questions && hwQuiz.questions[hwQuiz.currentIndex];
   const streakType = type || questionStreakType(activeQuestion);
   const mode = streakType === "writing" ? "dictation_handwrite" : "pinyin_typing";
   const meta = currentHomeworkStreakMeta();
   const previousStreak = hwStreakByType[streakType] || 0;
   const previousAwarded = hwStreakAwardedByType[streakType] || 0;
+  const isUnanswered = options.unanswered === true;
+  const unansweredUsed = unansweredCountForType(streakType);
+  const unansweredWillBreak = isUnanswered && unansweredUsed >= (state.unansweredGraceLimit || 2);
   lastHwStreakReport = {
     correct,
+    unanswered: isUnanswered,
     streakType,
     mode,
     previousStreak,
@@ -5844,16 +5903,18 @@ function reportHwStreak(correct, type = null) {
     questionIndex: activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex,
   };
   if (correct) hwStreakByType[streakType] = (hwStreakByType[streakType] || 0) + 1;
-  else hwStreakByType[streakType] = 0;
+  else if (!isUnanswered || unansweredWillBreak) hwStreakByType[streakType] = 0;
   if (hwStreakType === streakType) {
     hwStreak = hwStreakByType[streakType] || 0;
     updateHwStreakBar();
   }
-  fetch("/api/streak", {
+  return fetch("/api/streak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    keepalive: options.keepalive === true,
     body: JSON.stringify({
       correct,
+      unanswered: isUnanswered,
       mode,
       source: "homework",
       grade: meta.grade,
@@ -5861,6 +5922,7 @@ function reportHwStreak(correct, type = null) {
       flow: meta.flow,
     }),
   }).then(r => r.json()).then(data => {
+    syncUnansweredGrace(data, streakType);
     if (!Number.isFinite(data.streak)) {
       updateHwStreakBar();
       return;
@@ -7342,7 +7404,7 @@ async function confirmHwBackToList() {
   // Show save dialog for homework
   const choice = await showHwExitDialog();
   if (choice === 0) return; // cancelled
-  reportUnansweredHomeworkQuestion();
+  await reportUnansweredHomeworkQuestion();
   clearInterval(hwQuiz.timerInterval);
   if (choice === 1) {
     // Auto-save already wrote to localStorage; also push to server as backup
@@ -7359,7 +7421,7 @@ async function confirmHwBackToList() {
 async function confirmHwReviewBack() {
   const choice = await showHwExitDialog();
   if (choice === 0) return;
-  reportUnansweredHomeworkQuestion();
+  await reportUnansweredHomeworkQuestion();
   clearInterval(hwReview.timerInterval);
   if (choice === 1) {
     const timeElapsed = Math.floor((Date.now() - hwReview.startTime) / 1000);
@@ -7383,9 +7445,16 @@ function showHwExitDialog() {
     const index = ctx ? ctx.index : (activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex);
     const progressIndex = total ? Math.min(index + 1, total) : 0;
     const hasPendingQuestion = isHomeworkQuestionPending();
+    const pendingType = ctx?.q ? questionStreakType(ctx.q) : "recognition";
+    const unansweredUsed = unansweredCountForType(pendingType);
+    const unansweredLimit = state.unansweredGraceLimit || 2;
+    const unansweredWillBreak = unansweredUsed >= unansweredLimit;
     const warning = hasPendingQuestion
       ? `<div style="font-size:13px;color:#9b2c2c;background:#fff5f5;border:1px solid #fed7d7;border-radius:10px;padding:10px;margin-bottom:14px;text-align:left">
-          当前题目还没有作答。请先回答当前题目，以保证金币连击数；如果现在退出，会把当前题按未答处理，并丢失当前金币连击记录。${isAutoNext() ? '<br>如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块或切换学习模式。' : ''}
+          ${unansweredWillBreak
+            ? `当前题目还没有作答。你已经有 ${unansweredUsed} 次看到题目后未作答离开；如果现在退出，会把当前题按未答处理，并丢失当前金币连击记录。`
+            : `当前题目还没有作答。本轮金币连击中前 ${unansweredLimit} 次临时离开不会断连击；本次会记录为第 ${unansweredUsed + 1}/${unansweredLimit} 次，并保留金币连击。`
+          }${isAutoNext() ? '<br>如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块或切换学习模式。' : ''}
         </div>`
       : '';
     const overlay = document.createElement("div");
@@ -7398,8 +7467,8 @@ function showHwExitDialog() {
       <div style="font-size:14px;color:#718096;margin-bottom:14px">当前进度: ${progressIndex}/${total} 题</div>
       ${warning}
       <div style="display:flex;flex-direction:column;gap:10px">
-        <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? '保存并退出（丢失连击）' : '保存进度并退出'}</button>
-        <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? '不保存并退出（丢失连击）' : '不保存，直接退出'}</button>
+        <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? (unansweredWillBreak ? '保存并退出（丢失连击）' : '保存并退出（保留连击）') : '保存进度并退出'}</button>
+        <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? (unansweredWillBreak ? '不保存并退出（丢失连击）' : '不保存并退出（保留连击）') : '不保存，直接退出'}</button>
         <button id="_hwExitCancel" style="padding:10px;border:none;border-radius:10px;background:#e2e8f0;color:#4a5568;font-size:15px;font-weight:600;cursor:pointer">继续做作业</button>
       </div>`;
     overlay.appendChild(box);
