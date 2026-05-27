@@ -27,6 +27,7 @@ import atexit
 import smtplib
 import socket
 import subprocess
+from functools import lru_cache
 import psycopg
 import psycopg.sql
 from psycopg.rows import dict_row
@@ -165,14 +166,79 @@ from pinyin_hints import HOMOPHONE_HINTS, MULTI_PINYIN_EXAMPLES  # noqa: E402,F4
 
 
 def _pinyin_has_other_word(pinyin: str, target_word: str) -> bool:
-    """True if any other multi-char word in WORDS shares this pinyin."""
+    """True if any other known multi-char word shares this pinyin.
+
+    WORDS is the writing pool, but students also know words from the
+    per-character example lists in CHARACTERS. Those examples can be valid
+    homophones of a writing answer, e.g. 浇水/胶水, so include them when
+    deciding whether a meaning hint is needed.
+    """
+    return any(word != target_word for word in _known_words_by_pinyin().get(pinyin, set()))
+
+
+@lru_cache(maxsize=1)
+def _known_words_by_pinyin() -> dict[str, set[str]]:
+    char_pinyins: dict[str, set[str]] = {}
+
+    def add_char_pinyin(ch: str, py: str):
+        if ch and py:
+            char_pinyins.setdefault(ch, set()).add(py)
+
+    for chars in CHARACTERS.values():
+        for c in chars:
+            add_char_pinyin(c.get("char", ""), c.get("pinyin", ""))
     for ws in WORDS.values():
         for w in ws:
-            if (len(w["word"]) >= 2
-                    and w["pinyin"] == pinyin
-                    and w["word"] != target_word):
-                return True
-    return False
+            syllables = (w.get("pinyin") or "").split()
+            if len(w.get("word", "")) == len(syllables):
+                for ch, py in zip(w["word"], syllables):
+                    add_char_pinyin(ch, py)
+    for ch, readings in MULTI_PINYIN_EXAMPLES.items():
+        for py in readings:
+            add_char_pinyin(ch, py)
+
+    word_pinyins: dict[str, set[str]] = {}
+
+    def add_word(word: str, py: str):
+        if len(word or "") >= 2 and py:
+            word_pinyins.setdefault(word, set()).add(py)
+
+    for ws in WORDS.values():
+        for w in ws:
+            add_word(w.get("word", ""), w.get("pinyin", ""))
+
+    def infer_word_pinyin(word: str) -> str:
+        syllables = []
+        for ch in word:
+            readings = char_pinyins.get(ch, set())
+            if len(readings) != 1:
+                return ""
+            syllables.append(next(iter(readings)))
+        return " ".join(syllables)
+
+    # Example words such as 胶水 are not always in WORDS, but they still
+    # create real ambiguity for 看拼音写词语.
+    for chars in CHARACTERS.values():
+        for c in chars:
+            for word in c.get("words", []):
+                if len(word) < 2:
+                    continue
+                py = infer_word_pinyin(word)
+                if py:
+                    add_word(word, py)
+
+    # Curated hint entries should also participate in homophone detection.
+    for word in HOMOPHONE_HINTS:
+        if word not in word_pinyins:
+            py = infer_word_pinyin(word)
+            if py:
+                add_word(word, py)
+
+    by_pinyin: dict[str, set[str]] = {}
+    for word, pinyins in word_pinyins.items():
+        for py in pinyins:
+            by_pinyin.setdefault(py, set()).add(word)
+    return by_pinyin
 
 
 def _build_multi_pinyin():
@@ -484,6 +550,33 @@ def _recognition_word_hint(text: str, pinyin: str, grade: str, existing: str = "
     if existing and existing != text:
         return existing
     return "、".join(_char_word_examples(text, pinyin, grade))
+
+
+def _add_recognition_context(payload: dict, text: str, pinyin: str, grade: str,
+                             lesson_num: int = 0, existing: str = "") -> dict:
+    """Mark polyphonic recognition questions and attach the visible context."""
+    text = _string_value(text)
+    pinyin = _string_value(pinyin)
+    grade = _string_value(grade)
+    if len(text) == 1 and text in MULTI_PINYIN:
+        payload["is_polyphonic"] = True
+        context = _find_context_word(text, pinyin, grade, lesson_num)
+        if not context:
+            existing = _string_value(existing)
+            parts = [p for p in re.split(r"[、,，/]", existing) if p and p != text]
+            context = parts[0] if parts else ""
+        if context:
+            payload["context_word"] = context
+    return payload
+
+
+def _add_dictation_homophone_hint(payload: dict, word: str, pinyin: str) -> dict:
+    """Attach meaning hints for same-pinyin writing words."""
+    if _pinyin_has_other_word(pinyin, word):
+        hint = HOMOPHONE_HINTS.get(word)
+        if hint:
+            payload["homophone_hint"] = hint
+    return payload
 
 
 def find_next_lesson_across_grades(current_grade, current_lesson, content_key):
@@ -3193,9 +3286,18 @@ def wrong_answers_api():
     results = [dict(r) for r in rows]
     for item in results:
         if item.get("mode") != "dictation_handwrite":
-            item["words"] = _recognition_word_hint(
+            item_words = _recognition_word_hint(
                 item.get("character", ""), item.get("pinyin", ""),
                 item.get("grade", ""), item.get("words", ""),
+            )
+            item["words"] = item_words
+            _add_recognition_context(
+                item, item.get("character", ""), item.get("pinyin", ""),
+                item.get("grade", ""), 0, item_words,
+            )
+        else:
+            _add_dictation_homophone_hint(
+                item, item.get("character", ""), item.get("pinyin", ""),
             )
     return jsonify({"wrong_answers": results})
 
@@ -4273,9 +4375,18 @@ def homework_today():
     review_needed = [dict(r) for r in review_items]
     for item in review_needed:
         if item.get("mode") != "dictation_handwrite":
-            item["words"] = _recognition_word_hint(
+            item_words = _recognition_word_hint(
                 item.get("character", ""), item.get("pinyin", ""),
                 item.get("grade", ""), item.get("words", ""),
+            )
+            item["words"] = item_words
+            _add_recognition_context(
+                item, item.get("character", ""), item.get("pinyin", ""),
+                item.get("grade", ""), 0, item_words,
+            )
+        else:
+            _add_dictation_homophone_hint(
+                item, item.get("character", ""), item.get("pinyin", ""),
             )
     writing_chars = {r["character"] for r in review_needed if r["mode"] == "dictation_handwrite"}
     review_needed = [r for r in review_needed

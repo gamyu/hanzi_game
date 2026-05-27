@@ -6706,7 +6706,10 @@ function showHwQuizQuestion() {
     // Auto-play audio
     setTimeout(() => speakChar(q.question), 300);
   } else if (q.mode === "dictation_handwrite") {
-    area.innerHTML = `<div class="hw-quiz-label">看拼音写字</div><div class="hw-quiz-pinyin">${q.question}</div>`;
+    const hintLine = q.homophone_hint
+      ? `<div class="question-homophone-hint">提示：${q.homophone_hint}</div>`
+      : '';
+    area.innerHTML = `<div class="hw-quiz-label">看拼音写字</div><div class="hw-quiz-pinyin">${q.question}</div>${hintLine}`;
     opts.style.display = "block";
     const charCount = q.answer.length;
     const cols = charCount >= 3 ? 2 : charCount;
@@ -7507,6 +7510,8 @@ async function startHwReview() {
         answer: item.pinyin,
         grade: item.grade || "",
         word_hint: item.words || "",
+        context_word: item.context_word || "",
+        is_polyphonic: item.is_polyphonic || false,
         display_char: item.character,
         display_pinyin: item.pinyin,
         _reviewItem: item,
@@ -7520,6 +7525,7 @@ async function startHwReview() {
         grade: item.grade || "",
         display_char: item.character,
         display_pinyin: item.pinyin,
+        homophone_hint: item.homophone_hint || "",
         _reviewItem: item,
       });
     }
@@ -7666,6 +7672,9 @@ function showHwReviewQuestion() {
       setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "dictation_handwrite") {
+    const hintLine = q.homophone_hint
+      ? `<div class="question-homophone-hint">提示：${q.homophone_hint}</div>`
+      : '';
     const charCount = q.answer.length;
     const cols = charCount >= 3 ? 2 : charCount;
     const cellSize = getResponsiveCellSize(cols, 140);
@@ -7673,7 +7682,7 @@ function showHwReviewQuestion() {
     const canvasW = cols * cellSize;
     const canvasH = rows * cellSize;
     hwQuizCellLayout = charCount > 1 ? { cellSize, cols, rows, charCount } : null;
-    area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="hw-quiz-pinyin">${q.question}</div>
+    area.innerHTML = `<div class="quiz-label">看拼音写词语</div><div class="hw-quiz-pinyin">${q.question}</div>${hintLine}
       <div class="hw-canvas-wrap" style="display:flex;flex-direction:column;align-items:center">
         <div style="position:relative;width:${canvasW}px;height:${canvasH}px;border:2px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fefefe">
           <canvas id="hwQuizCanvas" width="${canvasW}" height="${canvasH}" style="width:${canvasW}px;height:${canvasH}px"></canvas>
