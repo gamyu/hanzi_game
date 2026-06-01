@@ -2034,6 +2034,7 @@ let state = {
   seenQuestions: new Set(),
   retryQueue: [],
   retryCount: 0,
+  gameModePickerActive: false,
   coinEligible: true,
   coinEligibilityMessage: "",
   coinEligibleFromGrade: "",
@@ -3652,6 +3653,10 @@ function renderGrades(grades) {
       updateScoreboard();
       document.querySelectorAll(".grade-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
+      if (state.gameModePickerActive) {
+        showGameModePicker();
+        return;
+      }
       loadQuestion();
     };
     row.appendChild(btn);
@@ -3664,29 +3669,57 @@ function renderModes() {
   MODES.forEach(m => {
     const btn = document.createElement("button");
     btn.className = "mode-btn" + (m.id === state.mode ? " active" : "");
+    btn.dataset.mode = m.id;
     btn.textContent = m.label;
-    btn.onclick = async () => {
-      if (!(await confirmLeavingGameQuestion())) return;
-      saveScoreAsync();
-      state.mode = m.id;
-      localStorage.setItem("hanzi_mode", m.id);
-      state.seenQuestions.clear();
-      state.retryQueue = [];
-      state.retryCount = 0;
-      // Load the correct persistent streak for the new mode type
-      if (state.user) await loadCoins();
-      await checkCoinEligible();
-      updateScoreboard();
-      document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      loadQuestion();
-    };
+    btn.onclick = () => startFreeLearningMode(m.id);
     row.appendChild(btn);
   });
 }
 
+async function startFreeLearningMode(mode) {
+  if (!(await confirmLeavingGameQuestion())) return;
+  saveScoreAsync();
+  state.mode = mode;
+  localStorage.setItem("hanzi_mode", mode);
+  state.seenQuestions.clear();
+  state.retryQueue = [];
+  state.retryCount = 0;
+  if (state.user) await loadCoins();
+  await checkCoinEligible();
+  updateScoreboard();
+  document.querySelectorAll(".mode-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  loadQuestion();
+}
+
+function showGameModePicker() {
+  state.currentQ = null;
+  state.answering = false;
+  state.currentQuestionAttempted = false;
+  state.gameModePickerActive = true;
+  if (isRecording) stopRecording();
+  const area = document.getElementById("questionArea");
+  const opts = document.getElementById("optionsArea");
+  const hint = document.getElementById("hintArea");
+  area.innerHTML = `
+    <div class="question-label">选择自由学习模式</div>
+    <div class="control-row" style="justify-content:center;margin-top:10px">
+      ${MODES.map(m => `<button class="mode-btn${m.id === state.mode ? ' active' : ''}" data-mode="${m.id}" onclick="startFreeLearningMode('${m.id}')">${m.label}</button>`).join("")}
+    </div>
+  `;
+  opts.innerHTML = "";
+  opts.style.display = "flex";
+  opts.style.gridTemplateColumns = "";
+  opts.style.flexDirection = "column";
+  opts.style.alignItems = "center";
+  opts.style.gap = "12px";
+  hint.innerHTML = "";
+}
+
 // --- Load question ---
 async function loadQuestion(reuseCurrentQ) {
+  state.gameModePickerActive = false;
   state.answering = false;
   document.getElementById("hintArea").innerHTML = "";
   // Stop any ongoing speech recognition
@@ -6197,7 +6230,7 @@ async function switchToGameView() {
   document.getElementById("gameView").style.display = "";
   document.getElementById("backToHwBtn").style.display = state.user ? "" : "none";
   await checkCoinEligible();
-  loadQuestion();
+  showGameModePicker();
 }
 
 // --- Load today's homework ---
