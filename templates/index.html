@@ -1323,6 +1323,17 @@
     margin-top: 4px; font-size: 28px; font-weight: 700; color: #38a169;
     font-family: "Times New Roman", "STSong", serif;
   }
+  .skip-question-row {
+    display: flex; justify-content: center; width: 100%; margin-top: 8px;
+  }
+  .skip-question-row.skip-question-grid { grid-column: 1 / -1; }
+  .skip-question-btn {
+    padding: 8px 18px; border: 1px solid #feb2b2; border-radius: 10px;
+    background: #fff5f5; color: #c53030; font-size: 14px; font-weight: 700;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .skip-question-btn:hover { background: #fed7d7; }
+  .skip-question-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
   /* Preview button */
   .hw-card-preview {
@@ -2007,6 +2018,42 @@ function advanceOrWait(nextFn, hintEl, delay) {
 
 function feedbackDelay(q, base) {
   return q && q.word_hint ? Math.max(base || 800, 2200) : (base || 800);
+}
+
+function skipQuestionButtonHTML(handlerName) {
+  return `<button type="button" class="skip-question-btn" onclick="${handlerName}">跳过此题</button>`;
+}
+
+function appendSkipQuestionButton(container, handlerName, grid = false) {
+  if (!container) return;
+  const row = document.createElement("div");
+  row.className = `skip-question-row${grid ? ' skip-question-grid' : ''}`;
+  row.innerHTML = skipQuestionButtonHTML(handlerName);
+  container.appendChild(row);
+}
+
+function disableQuestionControls(rootSelector) {
+  const root = document.querySelector(rootSelector);
+  if (!root) return;
+  root.querySelectorAll("button, input").forEach(el => {
+    el.disabled = true;
+    el.classList.add("disabled");
+  });
+}
+
+function skippedFeedbackHTML(q) {
+  let html = `<span class="wrong-text">已跳过，按答错计算。</span>`;
+  if (q && q.mode !== "pinyin_typing" && q.answer) {
+    const label = q.mode === "read_aloud" ? "正确读音" : "正确答案";
+    html += `<br><span style="font-size:24px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">${label}: ${escapeHtml(q.answer)}</span>`;
+  }
+  if (q && q.word_hint) {
+    html += `<br><span style="color:#718096">组词: ${escapeHtml(q.word_hint)}</span>`;
+  }
+  if (q && q.mode === "pinyin_typing") {
+    html += `<br><span style="color:#718096">这题会记入错题，请下次再练。</span>`;
+  }
+  return html;
 }
 
 let state = {
@@ -3818,6 +3865,7 @@ function renderQuestion(q) {
         <div class="mic-status" id="micStatus">准备中...</div>
         <div class="mic-result" id="micResult"></div>
         <div style="font-size:12px;color:#a0aec0;margin-top:4px">点击麦克风或直接朗读，同音字算正确</div>
+        ${skipQuestionButtonHTML('skipGameQuestion()')}
       </div>
     `;
     state.currentQ = q;
@@ -3869,6 +3917,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" id="gamePyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
+          ${skipQuestionButtonHTML('skipGameQuestion()')}
         </div>
         <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
       </div>
@@ -3914,6 +3963,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" id="eraserBtn" onclick="toggleEraser('writeCanvas')">橡皮擦</button>
           <button class="canvas-btn" onclick="recognizeHandwriting()">识别</button>
           <button class="canvas-btn" id="hwSubmitBtn" onclick="submitHandwriting()">确认</button>
+          ${skipQuestionButtonHTML('skipGameQuestion()')}
         </div>
         <div id="hwStatus" style="color:#999;font-size:14px;min-height:20px;text-align:center"></div>
       </div>
@@ -3971,6 +4021,7 @@ function renderQuestion(q) {
     btn.onclick = () => handleAnswer(i, q, btn);
     opts.appendChild(btn);
   });
+  appendSkipQuestionButton(opts, "skipGameQuestion()", true);
 
   state.answering = true;
 }
@@ -3982,6 +4033,7 @@ function handleAnswer(selected, q, btn) {
 
   const allBtns = document.querySelectorAll(".option-btn");
   allBtns.forEach(b => b.classList.add("disabled"));
+  disableQuestionControls("#optionsArea");
 
   const isCorrect = selected === q.correct_index;
   const hint = document.getElementById("hintArea");
@@ -4040,6 +4092,7 @@ function handleDictationAnswer(userInput, q) {
   state.totalQuestions += 1;
   if (isCorrect) {
     state.answering = false;
+    disableQuestionControls("#optionsArea");
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
     state.correctAnswers += 1;
@@ -4060,6 +4113,7 @@ function handleDictationAnswer(userInput, q) {
     advanceOrWait(loadQuestion, hint, 800);
   } else {
     state.answering = false;
+    disableQuestionControls("#optionsArea");
     hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
@@ -4074,6 +4128,38 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
     advanceOrWait(loadQuestion, hint, 1600);
+  }
+}
+
+function skipGameQuestion() {
+  if (!state.answering || !state.currentQ) return;
+  if (isRecording) stopRecording();
+
+  const q = state.currentQ;
+  const hint = document.getElementById("hintArea");
+  state.answering = false;
+  state.currentQuestionAttempted = true;
+  state.totalQuestions += 1;
+  state.combo = 0;
+  reportStreak(false);
+  recordWrongAnswer(q, "跳过");
+  disableQuestionControls("#optionsArea");
+
+  const micStatus = document.getElementById("micStatus");
+  const micResult = document.getElementById("micResult");
+  if (micStatus) micStatus.textContent = "";
+  if (micResult) micResult.textContent = "已跳过";
+
+  if (hint) {
+    hint.innerHTML = skippedFeedbackHTML(q);
+    if (q.mode === "dictation_handwrite") {
+      playStrokeAnimation(q.answer, hint);
+    }
+    updateScoreboard();
+    advanceOrWait(loadQuestion, hint, feedbackDelay(q, q.mode === "read_aloud" ? 1800 : 1600));
+  } else {
+    updateScoreboard();
+    advanceOrWait(loadQuestion, null, 1600);
   }
 }
 
@@ -5315,6 +5401,7 @@ async function submitGamePinyin() {
 
   if (isCorrect) {
     state.answering = false;
+    disableQuestionControls("#optionsArea");
     if (btn) btn.disabled = true;
     state.correctAnswers += 1;
     state.combo += 1;
@@ -5331,6 +5418,7 @@ async function submitGamePinyin() {
     advanceOrWait(loadQuestion, hint, 800);
   } else {
     state.answering = false;
+    disableQuestionControls("#optionsArea");
     if (btn) btn.disabled = true;
     state.combo = 0;
     reportStreak(false);
@@ -5577,6 +5665,7 @@ function stopRecording() {
 async function handleReadAloudAnswer(alternatives) {
   if (!state.answering || !state.currentQ) return;
   state.answering = false;
+  disableQuestionControls("#optionsArea");
   readAloudRetryCount = 0;
 
   const q = state.currentQ;
@@ -6652,6 +6741,7 @@ function showHwQuizQuestion() {
           <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
+          ${skipQuestionButtonHTML('skipHwQuizQuestion()')}
         </div>
         <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
       </div>
@@ -6683,7 +6773,7 @@ function showHwQuizQuestion() {
     const correctIdx = options.indexOf(q.answer);
     opts.innerHTML = options.map((opt, i) =>
       `<button class="hw-quiz-opt-btn" onclick="hwQuizAnswer(${i}, ${correctIdx})">${opt}</button>`
-    ).join("");
+    ).join("") + `<div class="skip-question-row skip-question-grid">${skipQuestionButtonHTML('skipHwQuizQuestion()')}</div>`;
   } else if (q.mode === "pinyin_to_char") {
     area.innerHTML = `<div class="hw-quiz-label">请选择正确的汉字</div><div class="hw-quiz-pinyin">${q.question}</div>`;
     opts.style.display = "grid";
@@ -6697,7 +6787,7 @@ function showHwQuizQuestion() {
     const correctIdx = options.indexOf(q.answer);
     opts.innerHTML = options.map((opt, i) =>
       `<button class="hw-quiz-opt-btn" onclick="hwQuizAnswer(${i}, ${correctIdx})">${opt}</button>`
-    ).join("");
+    ).join("") + `<div class="skip-question-row skip-question-grid">${skipQuestionButtonHTML('skipHwQuizQuestion()')}</div>`;
   } else if (q.mode === "listen_to_char") {
     area.innerHTML = `<div class="hw-quiz-label">听读音，选汉字</div>
       <button style="font-size:64px;background:none;border:none;cursor:pointer;padding:12px" onclick="speakChar('${q.question}')">&#128264;</button>`;
@@ -6712,7 +6802,7 @@ function showHwQuizQuestion() {
     const correctIdx = options.indexOf(q.answer);
     opts.innerHTML = options.map((opt, i) =>
       `<button class="hw-quiz-opt-btn" onclick="hwQuizAnswer(${i}, ${correctIdx})">${opt}</button>`
-    ).join("");
+    ).join("") + `<div class="skip-question-row skip-question-grid">${skipQuestionButtonHTML('skipHwQuizQuestion()')}</div>`;
     // Auto-play audio
     setTimeout(() => speakChar(q.question), 300);
   } else if (q.mode === "dictation_handwrite") {
@@ -6741,6 +6831,7 @@ function showHwQuizQuestion() {
         <button id="hwEraserBtn" onclick="toggleEraser('hwQuizCanvas')">橡皮擦</button>
         <button onclick="recognizeHwQuiz2()">识别</button>
         <button id="hwQuizSubmitBtn" class="hw-submit-btn" onclick="submitHwQuiz()">确认</button>
+        ${skipQuestionButtonHTML('skipHwQuizQuestion()')}
       </div>
       <div class="hw-quiz-hw-status" id="hwQuizStatus"></div>
     </div>`;
@@ -7014,6 +7105,50 @@ function normalizePinyin(s) {
   return String(s || '').toLowerCase().trim().split(/\s+/).map(parseNumberTonePinyin).join(' ');
 }
 
+function recordHwQuizWrong(q, userAnswer) {
+  const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
+  hwQuiz.firstAttemptWrong.add(qKey);
+  const retryCount = hwQuiz.retryMap[qKey] || 0;
+  if (retryCount === 0) {
+    const isWriting = q.mode === "dictation_handwrite";
+    const isRecognitionByChar = q.mode === "char_to_pinyin" || q.mode === "pinyin_typing" || q.mode === "read_aloud";
+    hwQuiz.wrongItems.push({
+      character: isWriting ? q.answer : (isRecognitionByChar ? (q.display_char || q.question) : (q.display_char || q.answer)),
+      pinyin: isWriting ? q.question : (isRecognitionByChar ? (q.display_pinyin || q.answer) : (q.display_pinyin || q.question)),
+      words: isWriting ? q.answer : (q.word_hint || ""),
+      mode: q.mode,
+      question: q.context_word ? `${q.question}（${q.context_word}）` : q.question,
+      correct_answer: q.answer,
+      user_answer: userAnswer,
+    });
+    recordWrongAnswer(q, userAnswer, false);
+  }
+  hwQuiz.retryMap[qKey] = retryCount + 1;
+}
+
+function skipHwQuizQuestion() {
+  if (!hwQuiz.answering || !hwQuiz.questions || !hwQuiz.questions.length) return;
+  const q = hwQuiz.questions[hwQuiz.currentIndex];
+  if (!q) return;
+  hwQuiz.answering = false;
+  disableQuestionControls("#hwQuizOptionsArea");
+  reportHwStreak(false, questionStreakType(q));
+  recordHwQuizWrong(q, "跳过");
+
+  const hint = document.getElementById("hwQuizHint");
+  if (hint) {
+    hint.innerHTML = skippedFeedbackHTML(q);
+    saveHwQuizProgressAfterCurrentAnswer();
+    if (q.mode === "dictation_handwrite") {
+      playStrokeAnimation(q.answer, hint);
+    }
+    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
+  } else {
+    saveHwQuizProgressAfterCurrentAnswer();
+    advanceOrWait(nextHwQuestion, null, 1600);
+  }
+}
+
 async function hwPinyinSubmit() {
   if (!hwQuiz.answering) return;
   const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
@@ -7071,6 +7206,7 @@ async function hwPinyinSubmit() {
 
   if (isCorrect) {
     hwQuiz.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     if (btn) btn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
       if (!hwQuiz.firstAttemptWrong.has(qKey)) hwQuiz.correctCount++;
@@ -7084,6 +7220,7 @@ async function hwPinyinSubmit() {
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     if (btn) btn.disabled = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
@@ -7114,6 +7251,7 @@ function hwQuizAnswer(selected, correctIdx) {
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   const btns = document.querySelectorAll(".hw-quiz-opt-btn");
   btns.forEach(b => b.classList.add("disabled"));
+  disableQuestionControls("#hwQuizOptionsArea");
 
   const isCorrect = selected === correctIdx;
   const hint = document.getElementById("hwQuizHint");
@@ -7166,6 +7304,7 @@ function hwHandleHwAnswer(userInput) {
 
   if (isCorrect) {
     hwQuiz.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
     if (!hwQuiz.answeredCorrectly.has(qKey)) {
@@ -7180,6 +7319,7 @@ function hwHandleHwAnswer(userInput) {
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
     hwQuiz.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     hwQuizRecognizedResult2 = '';
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
     if (submitBtn) submitBtn.disabled = true;
@@ -7653,6 +7793,7 @@ function showHwReviewQuestion() {
           <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
           <button class="canvas-btn" id="pinyinSubmitBtn" onclick="submitHwReviewPinyin()">确认</button>
+          ${skipQuestionButtonHTML('skipHwReviewQuestion()')}
         </div>
         <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
       </div>
@@ -7728,11 +7869,34 @@ function showHwReviewQuestion() {
         gridEl.appendChild(dashH);
       }
     }
-    opts.innerHTML = `<button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>`;
+    opts.innerHTML = `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>
+      ${skipQuestionButtonHTML('skipHwReviewQuestion()')}
+    </div>`;
     hwQuizRecognizedResult = '';
     setTimeout(initHwQuizCanvas, 50);
   }
   hwReview.answering = true;
+}
+
+function skipHwReviewQuestion() {
+  if (!hwReview.answering || !hwReview.questions || !hwReview.questions.length) return;
+  const q = hwReview.questions[hwReview.currentIndex];
+  if (!q) return;
+  hwReview.answering = false;
+  disableQuestionControls("#hwQuizOptionsArea");
+  reportHwStreak(false, questionStreakType(q));
+
+  const hint = document.getElementById("hwQuizHint");
+  if (hint) {
+    hint.innerHTML = skippedFeedbackHTML(q);
+    if (q.mode === "dictation_handwrite") {
+      playStrokeAnimation(q.answer, hint);
+    }
+    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
+  } else {
+    advanceOrWait(nextHwReviewQuestion, null, 1600);
+  }
 }
 
 async function submitHwReviewPinyin() {
@@ -7788,6 +7952,7 @@ async function submitHwReviewPinyin() {
   const btn = document.getElementById("pinyinSubmitBtn");
   if (isCorrect) {
     hwReview.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     if (btn) btn.disabled = true;
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.correctCount++;
@@ -7798,6 +7963,7 @@ async function submitHwReviewPinyin() {
     advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwReview.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     if (btn) btn.disabled = true;
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
@@ -7809,6 +7975,7 @@ async function submitHwReviewPinyin() {
 function hwReviewAnswer(selected) {
   if (!hwReview.answering) return;
   hwReview.answering = false;
+  disableQuestionControls("#hwQuizOptionsArea");
   const q = hwReview.questions[hwReview.currentIndex];
   const hint = document.getElementById("hwQuizHint");
   const isCorrect = selected === q.correct_index;
@@ -7865,6 +8032,7 @@ async function submitHwReviewHandwrite() {
       return;
     }
     hwReview.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     if (!hwReview.answeredCorrectly.has(qKey)) {
       hwReview.correctCount++;
       hwReview.answeredCorrectly.add(qKey);
@@ -7874,6 +8042,7 @@ async function submitHwReviewHandwrite() {
     advanceOrWait(nextHwReviewQuestion, hint, 800);
   } else {
     hwReview.answering = false;
+    disableQuestionControls("#hwQuizOptionsArea");
     hwQuizRecognizedResult = '';
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
