@@ -839,7 +839,7 @@ DEFAULT_EXCHANGE_PACKAGES = [
 ]
 
 COIN_STREAK_LOOKBACK_BOOKS = 3
-UNANSWERED_STREAK_GRACE_LIMIT = 2
+UNANSWERED_STREAK_GRACE_LIMIT = 0
 COIN_INELIGIBLE_MESSAGE = "超过范围，不参与金币连击计算"
 COIN_UNVERIFIED_MESSAGE = "无法确认作业范围，不参与金币连击计算"
 
@@ -1678,6 +1678,7 @@ def _generate_question(grade: str, mode: str) -> dict:
         }
         # For 多音字, show a context word so the reader knows which reading is asked
         if correct["char"] in MULTI_PINYIN:
+            q["is_polyphonic"] = True
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
             if cw:
                 q["context_word"] = cw
@@ -1724,6 +1725,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
+            q["is_polyphonic"] = True
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
             if cw:
                 q["context_word"] = cw
@@ -1740,6 +1742,7 @@ def _generate_question(grade: str, mode: str) -> dict:
             "display_pinyin": correct["pinyin"],
         }
         if correct["char"] in MULTI_PINYIN:
+            q["is_polyphonic"] = True
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, 0)
             if cw:
                 q["context_word"] = cw
@@ -2000,6 +2003,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
+            q["is_polyphonic"] = True
             ln0 = lessons[0] if lessons else 0
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, ln0)
             if cw:
@@ -2039,6 +2043,7 @@ def _generate_lesson_question(grade: str, mode: str, lessons: list) -> dict:
             "word_hint": _recognition_word_hint(correct["char"], correct["pinyin"], grade, "、".join(correct["words"])),
         }
         if correct["char"] in MULTI_PINYIN:
+            q["is_polyphonic"] = True
             ln0 = lessons[0] if lessons else 0
             cw = _find_context_word(correct["char"], correct["pinyin"], grade, ln0)
             if cw:
@@ -3349,6 +3354,7 @@ def review_question():
             "display_pinyin": pinyin,
         }
         if character in MULTI_PINYIN:
+            resp["is_polyphonic"] = True
             cw = _find_context_word(character, pinyin, grade, 0)
             if not cw and words:
                 cw = words.split("、")[0]
@@ -4031,14 +4037,16 @@ def streak_update():
         new_streak = user[streak_col]
     elif correct:
         new_streak = user[streak_col] + 1
+        unanswered_count = 0
         total_coins_at_streak = calc_streak_coins(new_streak, is_writing, db)
         coins_earned = total_coins_at_streak - user[awarded_col]
         new_awarded = total_coins_at_streak
         if coins_earned > 0:
             db.execute(
-                psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, coins = coins + %s WHERE id = %s").format(
+                psycopg.sql.SQL("UPDATE users SET {streak} = %s, {awarded} = %s, {unanswered} = 0, coins = coins + %s WHERE id = %s").format(
                     streak=psycopg.sql.Identifier(streak_col),
                     awarded=psycopg.sql.Identifier(awarded_col),
+                    unanswered=psycopg.sql.Identifier(unanswered_col),
                 ),
                 (new_streak, total_coins_at_streak, coins_earned, session["user_id"]),
             )
@@ -4049,36 +4057,25 @@ def streak_update():
             )
         else:
             db.execute(
-                psycopg.sql.SQL("UPDATE users SET {streak} = %s WHERE id = %s").format(
+                psycopg.sql.SQL("UPDATE users SET {streak} = %s, {unanswered} = 0 WHERE id = %s").format(
                     streak=psycopg.sql.Identifier(streak_col),
+                    unanswered=psycopg.sql.Identifier(unanswered_col),
                 ),
                 (new_streak, session["user_id"]),
             )
     elif is_unanswered:
-        next_unanswered = unanswered_count + 1
-        if next_unanswered <= UNANSWERED_STREAK_GRACE_LIMIT:
-            new_streak = user[streak_col]
-            unanswered_count = next_unanswered
-            unanswered_grace = True
-            db.execute(
-                psycopg.sql.SQL("UPDATE users SET {unanswered} = %s WHERE id = %s").format(
-                    unanswered=psycopg.sql.Identifier(unanswered_col),
-                ),
-                (unanswered_count, session["user_id"]),
-            )
-        else:
-            new_streak = 0
-            new_awarded = 0
-            unanswered_count = 0
-            streak_broken = True
-            db.execute(
-                psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0, {unanswered} = 0 WHERE id = %s").format(
-                    streak=psycopg.sql.Identifier(streak_col),
-                    awarded=psycopg.sql.Identifier(awarded_col),
-                    unanswered=psycopg.sql.Identifier(unanswered_col),
-                ),
-                (session["user_id"],),
-            )
+        new_streak = 0
+        new_awarded = 0
+        unanswered_count = 0
+        streak_broken = True
+        db.execute(
+            psycopg.sql.SQL("UPDATE users SET {streak} = 0, {awarded} = 0, {unanswered} = 0 WHERE id = %s").format(
+                streak=psycopg.sql.Identifier(streak_col),
+                awarded=psycopg.sql.Identifier(awarded_col),
+                unanswered=psycopg.sql.Identifier(unanswered_col),
+            ),
+            (session["user_id"],),
+        )
     else:
         new_streak = 0
         new_awarded = 0
@@ -4548,7 +4545,9 @@ def homework_start(assignment_id):
             # For single multi-pronunciation characters, add context word
             context_word = ""
             char_text = entry["word"]
+            is_polyphonic = False
             if len(char_text) == 1 and char_text in MULTI_PINYIN:
+                is_polyphonic = True
                 # context lookup uses lesson_num only in by_lesson mode; in
                 # book_review the lesson_num is a day index and the lookup
                 # would come up empty — passing it is harmless.
@@ -4563,6 +4562,8 @@ def homework_start(assignment_id):
                 "display_char": entry["word"],
                 "display_pinyin": entry["pinyin"],
             }
+            if is_polyphonic:
+                q["is_polyphonic"] = True
             if context_word:
                 q["context_word"] = context_word
             questions.append(q)
@@ -4688,6 +4689,7 @@ def homework_preview(assignment_id):
                 "display_char": correct["char"], "display_pinyin": correct["pinyin"],
             }
             if correct["char"] in MULTI_PINYIN:
+                q["is_polyphonic"] = True
                 cw = _find_context_word(correct["char"], correct["pinyin"], grade, lesson_num)
                 if not cw and correct.get("words"):
                     cw = correct["words"][0]

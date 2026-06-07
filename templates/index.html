@@ -1922,20 +1922,14 @@ function syncUnansweredGrace(data, type) {
 }
 
 function unansweredQuestionWarningText() {
-  const type = currentGameStreakType();
-  const used = unansweredCountForType(type);
-  const limit = state.unansweredGraceLimit || 2;
-  const willBreak = used >= limit;
   const autoNextTip = isAutoNext()
-    ? "如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块、切换书册或学习模式。"
+    ? "如果不想显示下一题，请关闭“自动下一题”的选项。答完当前题后，就可以随时退出当前模块、切换书册或学习模式。"
     : "答完当前题后，就可以随时退出当前模块、切换书册或学习模式。";
   return {
     title: "当前题目还没有作答",
-    body: willBreak
-      ? `你已经有 ${used} 次看到题目后未作答离开。请先回答当前题目；如果现在不作答离开，会丢失当前金币连击记录。`
-      : `本轮金币连击中，前 ${limit} 次看到题目后临时离开不会断连击。本次未答离开会被记录为第 ${used + 1}/${limit} 次，金币连击会保留。`,
+    body: "题目显示后必须作答。如果现在不作答离开，会按未答处理，并丢失当前金币连击记录。",
     tip: autoNextTip,
-    leaveLabel: willBreak ? "丢失连击，继续离开" : "先离开，保留连击",
+    leaveLabel: "放弃作答，丢失连击",
   };
 }
 
@@ -2029,7 +2023,7 @@ let state = {
   coins: 0,
   gameMinutes: 0,
   unansweredByType: { recognition: 0, writing: 0 },
-  unansweredGraceLimit: 2,
+  unansweredGraceLimit: 0,
   isAdmin: false,
   seenQuestions: new Set(),
   retryQueue: [],
@@ -2157,11 +2151,7 @@ async function reportUnansweredGameQuestion() {
       updateScoreboard();
     }
     if (hint && isGameViewVisible()) {
-      if (data.unanswered_grace) {
-        hint.innerHTML = `<span style="color:#38a169;font-weight:700">本次未答离开已记录 (${data.unanswered_count}/${data.unanswered_limit})，金币连击已保留。</span>`;
-      } else {
-        hint.innerHTML = `<span class="wrong-text">当前题已按未答处理，当前金币连击记录已丢失。</span>`;
-      }
+      hint.innerHTML = `<span class="wrong-text">当前题已按未答处理，当前金币连击记录已丢失。</span>`;
     }
   } catch(e) {
     if (hint && isGameViewVisible()) {
@@ -2247,7 +2237,7 @@ async function loadCoins() {
       recognition: data.recognition_unanswered_exits || 0,
       writing: data.writing_unanswered_exits || 0,
     };
-    state.unansweredGraceLimit = data.unanswered_grace_limit || state.unansweredGraceLimit || 2;
+    state.unansweredGraceLimit = data.unanswered_grace_limit ?? state.unansweredGraceLimit ?? 0;
     // Load persistent streak for current mode
     const isWriting = state.mode === "dictation_handwrite";
     state.combo = isWriting ? (data.writing_streak || 0) : (data.recognition_streak || 0);
@@ -3770,7 +3760,7 @@ function renderQuestion(q) {
 
   // Question display
   if (q.mode === "char_to_pinyin") {
-    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const charHtml = (q.context_word || q.is_polyphonic) ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
     const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请选择正确的拼音</div>
@@ -3789,14 +3779,14 @@ function renderQuestion(q) {
     // Auto-play on load
     setTimeout(() => speakChar(q.question), 300);
   } else if (q.mode === "pinyin_typing") {
-    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const charHtml = (q.context_word || q.is_polyphonic) ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
     const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请给汉字注音</div>
       <div class="question-char">${charHtml}${contextHint}</div>
     `;
   } else if (q.mode === "read_aloud") {
-    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const charHtml = (q.context_word || q.is_polyphonic) ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
     const contextHint = q.context_word ? ` <span style="font-size:28px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `
       <div class="question-label">请朗读这个字</div>
@@ -4069,10 +4059,10 @@ function handleDictationAnswer(userInput, q) {
     updateScoreboard();
     advanceOrWait(loadQuestion, hint, 800);
   } else {
-    state.answering = true;
+    state.answering = false;
     hwRecognizedResult = '';
     const submitBtn = document.getElementById("hwSubmitBtn");
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) submitBtn.disabled = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userInput}<br><span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>`;
@@ -4083,12 +4073,7 @@ function handleDictationAnswer(userInput, q) {
     }
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => loadQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+    advanceOrWait(loadQuestion, hint, 1600);
   }
 }
 
@@ -5285,13 +5270,13 @@ async function submitGamePinyin() {
   const userAnswer = getGamePinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("gamePinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请把拼音写工整，或改用打字";
     return;
   }
   const invalidPinyin = findInvalidPinyinSyllable(userAnswer);
   if (invalidPinyin) {
     const el = document.getElementById("gamePinyinRecognized");
-    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}。请把拼音写工整，或改用打字。`;
     return;
   }
   const q = state.currentQ;
@@ -5345,26 +5330,19 @@ async function submitGamePinyin() {
     updateScoreboard();
     advanceOrWait(loadQuestion, hint, 800);
   } else {
-    state.answering = true;
+    state.answering = false;
+    if (btn) btn.disabled = true;
     state.combo = 0;
     reportStreak(false);
     hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}<br>
-      <span style="font-size:28px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">正确答案: ${q.answer}</span>
-      <br><span style="color:#718096">${q.word_hint ? '组词: ' + q.word_hint : ''}</span>`;
+      <span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
     const retryAttempt = q._retryAttempt || 0;
     if (retryAttempt === 0 && !q._wrongRecorded) {
       q._wrongRecorded = true;
       recordWrongAnswer(q, userAnswer);
     }
-    if (retryAttempt < 2) {
-    }
     updateScoreboard();
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => loadQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+    advanceOrWait(loadQuestion, hint, 1600);
   }
 }
 
@@ -5875,7 +5853,7 @@ async function loadHwStreaks() {
       recognition: coinData.recognition_unanswered_exits || 0,
       writing: coinData.writing_unanswered_exits || 0,
     };
-    state.unansweredGraceLimit = coinData.unanswered_grace_limit || state.unansweredGraceLimit || 2;
+    state.unansweredGraceLimit = coinData.unanswered_grace_limit ?? state.unansweredGraceLimit ?? 0;
     state.coins = coinData.coins || state.coins || 0;
     const coinsBox = document.getElementById("coinsBox");
     if (coinsBox) coinsBox.textContent = `金币: ${state.coins}`;
@@ -5923,8 +5901,6 @@ function reportHwStreak(correct, type = null, options = {}) {
   const previousStreak = hwStreakByType[streakType] || 0;
   const previousAwarded = hwStreakAwardedByType[streakType] || 0;
   const isUnanswered = options.unanswered === true;
-  const unansweredUsed = unansweredCountForType(streakType);
-  const unansweredWillBreak = isUnanswered && unansweredUsed >= (state.unansweredGraceLimit || 2);
   lastHwStreakReport = {
     correct,
     unanswered: isUnanswered,
@@ -5936,7 +5912,7 @@ function reportHwStreak(correct, type = null, options = {}) {
     questionIndex: activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex,
   };
   if (correct) hwStreakByType[streakType] = (hwStreakByType[streakType] || 0) + 1;
-  else if (!isUnanswered || unansweredWillBreak) hwStreakByType[streakType] = 0;
+  else hwStreakByType[streakType] = 0;
   if (hwStreakType === streakType) {
     hwStreak = hwStreakByType[streakType] || 0;
     updateHwStreakBar();
@@ -6631,7 +6607,8 @@ function showHwQuizQuestion() {
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}${contextHint}</div>`;
+    const charStyle = (q.context_word || q.is_polyphonic) ? ' style="color:#5a67d8"' : '';
+    area.innerHTML = `<div class="hw-quiz-label">请给汉字注音</div><div class="hw-quiz-char"${charStyle}>${charDisplay}${contextHint}</div>`;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -6691,7 +6668,7 @@ function showHwQuizQuestion() {
       setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
     }
   } else if (q.mode === "char_to_pinyin") {
-    const charHtml = q.context_word ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
+    const charHtml = (q.context_word || q.is_polyphonic) ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
     const contextHint = q.context_word ? ` <span style="font-size:24px;color:#718096">(${q.context_word})</span>` : '';
     area.innerHTML = `<div class="hw-quiz-label">请选择正确的拼音</div><div class="hw-quiz-char">${charHtml}${contextHint}</div>`;
     opts.style.display = "grid";
@@ -7052,13 +7029,13 @@ async function hwPinyinSubmit() {
   const userAnswer = getHwPinyinAnswer();
   if (!userAnswer) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请把拼音写工整，或改用打字";
     return;
   }
   const invalidPinyin = findInvalidPinyinSyllable(userAnswer);
   if (invalidPinyin) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}。请把拼音写工整，或改用打字。`;
     return;
   }
   const q = hwQuiz.questions[hwQuiz.currentIndex];
@@ -7106,7 +7083,8 @@ async function hwPinyinSubmit() {
     advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 800));
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
-    hwQuiz.answering = true;
+    hwQuiz.answering = false;
+    if (btn) btn.disabled = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -7123,16 +7101,9 @@ async function hwPinyinSubmit() {
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
-      <br>正确答案: <div class="pinyin-correct-show">${q.answer}</div>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    autoSaveHwQuiz();
-    saveHwQuizProgressToServer();
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+      <br><span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
+    saveHwQuizProgressAfterCurrentAnswer();
+    advanceOrWait(nextHwQuestion, hint, 1600);
   }
 }
 
@@ -7180,8 +7151,7 @@ function hwQuizAnswer(selected, correctIdx) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    autoSaveHwQuiz();
-    saveHwQuizProgressToServer();
+    saveHwQuizProgressAfterCurrentAnswer();
     advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
   }
 }
@@ -7209,10 +7179,10 @@ function hwHandleHwAnswer(userInput) {
     advanceOrWait(nextHwQuestion, hint, 800);
   } else {
     hwQuiz.firstAttemptWrong.add(qKey);
-    hwQuiz.answering = true;
+    hwQuiz.answering = false;
     hwQuizRecognizedResult2 = '';
     const submitBtn = document.getElementById("hwQuizSubmitBtn");
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) submitBtn.disabled = true;
     reportHwStreak(false);
     const retryCount = hwQuiz.retryMap[qKey] || 0;
     if (retryCount === 0) {
@@ -7230,15 +7200,9 @@ function hwHandleHwAnswer(userInput) {
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
-    autoSaveHwQuiz();
-    saveHwQuizProgressToServer();
+    saveHwQuizProgressAfterCurrentAnswer();
     playStrokeAnimation(q.answer, hint);
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+    advanceOrWait(nextHwQuestion, hint, 1600);
   }
 }
 
@@ -7281,6 +7245,12 @@ async function saveHwQuizProgressToServer(keepalive = false, currentIndex = hwQu
   } catch (e) {
     return false;
   }
+}
+
+function saveHwQuizProgressAfterCurrentAnswer() {
+  const nextIndex = Math.min(hwQuiz.currentIndex + 1, hwQuiz.questions.length - 1);
+  autoSaveHwQuiz(nextIndex);
+  saveHwQuizProgressToServer(false, nextIndex);
 }
 
 async function clearHwQuizProgressFromServer() {
@@ -7481,16 +7451,9 @@ function showHwExitDialog() {
     const index = ctx ? ctx.index : (activeHomeworkFlow === "review" ? hwReview.currentIndex : hwQuiz.currentIndex);
     const progressIndex = total ? Math.min(index + 1, total) : 0;
     const hasPendingQuestion = isHomeworkQuestionPending();
-    const pendingType = ctx?.q ? questionStreakType(ctx.q) : "recognition";
-    const unansweredUsed = unansweredCountForType(pendingType);
-    const unansweredLimit = state.unansweredGraceLimit || 2;
-    const unansweredWillBreak = unansweredUsed >= unansweredLimit;
     const warning = hasPendingQuestion
       ? `<div style="font-size:13px;color:#9b2c2c;background:#fff5f5;border:1px solid #fed7d7;border-radius:10px;padding:10px;margin-bottom:14px;text-align:left">
-          ${unansweredWillBreak
-            ? `当前题目还没有作答。你已经有 ${unansweredUsed} 次看到题目后未作答离开；如果现在退出，会把当前题按未答处理，并丢失当前金币连击记录。`
-            : `当前题目还没有作答。本轮金币连击中前 ${unansweredLimit} 次临时离开不会断连击；本次会记录为第 ${unansweredUsed + 1}/${unansweredLimit} 次，并保留金币连击。`
-          }${isAutoNext() ? '<br>如果不想继续看到下一题，请关闭“自动下一题”；答完当前题后，就可以随时退出当前模块或切换学习模式。' : ''}
+          当前题目还没有作答。题目显示后必须作答；如果现在退出，会把当前题按未答处理，并丢失当前金币连击记录。${isAutoNext() ? '<br>如果不想显示下一题，请关闭“自动下一题”的选项。' : ''}
         </div>`
       : '';
     const overlay = document.createElement("div");
@@ -7503,8 +7466,8 @@ function showHwExitDialog() {
       <div style="font-size:14px;color:#718096;margin-bottom:14px">当前进度: ${progressIndex}/${total} 题</div>
       ${warning}
       <div style="display:flex;flex-direction:column;gap:10px">
-        <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? (unansweredWillBreak ? '保存并退出（丢失连击）' : '保存并退出（保留连击）') : '保存进度并退出'}</button>
-        <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? (unansweredWillBreak ? '不保存并退出（丢失连击）' : '不保存并退出（保留连击）') : '不保存，直接退出'}</button>
+        <button id="_hwExitSave" style="padding:10px;border:none;border-radius:10px;background:#667eea;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? '保存并退出（丢失连击）' : '保存进度并退出'}</button>
+        <button id="_hwExitDiscard" style="padding:10px;border:none;border-radius:10px;background:#e53e3e;color:#fff;font-size:15px;font-weight:600;cursor:pointer">${hasPendingQuestion ? '不保存并退出（丢失连击）' : '不保存，直接退出'}</button>
         <button id="_hwExitCancel" style="padding:10px;border:none;border-radius:10px;background:#e2e8f0;color:#4a5568;font-size:15px;font-weight:600;cursor:pointer">继续做作业</button>
       </div>`;
     overlay.appendChild(box);
@@ -7646,7 +7609,8 @@ function showHwReviewQuestion() {
     const charDisplay = q.question.length > 1
       ? q.question.split('').map(c => `<span style="margin:0 8px">${c}</span>`).join('')
       : q.question;
-    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char">${charDisplay}${contextHint}</div>`;
+    const charStyle = (q.context_word || q.is_polyphonic) ? ' style="color:#5a67d8"' : '';
+    area.innerHTML = `<div class="quiz-label">请给汉字注音</div><div class="hw-quiz-char"${charStyle}>${charDisplay}${contextHint}</div>`;
     opts.style.display = "flex";
     opts.style.gridTemplateColumns = "";
     opts.style.flexDirection = "column";
@@ -7786,13 +7750,13 @@ async function submitHwReviewPinyin() {
   const userInput = getHwPinyinAnswer();
   if (!userInput) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请重写或改用打字";
+    if (el) el.textContent = mode === 'type' ? "请输入所有拼音" : "未识别出合法拼音，请把拼音写工整，或改用打字";
     return;
   }
   const invalidPinyin = findInvalidPinyinSyllable(userInput);
   if (invalidPinyin) {
     const el = document.getElementById("pinyinRecognized");
-    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}`;
+    if (el) el.textContent = `拼音格式不对: ${invalidPinyin}。请把拼音写工整，或改用打字。`;
     return;
   }
   const q = hwReview.questions[hwReview.currentIndex];
@@ -7833,17 +7797,12 @@ async function submitHwReviewPinyin() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span> ${q.word_hint ? '组词: ' + q.word_hint : ''}`;
     advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 800));
   } else {
-    hwReview.answering = true;
+    hwReview.answering = false;
+    if (btn) btn.disabled = true;
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br>正确答案: <strong>${q.answer}</strong>
-      ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwReviewQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+      <br><span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
+    advanceOrWait(nextHwReviewQuestion, hint, 1600);
   }
 }
 
@@ -7914,17 +7873,12 @@ async function submitHwReviewHandwrite() {
     hint.innerHTML = `<span style="color:#38a169;font-weight:700">正确!</span>`;
     advanceOrWait(nextHwReviewQuestion, hint, 800);
   } else {
-    hwReview.answering = true;
+    hwReview.answering = false;
     hwQuizRecognizedResult = '';
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
-    const skipBtn = document.createElement("button");
-    skipBtn.textContent = "继续"; skipBtn.className = "ok-btn";
-    skipBtn.style.cssText = "font-size:13px;padding:6px 16px;margin-top:6px";
-    skipBtn.onclick = () => nextHwReviewQuestion();
-    hint.appendChild(skipBtn);
-    setTimeout(() => skipBtn.focus(), 0);
+    advanceOrWait(nextHwReviewQuestion, hint, 1600);
   }
 }
 
