@@ -333,6 +333,91 @@ def _build_pinyin_variants():
 _build_pinyin_variants()
 
 
+_PINYIN_TONE_MAP = {
+    "ā": "a", "á": "a", "ǎ": "a", "à": "a",
+    "ē": "e", "é": "e", "ě": "e", "è": "e",
+    "ī": "i", "í": "i", "ǐ": "i", "ì": "i",
+    "ō": "o", "ó": "o", "ǒ": "o", "ò": "o",
+    "ū": "u", "ú": "u", "ǔ": "u", "ù": "u",
+    "ǖ": "ü", "ǘ": "ü", "ǚ": "ü", "ǜ": "ü",
+}
+
+
+def _pinyin_base(pinyin: str) -> str:
+    return "".join(_PINYIN_TONE_MAP.get(c, c) for c in _string_value(pinyin).lower())
+
+
+def _pinyin_has_tone(pinyin: str) -> bool:
+    return any(c in _PINYIN_TONE_MAP for c in _string_value(pinyin))
+
+
+def _syllable_matches_char_reading(word_syllable: str, char: str, target_pinyin: str) -> bool:
+    if word_syllable == target_pinyin:
+        return True
+    # Some words use neutral tone for a character whose textbook single-char
+    # reading is toned, e.g. 困难 = kùn nan but 难 is nán. Treat that as the
+    # same reading only when the neutral form is not itself a separate reading.
+    if (
+        word_syllable
+        and not _pinyin_has_tone(word_syllable)
+        and _pinyin_base(word_syllable) == _pinyin_base(target_pinyin)
+        and word_syllable not in MULTI_PINYIN_EXAMPLES.get(char, {})
+    ):
+        return True
+    return False
+
+
+@lru_cache(maxsize=1)
+def _known_pinyins_by_word() -> dict[str, set[str]]:
+    by_word: dict[str, set[str]] = {}
+    for ws in WORDS.values():
+        for w in ws:
+            word = _string_value(w.get("word"))
+            pinyin = _string_value(w.get("pinyin"))
+            if word and pinyin:
+                by_word.setdefault(word, set()).add(pinyin)
+    return by_word
+
+
+def _word_has_char_reading(word: str, word_pinyin: str, char: str, pinyin: str) -> bool:
+    syllables = _string_value(word_pinyin).split()
+    if len(word) != len(syllables):
+        return False
+    return any(ch == char and _syllable_matches_char_reading(py, char, pinyin) for ch, py in zip(word, syllables))
+
+
+def _known_word_has_char_reading(word: str, char: str, pinyin: str):
+    """Return True/False from known word data, or None when the word is unknown."""
+    known_pinyins = _known_pinyins_by_word().get(word, set())
+    if not known_pinyins:
+        return None
+    return any(_word_has_char_reading(word, py, char, pinyin) for py in known_pinyins)
+
+
+def _select_context_hint_piece(char: str, pinyin: str, hint: str) -> str:
+    """Keep one context piece for this exact polyphonic reading."""
+    hint = _string_value(hint)
+    if not hint:
+        return ""
+    leading = re.split(r"[，,；;。！？!?（(]", hint, maxsplit=1)[0].strip()
+    candidates = [p.strip() for p in re.split(r"[、/／]", leading) if p.strip()] or [leading or hint]
+    unknown_candidates = []
+    for candidate in candidates:
+        if char not in candidate:
+            continue
+        known_match = _known_word_has_char_reading(candidate, char, pinyin)
+        if known_match is True:
+            return candidate
+        if known_match is None:
+            unknown_candidates.append(candidate)
+    if unknown_candidates:
+        return unknown_candidates[0]
+    for candidate in candidates:
+        if char in candidate:
+            return candidate
+    return candidates[0] if candidates else hint
+
+
 # --- 形近字 (visually similar characters) lookup ---
 # Hand-curated groups of characters that primary-school students easily confuse
 # because they share a radical / component or have very similar structure.
@@ -424,33 +509,23 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
     # 1. Curated hint wins — it's the only source with a disambiguating gloss.
     ex = MULTI_PINYIN_EXAMPLES.get(char, {}).get(pinyin, "")
     if ex:
-        return ex
+        return _select_context_hint_piece(char, pinyin, ex)
 
     lesson_data = HOMEWORK_LESSONS.get(grade, {}).get(lesson_num, {})
 
-    def _match_in_word(word: str, word_pinyin: str) -> bool:
-        """True if `char` appears in `word` with `pinyin` as its syllable."""
-        syllables = word_pinyin.split()
-        if len(word) != len(syllables):
-            return False
-        for ch, py in zip(word, syllables):
-            if ch == char and py == pinyin:
-                return True
-        return False
-
     # 2. Current lesson 词语
     for entry in lesson_data.get("词语", []):
-        if _match_in_word(entry["word"], entry["pinyin"]):
+        if _word_has_char_reading(entry["word"], entry["pinyin"], char, pinyin):
             return entry["word"]
 
     # 3. Current lesson 识字 (multi-char only)
     for entry in lesson_data.get("识字", []):
-        if len(entry["word"]) >= 2 and _match_in_word(entry["word"], entry["pinyin"]):
+        if len(entry["word"]) >= 2 and _word_has_char_reading(entry["word"], entry["pinyin"], char, pinyin):
             return entry["word"]
 
     # 4. Current grade's WORDS — multi-char only (skip 识字表 single chars)
     for w in WORDS.get(grade, []):
-        if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
+        if len(w["word"]) >= 2 and _word_has_char_reading(w["word"], w["pinyin"], char, pinyin):
             return w["word"]
 
     # 5. Multi-char WORDS across all other grades
@@ -458,7 +533,7 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
         if g == grade:
             continue
         for w in ws:
-            if len(w["word"]) >= 2 and _match_in_word(w["word"], w["pinyin"]):
+            if len(w["word"]) >= 2 and _word_has_char_reading(w["word"], w["pinyin"], char, pinyin):
                 return w["word"]
 
     # 6. CHARACTERS example words — only if the pinyin matches in our data.
@@ -467,7 +542,9 @@ def _find_context_word(char: str, pinyin: str, grade: str, lesson_num: int) -> s
     # canonical reading.)
     for c in CHARACTERS.get(grade, []):
         if c["char"] == char and c["pinyin"] == pinyin and c.get("words"):
-            return c["words"][0]
+            for word in c["words"]:
+                if _known_word_has_char_reading(word, char, pinyin) is True:
+                    return word
 
     return ""
 
@@ -478,10 +555,18 @@ def _char_word_examples(char: str, pinyin: str, grade: str) -> list[str]:
         return []
 
     def _match_in_word(word: str, word_pinyin: str) -> bool:
-        syllables = (word_pinyin or "").split()
-        if len(word) != len(syllables):
-            return False
-        return any(ch == char and py == pinyin for ch, py in zip(word, syllables))
+        return _word_has_char_reading(word, word_pinyin or "", char, pinyin)
+
+    def _verified_character_words(words: list[str]) -> list[str]:
+        verified = []
+        for word in words or []:
+            known_match = _known_word_has_char_reading(word, char, pinyin)
+            if char in MULTI_PINYIN:
+                if known_match is True:
+                    verified.append(word)
+            elif known_match is not False:
+                verified.append(word)
+        return verified
 
     examples = []
 
@@ -505,11 +590,15 @@ def _char_word_examples(char: str, pinyin: str, grade: str) -> list[str]:
     grade_chars = CHARACTERS.get(grade, [])
     for c in grade_chars:
         if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
-            return c.get("words", [])
+            verified = _verified_character_words(c.get("words", []))
+            if verified:
+                return verified
     for chars in CHARACTERS.values():
         for c in chars:
             if c.get("char") == char and c.get("pinyin") == pinyin and c.get("words"):
-                return c.get("words", [])
+                verified = _verified_character_words(c.get("words", []))
+                if verified:
+                    return verified
     if char in MULTI_PINYIN:
         return []
     for c in grade_chars:
@@ -563,8 +652,9 @@ def _add_recognition_context(payload: dict, text: str, pinyin: str, grade: str,
         context = _find_context_word(text, pinyin, grade, lesson_num)
         if not context:
             existing = _string_value(existing)
-            parts = [p for p in re.split(r"[、,，/]", existing) if p and p != text]
-            context = parts[0] if parts else ""
+            context = _select_context_hint_piece(text, pinyin, existing)
+            if context == text:
+                context = ""
         if context:
             payload["context_word"] = context
     return payload
