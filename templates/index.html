@@ -5357,6 +5357,65 @@ function normalizePinyinGame(s) {
   return String(s || '').toLowerCase().trim().split(/\s+/).map(parseNumberTonePinyin).join(' ');
 }
 
+function pinyinToneNumber(syllable) {
+  const clean = cleanPinyinToken(parseNumberTonePinyin(syllable));
+  if (/[āēīōūǖ]/.test(clean)) return 1;
+  if (/[áéíóúǘ]/.test(clean)) return 2;
+  if (/[ǎěǐǒǔǚ]/.test(clean)) return 3;
+  if (/[àèìòùǜ]/.test(clean)) return 4;
+  return 0;
+}
+
+function normalizedPinyinSyllables(s, normalizer) {
+  return normalizer(s).split(/\s+/).filter(Boolean);
+}
+
+function pinyinQuestionChars(q, expectedCount) {
+  const sources = [q && q.question, q && q.display_char, q && q.character, q && q.word];
+  for (const src of sources) {
+    const chars = Array.from(String(src || '').matchAll(/[\u3400-\u9fff\uf900-\ufaff]/g), m => m[0]);
+    if (chars.length === expectedCount) return chars;
+  }
+  return [];
+}
+
+function equivalentSandhiSyllables(ch, syllables, index) {
+  const current = syllables[index];
+  const allowed = new Set([current]);
+  if (ch === '不' && pinyinToneNumber(syllables[index + 1] || '') === 4) {
+    allowed.add('bù');
+    allowed.add('bú');
+  }
+  if (ch === '一') {
+    const nextTone = pinyinToneNumber(syllables[index + 1] || '');
+    allowed.add('yī');
+    if (nextTone === 4) {
+      allowed.add('yí');
+    } else if (nextTone >= 1 && nextTone <= 3) {
+      allowed.add('yì');
+    }
+  }
+  return allowed;
+}
+
+function pinyinAnswersMatch(userAnswer, expectedAnswer, q, normalizer) {
+  const normalizedUser = normalizer(userAnswer);
+  const normalizedExpected = normalizer(expectedAnswer);
+  if (normalizedUser === normalizedExpected) return true;
+
+  const userSyllables = normalizedPinyinSyllables(userAnswer, normalizer);
+  const expectedSyllables = normalizedPinyinSyllables(expectedAnswer, normalizer);
+  if (userSyllables.length !== expectedSyllables.length) return false;
+
+  const chars = pinyinQuestionChars(q, expectedSyllables.length);
+  if (!chars.length) return false;
+
+  return expectedSyllables.every((expectedSyllable, index) => {
+    const allowed = equivalentSandhiSyllables(chars[index], expectedSyllables, index);
+    return allowed.has(userSyllables[index]) || userSyllables[index] === expectedSyllable;
+  });
+}
+
 async function submitGamePinyin() {
   if (!state.answering) return;
   const mode = localStorage.getItem("pinyin_input_mode") || "handwrite";
@@ -5385,33 +5444,7 @@ async function submitGamePinyin() {
   const hint = document.getElementById("hintArea");
   const btn = document.getElementById("gamePinyinSubmitBtn");
 
-  let isCorrect = normalizePinyinGame(userAnswer) === normalizePinyinGame(q.answer);
-  // Touch-recognition can silently drop/add a stroke so the top candidate
-  // misses a tone or a final consonant even when the user wrote the right
-  // pinyin. If any per-cell candidate lines up with the expected syllable
-  // for every cell, trust that the user wrote it correctly.
-  if (!isCorrect && mode === 'handwrite' && Array.isArray(gamePinyinCellCandidates)) {
-    const targetSylls = normalizePinyinGame(q.answer).split(/\s+/);
-    if (targetSylls.length === gamePinyinCharCount) {
-      let allMatch = true;
-      const matched = [];
-      for (let i = 0; i < gamePinyinCharCount; i++) {
-        const cands = gamePinyinCellCandidates[i] || [];
-        const hit = cands.find(c => normalizePinyinGame(c) === targetSylls[i]);
-        if (!hit) { allMatch = false; break; }
-        matched.push(hit);
-      }
-      if (allMatch) {
-        isCorrect = true;
-        for (let i = 0; i < gamePinyinCharCount; i++) {
-          gamePinyinCellRecognized[i] = matched[i];
-          const resEl = document.getElementById(`gamePyResult${i}`);
-          if (resEl) resEl.textContent = matched[i];
-        }
-        gamePinyinState.recognized = matched.join(' ');
-      }
-    }
-  }
+  let isCorrect = pinyinAnswersMatch(userAnswer, q.answer, q, normalizePinyinGame);
   state.totalQuestions += 1;
   state.currentQuestionAttempted = true;
 
@@ -7194,31 +7227,7 @@ async function hwPinyinSubmit() {
   const hint = document.getElementById("hwQuizHint");
   const btn = document.getElementById("pinyinSubmitBtn");
 
-  let isCorrect = normalizePinyin(userAnswer) === normalizePinyin(q.answer);
-  // Touch-recognition noise: if any per-cell candidate matches the
-  // expected syllable for every cell, accept.
-  if (!isCorrect && mode === 'handwrite' && Array.isArray(hwPinyinCellCandidates)) {
-    const targetSylls = normalizePinyin(q.answer).split(/\s+/);
-    if (targetSylls.length === hwPinyinCharCount) {
-      let allMatch = true;
-      const matched = [];
-      for (let i = 0; i < hwPinyinCharCount; i++) {
-        const cands = hwPinyinCellCandidates[i] || [];
-        const hit = cands.find(c => normalizePinyin(c) === targetSylls[i]);
-        if (!hit) { allMatch = false; break; }
-        matched.push(hit);
-      }
-      if (allMatch) {
-        isCorrect = true;
-        for (let i = 0; i < hwPinyinCharCount; i++) {
-          hwPinyinCellRecognized[i] = matched[i];
-          const resEl = document.getElementById(`hwPyResult${i}`);
-          if (resEl) resEl.textContent = matched[i];
-        }
-        pinyinState.recognized = matched.join(' ');
-      }
-    }
-  }
+  let isCorrect = pinyinAnswersMatch(userAnswer, q.answer, q, normalizePinyin);
   const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
 
   if (isCorrect) {
@@ -7944,29 +7953,7 @@ async function submitHwReviewPinyin() {
   const q = hwReview.questions[hwReview.currentIndex];
   const hint = document.getElementById("hwQuizHint");
   const qKey = `${q.question}_${q.mode}`;
-  let isCorrect = normalizePinyin(userInput) === normalizePinyin(q.answer);
-  if (!isCorrect && mode === 'handwrite' && Array.isArray(hwPinyinCellCandidates)) {
-    const targetSylls = normalizePinyin(q.answer).split(/\s+/);
-    if (targetSylls.length === hwPinyinCharCount) {
-      let allMatch = true;
-      const matched = [];
-      for (let i = 0; i < hwPinyinCharCount; i++) {
-        const cands = hwPinyinCellCandidates[i] || [];
-        const hit = cands.find(c => normalizePinyin(c) === targetSylls[i]);
-        if (!hit) { allMatch = false; break; }
-        matched.push(hit);
-      }
-      if (allMatch) {
-        isCorrect = true;
-        for (let i = 0; i < hwPinyinCharCount; i++) {
-          hwPinyinCellRecognized[i] = matched[i];
-          const resEl = document.getElementById(`hwPyResult${i}`);
-          if (resEl) resEl.textContent = matched[i];
-        }
-        pinyinState.recognized = matched.join(' ');
-      }
-    }
-  }
+  let isCorrect = pinyinAnswersMatch(userInput, q.answer, q, normalizePinyin);
   const btn = document.getElementById("pinyinSubmitBtn");
   if (isCorrect) {
     hwReview.answering = false;
