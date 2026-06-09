@@ -2041,17 +2041,20 @@ function disableQuestionControls(rootSelector) {
   });
 }
 
+function correctAnswerFeedbackHTML(q) {
+  if (!q || !q.answer) return "";
+  const label = q.mode === "read_aloud" ? "正确读音" : "正确答案";
+  if (q.mode === "pinyin_typing") {
+    return `<br>${label}: <div class="pinyin-correct-show">${escapeHtml(q.answer)}</div>`;
+  }
+  return `<br><span style="font-size:24px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">${label}: ${escapeHtml(q.answer)}</span>`;
+}
+
 function skippedFeedbackHTML(q) {
   let html = `<span class="wrong-text">已跳过，按答错计算。</span>`;
-  if (q && q.mode !== "pinyin_typing" && q.answer) {
-    const label = q.mode === "read_aloud" ? "正确读音" : "正确答案";
-    html += `<br><span style="font-size:24px;font-weight:900;color:#2d3748;display:inline-block;margin:8px 0">${label}: ${escapeHtml(q.answer)}</span>`;
-  }
+  html += correctAnswerFeedbackHTML(q);
   if (q && q.word_hint) {
     html += `<br><span style="color:#718096">组词: ${escapeHtml(q.word_hint)}</span>`;
-  }
-  if (q && q.mode === "pinyin_typing") {
-    html += `<br><span style="color:#718096">这题会记入错题，请下次再练。</span>`;
   }
   return html;
 }
@@ -4086,7 +4089,7 @@ function handleDictationAnswer(userInput, q) {
   if (!state.answering) return;
   state.currentQuestionAttempted = true;
 
-  const isCorrect = userInput === q.answer;
+  const isCorrect = hanziAnswersMatch(userInput, q.answer);
   const hint = document.getElementById("hintArea");
 
   state.totalQuestions += 1;
@@ -4230,8 +4233,19 @@ function handwritingNotRecognizedMessage(strokes, emptyMessage = "请先写字")
   return emptyMessage;
 }
 
+function normalizeHanziAnswer(text) {
+  return Array.from(String(text || "").normalize("NFKC"))
+    .filter(ch => /[\u3400-\u9fff\uf900-\ufaff]/.test(ch))
+    .join("");
+}
+
+function hanziAnswersMatch(userText, expectedText) {
+  const expected = normalizeHanziAnswer(expectedText);
+  return Boolean(expected) && normalizeHanziAnswer(userText) === expected;
+}
+
 function hanziTextLength(text) {
-  return Array.from(String(text || "").trim()).length;
+  return Array.from(normalizeHanziAnswer(text)).length;
 }
 
 function expectedHanziLength(answer, fallback = 1) {
@@ -4242,7 +4256,7 @@ function handwritingCandidatesFromData(data) {
   try {
     if (data[0] !== "SUCCESS") return [];
     return (data[1][0][1] || [])
-      .map(s => String(s || "").trim().replace(/\s+/g, ""))
+      .map(s => normalizeHanziAnswer(s))
       .filter(Boolean);
   } catch(e) {
     return [];
@@ -4251,7 +4265,7 @@ function handwritingCandidatesFromData(data) {
 
 function pickHandwritingCandidate(data, expectedLength, expectedText = "") {
   const candidates = handwritingCandidatesFromData(data);
-  const expected = String(expectedText || "").trim().replace(/\s+/g, "");
+  const expected = normalizeHanziAnswer(expectedText);
   if (expected) {
     const exactIndex = candidates.findIndex(c => c === expected);
     if (exactIndex >= 0 && exactIndex <= 1) return expected;
@@ -4754,7 +4768,7 @@ async function recognizeHandwriting() {
       hwRecognizedResult = '';
       return;
     }
-    if (state.currentQ && recognized.text === state.currentQ.answer) {
+    if (state.currentQ && hanziAnswersMatch(recognized.text, state.currentQ.answer)) {
       const completenessErr = await validateCellStrokeCounts(canvasStrokes, mainCellLayout, state.currentQ.answer);
       if (completenessErr) {
         if (recEl) recEl.textContent = completenessErr;
@@ -4770,8 +4784,10 @@ async function recognizeHandwriting() {
         return;
       }
     }
-    hwRecognizedResult = recognized.text;
-    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
+    hwRecognizedResult = state.currentQ && hanziAnswersMatch(recognized.text, state.currentQ.answer)
+      ? state.currentQ.answer
+      : normalizeHanziAnswer(recognized.text);
+    if (recEl) recEl.textContent = `识别结果: ${hwRecognizedResult}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -4791,7 +4807,7 @@ async function submitHandwriting() {
 
   // If recognition matched the answer, do not reject by raw stroke count.
   // One-stroke characters and connected handwriting are valid.
-  if (state.currentQ && hwRecognizedResult === state.currentQ.answer) {
+  if (state.currentQ && hanziAnswersMatch(hwRecognizedResult, state.currentQ.answer)) {
     const statusEl = document.getElementById("hwStatus");
     const completenessErr = await validateCellStrokeCounts(canvasStrokes, mainCellLayout, state.currentQ.answer);
     if (completenessErr) {
@@ -4812,8 +4828,8 @@ async function submitHandwriting() {
   }
 
   // If stroke order checking is enabled and answer is correct, check stroke order
-  if (strokeOrderEnabled && hwRecognizedResult === state.currentQ.answer) {
-    const strokeOk = await checkCanvasStrokeOrder(hwRecognizedResult, canvasStrokes);
+  if (strokeOrderEnabled && state.currentQ && hanziAnswersMatch(hwRecognizedResult, state.currentQ.answer)) {
+    const strokeOk = await checkCanvasStrokeOrder(state.currentQ.answer, canvasStrokes);
     if (!strokeOk) return; // checkCanvasStrokeOrder handles UI feedback
   }
 
@@ -4984,7 +5000,7 @@ function gameApplyTone(base, tone) {
 
 // Parse number-tone pinyin: "hua2" → gameApplyTone("hua", 2), "le" → gameApplyTone("le", 0)
 function parseNumberTonePinyin(input) {
-  input = input.toLowerCase().trim().replace(/v/g, 'ü');
+  input = String(input || '').normalize('NFC').toLowerCase().trim().replace(/v/g, 'ü');
   if (!input) return '';
   const lastChar = input[input.length - 1];
   if (lastChar >= '0' && lastChar <= '4') {
@@ -5031,7 +5047,7 @@ const PINYIN_TONE_STRIP = {
 };
 
 function cleanPinyinToken(s) {
-  return String(s || '').trim().toLowerCase()
+  return String(s || '').normalize('NFC').trim().toLowerCase()
     .replace(/[’']/g, '')
     .replace(/u:/g, 'ü')
     .replace(/v/g, 'ü');
@@ -5422,8 +5438,9 @@ async function submitGamePinyin() {
     if (btn) btn.disabled = true;
     state.combo = 0;
     reportStreak(false);
-    hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}<br>
-      <span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
+    hint.innerHTML = `<span class="wrong-text">答错了!</span> 你写的: ${userAnswer}
+      ${correctAnswerFeedbackHTML(q)}
+      <span style="color:#718096">${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
     const retryAttempt = q._retryAttempt || 0;
     if (retryAttempt === 0 && !q._wrongRecorded) {
       q._wrongRecorded = true;
@@ -7238,7 +7255,8 @@ async function hwPinyinSubmit() {
     }
     hwQuiz.retryMap[qKey] = retryCount + 1;
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userAnswer}
-      <br><span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
+      ${correctAnswerFeedbackHTML(q)}
+      <span style="color:#718096">${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
     saveHwQuizProgressAfterCurrentAnswer();
     advanceOrWait(nextHwQuestion, hint, 1600);
   }
@@ -7298,7 +7316,7 @@ function hwHandleHwAnswer(userInput) {
   if (!hwQuiz.answering) return;
 
   const q = hwQuiz.questions[hwQuiz.currentIndex];
-  const isCorrect = userInput === q.answer;
+  const isCorrect = hanziAnswersMatch(userInput, q.answer);
   const hint = document.getElementById("hwQuizHint");
   const qKey = q._origIndex !== undefined ? q._origIndex : q.question;
 
@@ -7967,7 +7985,8 @@ async function submitHwReviewPinyin() {
     if (btn) btn.disabled = true;
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
-      <br><span style="color:#718096">请确认拼音并书写工整。${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
+      ${correctAnswerFeedbackHTML(q)}
+      <span style="color:#718096">${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
     advanceOrWait(nextHwReviewQuestion, hint, 1600);
   }
 }
@@ -8015,7 +8034,7 @@ async function submitHwReviewHandwrite() {
   let userInput = hwQuizRecognizedResult;
 
   const qKey = `${q.question}_${q.mode}`;
-  if (userInput === q.answer) {
+  if (hanziAnswersMatch(userInput, q.answer)) {
     // Correct recognition is accepted regardless of raw stroke count.
     const completenessErr = await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer);
     if (completenessErr) {
@@ -8198,7 +8217,7 @@ async function recognizeHwQuiz() {
       hwQuizRecognizedResult = '';
       return;
     }
-    if (q && recognized.text === q.answer) {
+    if (q && hanziAnswersMatch(recognized.text, q.answer)) {
       const completenessErr = await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer);
       if (completenessErr) {
         if (recEl) recEl.textContent = completenessErr;
@@ -8212,8 +8231,10 @@ async function recognizeHwQuiz() {
         return;
       }
     }
-    hwQuizRecognizedResult = recognized.text;
-    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
+    hwQuizRecognizedResult = q && hanziAnswersMatch(recognized.text, q.answer)
+      ? q.answer
+      : normalizeHanziAnswer(recognized.text);
+    if (recEl) recEl.textContent = `识别结果: ${hwQuizRecognizedResult}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -8248,7 +8269,7 @@ async function recognizeHwQuiz2() {
       hwQuizRecognizedResult2 = '';
       return;
     }
-    if (q && recognized.text === q.answer) {
+    if (q && hanziAnswersMatch(recognized.text, q.answer)) {
       const completenessErr = await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer);
       if (completenessErr) {
         if (recEl) recEl.textContent = completenessErr;
@@ -8262,8 +8283,10 @@ async function recognizeHwQuiz2() {
         return;
       }
     }
-    hwQuizRecognizedResult2 = recognized.text;
-    if (recEl) recEl.textContent = `识别结果: ${recognized.text}`;
+    hwQuizRecognizedResult2 = q && hanziAnswersMatch(recognized.text, q.answer)
+      ? q.answer
+      : normalizeHanziAnswer(recognized.text);
+    if (recEl) recEl.textContent = `识别结果: ${hwQuizRecognizedResult2}`;
   } catch(e) {
     if (recEl) recEl.textContent = "识别失败，请重试";
   }
@@ -8283,7 +8306,7 @@ async function submitHwQuiz() {
   // Check stroke order if enabled and answer is correct
   const q = hwQuiz.questions[hwQuiz.currentIndex];
   // Correct recognition is accepted regardless of raw stroke count.
-  if (q && hwQuizRecognizedResult2 === q.answer) {
+  if (q && hanziAnswersMatch(hwQuizRecognizedResult2, q.answer)) {
     const completenessErr = await validateCellStrokeCounts(hwCanvasStrokes, hwQuizCellLayout, q.answer);
     if (completenessErr) {
       const statusEl = document.getElementById("hwQuizStatus");
@@ -8303,7 +8326,7 @@ async function submitHwQuiz() {
       return;
     }
   }
-  if (strokeOrderEnabled && q && hwQuizRecognizedResult2 === q.answer) {
+  if (strokeOrderEnabled && q && hanziAnswersMatch(hwQuizRecognizedResult2, q.answer)) {
     const canvas = document.getElementById("hwQuizCanvas");
     if (canvas && hwCanvasStrokes.length > 0) {
       const strokeOk = await checkCanvasStrokeOrderGeneric(hwQuizRecognizedResult2, hwCanvasStrokes, canvas.width, canvas.height, document.getElementById("hwQuizStatus"), document.getElementById("hwQuizRecognized2"), function() {
