@@ -1307,7 +1307,9 @@
   .game-pinyin-type-input {
     width: 100%; height: 36px; border: none; border-bottom: 2px solid #667eea; background: transparent;
     font-size: 18px; font-weight: 600; text-align: center; outline: none; color: #2d3748;
+    caret-color: #667eea; -webkit-user-select: text; user-select: text; touch-action: manipulation;
   }
+  body.pinyin-keyboard-active { padding-bottom: var(--pinyin-keyboard-spacer, 0px); }
   .game-pinyin-tone-row { display: flex; gap: 4px; margin-top: 4px; justify-content: center; }
   .game-pinyin-tone-btn {
     width: 30px; height: 38px; border: 1.5px solid #e2e8f0; border-radius: 6px;
@@ -3895,14 +3897,14 @@ function renderQuestion(q) {
           <canvas id="gamePyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
         <div id="gamePyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
-          <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="gamePyInputKeydown(event,${i})">
+          <input type="text" class="game-pinyin-type-input" id="gamePyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text" enterkeyhint="${i < qChars.length - 1 ? 'next' : 'done'}" lang="en" translate="no" onkeydown="gamePyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
             <button class="game-pinyin-tone-btn" onclick="setGamePinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
-            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('gamePyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
+            ${i < qChars.length - 1 ? `<button type="button" class="game-pinyin-tone-btn" onclick="focusPinyinInputById('gamePyInput${i+1}')" style="background:#edf2f7">→</button>` : ''}
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="gamePyResult${i}"></div>
@@ -3910,8 +3912,8 @@ function renderQuestion(q) {
     opts.innerHTML = `
       <div class="canvas-wrap" style="width:100%">
         <div class="game-pinyin-mode-toggle">
-          <button id="gamePyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchGamePinyinMode('handwrite')">手写</button>
-          <button id="gamePyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchGamePinyinMode('type')">打字</button>
+          <button type="button" id="gamePyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchGamePinyinMode('handwrite')">手写</button>
+          <button type="button" id="gamePyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchGamePinyinMode('type')">打字</button>
         </div>
         <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
         <div id="gamePinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
@@ -3919,7 +3921,7 @@ function renderQuestion(q) {
           <button class="canvas-btn" onclick="clearGamePinyinCanvas()">清除</button>
           <button class="canvas-btn" id="gamePyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="gamePyRecBtn" onclick="recognizeGamePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
-          <button class="canvas-btn" id="gamePinyinSubmitBtn" onclick="submitGamePinyin()">确认</button>
+          <button type="button" class="canvas-btn" id="gamePinyinSubmitBtn" onpointerdown="submitPinyinFromButton(event, submitGamePinyin)" onclick="submitPinyinFromButton(event, submitGamePinyin)">确认</button>
           ${skipQuestionButtonHTML('skipGameQuestion()')}
         </div>
         <div id="gamePyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
@@ -3934,7 +3936,7 @@ function renderQuestion(q) {
     gamePinyinState = { recognized: '' };
     if (savedPyMode === 'handwrite') initGamePinyinCanvases();
     if (savedPyMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+      setTimeout(() => focusPinyinInputById('gamePyInput0'), 200);
     }
     state.currentQ = q;
     state.answering = true;
@@ -5053,6 +5055,65 @@ function cleanPinyinToken(s) {
     .replace(/v/g, 'ü');
 }
 
+function updatePinyinKeyboardSpacer() {
+  let spacer = 0;
+  if (window.visualViewport) {
+    const inset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+    spacer = Math.min(Math.round(inset + 24), 420);
+  }
+  document.documentElement.style.setProperty('--pinyin-keyboard-spacer', spacer ? `${spacer}px` : '0px');
+}
+
+function setPinyinKeyboardActive(active) {
+  document.body.classList.toggle('pinyin-keyboard-active', !!active);
+  updatePinyinKeyboardSpacer();
+}
+
+function keepPinyinInputVisible(input) {
+  if (!input) return;
+  requestAnimationFrame(() => {
+    const target = input.closest('.canvas-wrap') || input.closest('.game-pinyin-cell') || input;
+    try {
+      target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    } catch (e) {
+      target.scrollIntoView(false);
+    }
+  });
+}
+
+function focusPinyinInputById(inputId) {
+  const input = typeof inputId === 'string' ? document.getElementById(inputId) : inputId;
+  if (!input) return false;
+  setPinyinKeyboardActive(true);
+  const focusInput = () => {
+    if (input.offsetParent === null || input.disabled) return;
+    try {
+      input.focus({ preventScroll: true });
+    } catch (e) {
+      input.focus();
+    }
+    input.click();
+    keepPinyinInputVisible(input);
+  };
+  focusInput();
+  setTimeout(focusInput, 80);
+  setTimeout(focusInput, 280);
+  return false;
+}
+
+let lastPinyinButtonSubmitAt = 0;
+function submitPinyinFromButton(event, submitFn) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const now = Date.now();
+  if (now - lastPinyinButtonSubmitAt < 250) return false;
+  lastPinyinButtonSubmitAt = now;
+  submitFn();
+  return false;
+}
+
 function stripPinyinTone(s) {
   return String(s || '').replace(/[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ]/g, ch => PINYIN_TONE_STRIP[ch] || ch);
 }
@@ -5226,9 +5287,15 @@ function switchGamePinyinMode(mode) {
     if (box) box.style.display = mode === 'handwrite' ? 'block' : 'none';
     if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
   }
-  if (mode === 'handwrite') initGamePinyinCanvases();
+  if (mode === 'handwrite') {
+    if (document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('game-pinyin-type-input')) {
+      document.activeElement.blur();
+    }
+    setPinyinKeyboardActive(false);
+    initGamePinyinCanvases();
+  }
   if (mode === 'type') {
-    setTimeout(() => { const el = document.getElementById('gamePyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+    focusPinyinInputById('gamePyInput0');
   }
 }
 
@@ -5237,14 +5304,14 @@ function gamePyInputKeydown(e, idx) {
     e.preventDefault();
     const nextInput = document.getElementById(`gamePyInput${idx + 1}`);
     if (nextInput) {
-      nextInput.focus();
+      focusPinyinInputById(nextInput);
     } else {
       submitGamePinyin();
     }
   } else if (e.key === 'Tab') {
     e.preventDefault();
     const nextInput = document.getElementById(`gamePyInput${idx + 1}`);
-    if (nextInput) nextInput.focus();
+    if (nextInput) focusPinyinInputById(nextInput);
   }
 }
 
@@ -5263,6 +5330,7 @@ function setGamePinyinTone(idx, tone) {
     const base = input.value.trim();
     gamePinyinBaseInputs[idx] = base;
     resultEl.textContent = gameApplyTone(base, tone);
+    focusPinyinInputById(input);
   }
 }
 
@@ -6766,14 +6834,14 @@ function showHwQuizQuestion() {
           <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
         <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
-          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwPyInputKeydown(event,${i})">
+          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text" enterkeyhint="${i < qChars.length - 1 ? 'next' : 'done'}" lang="en" translate="no" onkeydown="hwPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
-            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('hwPyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
+            ${i < qChars.length - 1 ? `<button type="button" class="game-pinyin-tone-btn" onclick="focusPinyinInputById('hwPyInput${i+1}')" style="background:#edf2f7">→</button>` : ''}
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
@@ -6781,8 +6849,8 @@ function showHwQuizQuestion() {
     opts.innerHTML = `
       <div class="canvas-wrap" style="width:100%">
         <div class="game-pinyin-mode-toggle">
-          <button id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
-          <button id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
+          <button type="button" id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
+          <button type="button" id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
         </div>
         <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
         <div id="pinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
@@ -6790,7 +6858,7 @@ function showHwQuizQuestion() {
           <button class="canvas-btn" onclick="clearPinyinCanvas()">清除</button>
           <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
-          <button class="canvas-btn" id="pinyinSubmitBtn" onclick="hwPinyinSubmit()">确认</button>
+          <button type="button" class="canvas-btn" id="pinyinSubmitBtn" onpointerdown="submitPinyinFromButton(event, hwPinyinSubmit)" onclick="submitPinyinFromButton(event, hwPinyinSubmit)">确认</button>
           ${skipQuestionButtonHTML('skipHwQuizQuestion()')}
         </div>
         <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
@@ -6805,7 +6873,7 @@ function showHwQuizQuestion() {
     pinyinState = { recognized: '' };
     if (savedPyMode === 'handwrite') initHwPinyinCanvases();
     if (savedPyMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+      setTimeout(() => focusPinyinInputById('hwPyInput0'), 200);
     }
   } else if (q.mode === "char_to_pinyin") {
     const charHtml = (q.context_word || q.is_polyphonic) ? `<span style="color:#5a67d8">${q.question}</span>` : q.question;
@@ -7010,9 +7078,15 @@ function switchHwPinyinMode(mode) {
     if (box) box.style.display = mode === 'handwrite' ? 'block' : 'none';
     if (typeArea) typeArea.style.display = mode === 'type' ? 'block' : 'none';
   }
-  if (mode === 'handwrite') initHwPinyinCanvases();
+  if (mode === 'handwrite') {
+    if (document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('game-pinyin-type-input')) {
+      document.activeElement.blur();
+    }
+    setPinyinKeyboardActive(false);
+    initHwPinyinCanvases();
+  }
   if (mode === 'type') {
-    setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+    focusPinyinInputById('hwPyInput0');
   }
 }
 
@@ -7021,14 +7095,14 @@ function hwPyInputKeydown(e, idx) {
     e.preventDefault();
     const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
     if (nextInput) {
-      nextInput.focus();
+      focusPinyinInputById(nextInput);
     } else {
       hwPinyinSubmit();
     }
   } else if (e.key === 'Tab') {
     e.preventDefault();
     const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
-    if (nextInput) nextInput.focus();
+    if (nextInput) focusPinyinInputById(nextInput);
   }
 }
 
@@ -7037,14 +7111,14 @@ function hwReviewPyInputKeydown(e, idx) {
     e.preventDefault();
     const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
     if (nextInput) {
-      nextInput.focus();
+      focusPinyinInputById(nextInput);
     } else {
       submitHwReviewPinyin();
     }
   } else if (e.key === 'Tab') {
     e.preventDefault();
     const nextInput = document.getElementById(`hwPyInput${idx + 1}`);
-    if (nextInput) nextInput.focus();
+    if (nextInput) focusPinyinInputById(nextInput);
   }
 }
 
@@ -7063,6 +7137,7 @@ function setHwPinyinTone(idx, tone) {
     const base = input.value.trim();
     hwPinyinBaseInputs[idx] = base;
     resultEl.textContent = gameApplyTone(base, tone);
+    focusPinyinInputById(input);
   }
 }
 
@@ -7795,14 +7870,14 @@ function showHwReviewQuestion() {
           <canvas id="hwPyCanvas${i}" class="pinyin-fourline-canvas" style="display:block"></canvas>
         </div>
         <div id="hwPyTypeArea${i}" style="display:${savedPyMode === 'type' ? 'block' : 'none'};width:100%">
-          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocapitalize="off" onkeydown="hwReviewPyInputKeydown(event,${i})">
+          <input type="text" class="game-pinyin-type-input" id="hwPyInput${i}" placeholder="拼音如hua2" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" inputmode="text" enterkeyhint="${i < qChars.length - 1 ? 'next' : 'done'}" lang="en" translate="no" onkeydown="hwReviewPyInputKeydown(event,${i})">
           <div class="game-pinyin-tone-row">
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},1)">ˉ<span class="tone-num">1</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},2)">ˊ<span class="tone-num">2</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},3)">ˇ<span class="tone-num">3</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},4)">ˋ<span class="tone-num">4</span></button>
             <button class="game-pinyin-tone-btn" onclick="setHwPinyinTone(${i},0)">轻<span class="tone-num">0</span></button>
-            ${i < qChars.length - 1 ? `<button class="game-pinyin-tone-btn" onclick="document.getElementById('hwPyInput${i+1}')?.focus()" style="background:#edf2f7">→</button>` : ''}
+            ${i < qChars.length - 1 ? `<button type="button" class="game-pinyin-tone-btn" onclick="focusPinyinInputById('hwPyInput${i+1}')" style="background:#edf2f7">→</button>` : ''}
           </div>
         </div>
         <div class="game-pinyin-cell-result" id="hwPyResult${i}"></div>
@@ -7810,8 +7885,8 @@ function showHwReviewQuestion() {
     opts.innerHTML = `
       <div class="canvas-wrap" style="width:100%">
         <div class="game-pinyin-mode-toggle">
-          <button id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
-          <button id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
+          <button type="button" id="hwPyModeHw" class="${savedPyMode === 'handwrite' ? 'active' : ''}" onclick="switchHwPinyinMode('handwrite')">手写</button>
+          <button type="button" id="hwPyModeType" class="${savedPyMode === 'type' ? 'active' : ''}" onclick="switchHwPinyinMode('type')">打字</button>
         </div>
         <div class="game-pinyin-cells-row" style="grid-template-columns: repeat(${qChars.length >= 3 ? Math.ceil(qChars.length / 2) : qChars.length}, minmax(0, 200px))">${cellsHTML}</div>
         <div id="pinyinRecognized" style="font-size:18px;font-weight:700;color:#5a67d8;min-height:24px;text-align:center;margin-top:8px"></div>
@@ -7819,7 +7894,7 @@ function showHwReviewQuestion() {
           <button class="canvas-btn" onclick="clearPinyinCanvas()">清除</button>
           <button class="canvas-btn" id="hwPyEraserBtn" onclick="togglePinyinEraser()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">橡皮擦</button>
           <button class="canvas-btn" id="hwPyRecBtn" onclick="recognizePinyin()" style="display:${savedPyMode === 'handwrite' ? '' : 'none'}">识别</button>
-          <button class="canvas-btn" id="pinyinSubmitBtn" onclick="submitHwReviewPinyin()">确认</button>
+          <button type="button" class="canvas-btn" id="pinyinSubmitBtn" onpointerdown="submitPinyinFromButton(event, submitHwReviewPinyin)" onclick="submitPinyinFromButton(event, submitHwReviewPinyin)">确认</button>
           ${skipQuestionButtonHTML('skipHwReviewQuestion()')}
         </div>
         <div id="hwPyNumToneHint" style="display:${savedPyMode === 'type' ? 'block' : 'none'};font-size:12px;color:#a0aec0;text-align:center;margin-top:4px">可点击声调按钮选择，也可用数字代替: hua2=huá, li4=lì, 0=轻声; Tab/→下一字，回车确认</div>
@@ -7834,7 +7909,7 @@ function showHwReviewQuestion() {
     pinyinState = { recognized: '' };
     if (savedPyMode === 'handwrite') initHwPinyinCanvases();
     if (savedPyMode === 'type') {
-      setTimeout(() => { const el = document.getElementById('hwPyInput0'); if (el) { el.focus(); el.click(); } }, 200);
+      setTimeout(() => focusPinyinInputById('hwPyInput0'), 200);
     }
   } else if (q.mode === "dictation_handwrite") {
     const hintLine = q.homophone_hint
@@ -8330,6 +8405,32 @@ async function submitHwQuiz() {
   // on correct so the user can re-submit after a wrong answer.
   hwHandleHwAnswer(hwQuizRecognizedResult2);
 }
+
+document.addEventListener("focusin", function(e) {
+  if (e.target && e.target.classList && e.target.classList.contains("game-pinyin-type-input")) {
+    setPinyinKeyboardActive(true);
+    keepPinyinInputVisible(e.target);
+  }
+});
+
+document.addEventListener("focusout", function() {
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (!active || !active.classList || !active.classList.contains("game-pinyin-type-input")) {
+      setPinyinKeyboardActive(false);
+    }
+  }, 120);
+});
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", updatePinyinKeyboardSpacer);
+  window.visualViewport.addEventListener("scroll", updatePinyinKeyboardSpacer);
+}
+try {
+  if (navigator.virtualKeyboard) {
+    navigator.virtualKeyboard.overlaysContent = false;
+  }
+} catch (e) {}
 
 // Global Enter key: click OK button or submit pinyin answer if visible
 document.addEventListener("keydown", function(e) {
