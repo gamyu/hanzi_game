@@ -2002,8 +2002,8 @@ async function openReviewNav(event) {
   return false;
 }
 
-function advanceOrWait(nextFn, hintEl, delay) {
-  if (isAutoNext()) {
+function advanceOrWait(nextFn, hintEl, delay, options = {}) {
+  if (isAutoNext() && !options.forceWait) {
     setTimeout(nextFn, delay || 800);
   } else {
     const btn = document.createElement("button");
@@ -2013,9 +2013,14 @@ function advanceOrWait(nextFn, hintEl, delay) {
       btn.disabled = true;
       nextFn();
     };
-    if (hintEl) hintEl.appendChild(btn);
+    const targetHint = hintEl || document.getElementById("hintArea") || document.getElementById("hwQuizHint");
+    if (targetHint) targetHint.appendChild(btn);
     setTimeout(() => btn.focus(), 0);
   }
+}
+
+function waitForContinue(nextFn, hintEl, delay) {
+  advanceOrWait(nextFn, hintEl, delay, { forceWait: true });
 }
 
 function feedbackDelay(q, base) {
@@ -4082,7 +4087,7 @@ function handleAnswer(selected, q, btn) {
   if (isCorrect) {
     advanceOrWait(loadQuestion, hint, 800);
   } else {
-    advanceOrWait(loadQuestion, hint, 1600);
+    waitForContinue(loadQuestion, hint, 1600);
   }
 }
 
@@ -4132,7 +4137,7 @@ function handleDictationAnswer(userInput, q) {
     }
     updateScoreboard();
     playStrokeAnimation(q.answer, hint);
-    advanceOrWait(loadQuestion, hint, 1600);
+    waitForContinue(loadQuestion, hint, 1600);
   }
 }
 
@@ -4161,10 +4166,10 @@ function skipGameQuestion() {
       playStrokeAnimation(q.answer, hint);
     }
     updateScoreboard();
-    advanceOrWait(loadQuestion, hint, feedbackDelay(q, q.mode === "read_aloud" ? 1800 : 1600));
+    waitForContinue(loadQuestion, hint, feedbackDelay(q, q.mode === "read_aloud" ? 1800 : 1600));
   } else {
     updateScoreboard();
-    advanceOrWait(loadQuestion, null, 1600);
+    waitForContinue(loadQuestion, null, 1600);
   }
 }
 
@@ -5548,7 +5553,7 @@ async function submitGamePinyin() {
       recordWrongAnswer(q, userAnswer);
     }
     updateScoreboard();
-    advanceOrWait(loadQuestion, hint, 1600);
+    waitForContinue(loadQuestion, hint, 1600);
   }
 }
 
@@ -5852,7 +5857,7 @@ async function handleReadAloudAnswer(alternatives) {
     }
     hint.innerHTML = hintHTML;
 
-    if (!isAutoNext()) setTimeout(() => speakChar(targetChar), 300);
+    setTimeout(() => speakChar(targetChar), 300);
 
     const retryAttempt = q._retryAttempt || 0;
     if (retryAttempt === 0 && !q._wrongRecorded) {
@@ -5862,7 +5867,7 @@ async function handleReadAloudAnswer(alternatives) {
     if (retryAttempt < 2) {
     }
 
-    advanceOrWait(loadQuestion, hint, 1800);
+    waitForContinue(loadQuestion, hint, 1800);
   }
 
   updateScoreboard();
@@ -7267,10 +7272,10 @@ function skipHwQuizQuestion() {
     if (q.mode === "dictation_handwrite") {
       playStrokeAnimation(q.answer, hint);
     }
-    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
+    waitForContinue(nextHwQuestion, hint, feedbackDelay(q, 1600));
   } else {
     saveHwQuizProgressAfterCurrentAnswer();
-    advanceOrWait(nextHwQuestion, null, 1600);
+    waitForContinue(nextHwQuestion, null, 1600);
   }
 }
 
@@ -7342,7 +7347,7 @@ async function hwPinyinSubmit() {
       ${correctAnswerFeedbackHTML(q)}
       <span style="color:#718096">${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
     saveHwQuizProgressAfterCurrentAnswer();
-    advanceOrWait(nextHwQuestion, hint, 1600);
+    waitForContinue(nextHwQuestion, hint, 1600);
   }
 }
 
@@ -7392,7 +7397,7 @@ function hwQuizAnswer(selected, correctIdx) {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
     saveHwQuizProgressAfterCurrentAnswer();
-    advanceOrWait(nextHwQuestion, hint, feedbackDelay(q, 1600));
+    waitForContinue(nextHwQuestion, hint, feedbackDelay(q, 1600));
   }
 }
 
@@ -7444,7 +7449,7 @@ function hwHandleHwAnswer(userInput) {
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
     saveHwQuizProgressAfterCurrentAnswer();
     playStrokeAnimation(q.answer, hint);
-    advanceOrWait(nextHwQuestion, hint, 1600);
+    waitForContinue(nextHwQuestion, hint, 1600);
   }
 }
 
@@ -7995,9 +8000,9 @@ function skipHwReviewQuestion() {
     if (q.mode === "dictation_handwrite") {
       playStrokeAnimation(q.answer, hint);
     }
-    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
+    waitForContinue(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
   } else {
-    advanceOrWait(nextHwReviewQuestion, null, 1600);
+    waitForContinue(nextHwReviewQuestion, null, 1600);
   }
 }
 
@@ -8049,7 +8054,7 @@ async function submitHwReviewPinyin() {
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       ${correctAnswerFeedbackHTML(q)}
       <span style="color:#718096">${q.word_hint ? '<br>组词: ' + q.word_hint : ''}</span>`;
-    advanceOrWait(nextHwReviewQuestion, hint, 1600);
+    waitForContinue(nextHwReviewQuestion, hint, 1600);
   }
 }
 
@@ -8074,7 +8079,7 @@ function hwReviewAnswer(selected) {
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 正确答案: <strong>${q.answer}</strong>
       ${q.word_hint ? '<br>组词: ' + q.word_hint : ''}`;
-    advanceOrWait(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
+    waitForContinue(nextHwReviewQuestion, hint, feedbackDelay(q, 1600));
   }
 }
 
@@ -8128,7 +8133,7 @@ async function submitHwReviewHandwrite() {
     reportHwStreak(false, questionStreakType(q));
     hint.innerHTML = `<span style="color:#e53e3e;font-weight:700">答错了!</span> 你写的: ${userInput}
       <br>正确答案: <strong style="font-size:24px">${q.answer}</strong>`;
-    advanceOrWait(nextHwReviewQuestion, hint, 1600);
+    waitForContinue(nextHwReviewQuestion, hint, 1600);
   }
 }
 
