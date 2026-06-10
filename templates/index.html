@@ -7977,7 +7977,7 @@ function showHwReviewQuestion() {
       }
     }
     opts.innerHTML = `<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-      <button class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>
+      <button type="button" id="hwReviewSubmitBtn" class="hw-quiz-opt-btn submit-hw" onclick="submitHwReviewHandwrite()">提交</button>
       ${skipQuestionButtonHTML('skipHwReviewQuestion()')}
     </div>`;
     hwQuizRecognizedResult = '';
@@ -8448,7 +8448,7 @@ document.addEventListener("keydown", function(e) {
     .filter(btn => !btn.disabled && btn.offsetParent !== null);
   const okBtn = okButtons[okButtons.length - 1];
   if (okBtn) { e.preventDefault(); okBtn.click(); return; }
-  const submitIds = ["gamePinyinSubmitBtn", "pinyinSubmitBtn", "hwSubmitBtn", "hwQuizSubmitBtn"];
+  const submitIds = ["gamePinyinSubmitBtn", "pinyinSubmitBtn", "hwSubmitBtn", "hwQuizSubmitBtn", "hwReviewSubmitBtn"];
   for (const id of submitIds) {
     const btn = document.getElementById(id);
     if (btn && !btn.disabled && btn.offsetParent !== null) {
